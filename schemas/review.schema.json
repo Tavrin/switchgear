@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Independent review artifact",
+  "type": "object",
+  "required": [
+    "subject_job",
+    "reviewer_job",
+    "model",
+    "role",
+    "independence",
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "subject_job": { "type": "string", "minLength": 1 },
+    "reviewer_job": { "type": "string", "minLength": 1 },
+    "model": { "$ref": "model.schema.json" },
+    "role": { "type": "string" },
+    "independence": {
+      "type": "object",
+      "required": [
+        "different_job",
+        "different_model",
+        "different_family",
+        "different_provider"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "different_job": { "type": "boolean" },
+        "different_model": { "type": "boolean" },
+        "different_family": { "type": "boolean" },
+        "different_provider": { "type": "boolean" }
+      }
+    },
+    "verdict": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string" },
+          "claim": { "type": "string" },
+          "evidence": { "type": "string" }
+        }
+      }
+    },
+    "required_unmet": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "goal": "inspect the tree",
+  "context": "synthetic",
+  "constraints": ["no writes"],
+  "done_when": ["report exists"],
+  "non_goals": ["refactor"],
+  "risk_threshold": "incorrect behavior only",
+  "stop_condition": "answer and stop",
+  "expansion_rule": "report and wait",
+  "mode": "readonly",
+  "role": "scout",
+  "cwd": "/tmp/example"
+}

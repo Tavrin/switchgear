@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Create a disposable git repo + linked worktree + canaries.
+set -euo pipefail
+
+DEST=${1:?dest dir}
+rm -rf "$DEST"
+mkdir -p "$DEST"
+PRIMARY="$DEST/primary"
+WT="$DEST/wt"
+WT2="$DEST/wt2"
+SIBLING="$DEST/sibling"
+SUB="$DEST/submod"
+
+git init -q -b main "$PRIMARY"
+git -C "$PRIMARY" config user.email test@example.test
+git -C "$PRIMARY" config user.name tester
+printf 'hello\n' > "$PRIMARY/README.md"
+printf 'keep\n' > "$PRIMARY/tracked.txt"
+printf 'ignored.txt\n' > "$PRIMARY/.gitignore"
+git -C "$PRIMARY" add README.md tracked.txt .gitignore
+git -C "$PRIMARY" commit -q -m 'init'
+
+mkdir -p "$SIBLING"
+printf 'sibling-canary\n' > "$SIBLING/canary"
+printf 'primary-canary\n' > "$PRIMARY/CANARY"
+git -C "$PRIMARY" add CANARY
+git -C "$PRIMARY" commit -q -m 'canary'
+
+# ignored + untracked inside what will be the worker worktree (after add)
+printf 'ignored-body\n' > "$PRIMARY/ignored.txt"
+printf 'untracked-body\n' > "$PRIMARY/untracked.txt"
+
+git -C "$PRIMARY" worktree add -q -b worker "$WT" main
+git -C "$PRIMARY" worktree add -q -b other "$WT2" main
+
+# recreate ignored/untracked in the worker worktree
+printf 'ignored-body\n' > "$WT/ignored.txt"
+printf 'untracked-body\n' > "$WT/untracked.txt"
+ln -s "$SIBLING/canary" "$WT/link-outside"
+ln -s "$PRIMARY" "$WT/link-primary"
+
+# optional submodule
+git init -q -b main "$SUB"
+git -C "$SUB" config user.email test@example.test
+git -C "$SUB" config user.name tester
+printf 'sub\n' > "$SUB/f"
+git -C "$SUB" add f
+git -C "$SUB" commit -q -m 'sub'
+git -C "$PRIMARY" submodule add --quiet "$SUB" vendor/sub >/dev/null 2>&1 || true
+if [ -e "$PRIMARY/.gitmodules" ]; then
+  git -C "$PRIMARY" add .gitmodules vendor/sub
+  git -C "$PRIMARY" commit -q -m 'submodule' || true
+  # refresh worker worktree files if needed
+fi
+
+cat <<EOF
+PRIMARY=$PRIMARY
+WT=$WT
+WT2=$WT2
+SIBLING=$SIBLING
+CANARY_SIBLING=$SIBLING/canary
+CANARY_PRIMARY=$PRIMARY/CANARY
+EOF

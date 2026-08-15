@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Model metadata",
+  "type": "object",
+  "required": ["id", "provider"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "provider": { "type": "string", "minLength": 1 },
+    "model_family": { "type": "string", "minLength": 1 },
+    "vendor_family": { "type": "string", "minLength": 1 },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "cost_class": { "type": "integer", "minimum": 0 },
+    "context_class": { "type": "string", "enum": ["small", "medium", "large"] },
+    "trust_stage": {
+      "type": "string",
+      "enum": ["unknown", "review-proven", "write-proven"]
+    }
+  }
+}

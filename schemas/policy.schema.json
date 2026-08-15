@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Capability policy",
+  "type": "object",
+  "required": ["name", "mode", "tools", "integrity"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string" },
+    "mode": { "type": "string", "enum": ["readonly", "bounded-write"] },
+    "tools": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "enum": ["allow", "deny"] }
+    },
+    "integrity": {
+      "type": "object",
+      "properties": {
+        "tree_must_be_identical": { "type": "boolean" },
+        "git_identity_must_be_identical": { "type": "boolean" },
+        "allow_worktree_edits": { "type": "boolean" }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

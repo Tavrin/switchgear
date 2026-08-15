@@ -1,0 +1,20 @@
+{
+  "name": "readonly",
+  "mode": "readonly",
+  "tools": {
+    "bash": "deny",
+    "edit": "deny",
+    "write": "deny",
+    "task": "deny",
+    "skill": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "todowrite": "deny"
+  },
+  "integrity": {
+    "tree_must_be_identical": true,
+    "git_identity_must_be_identical": true,
+    "allow_worktree_edits": false
+  },
+  "notes": "Provider permissions are defense in depth. Integrity snapshot is the rail gate."
+}

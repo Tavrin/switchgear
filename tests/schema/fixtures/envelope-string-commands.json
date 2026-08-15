@@ -1,0 +1,14 @@
+{
+  "goal": "run tests",
+  "context": "synthetic",
+  "constraints": [],
+  "done_when": ["green"],
+  "non_goals": [],
+  "risk_threshold": "incorrect behavior only",
+  "stop_condition": "stop",
+  "expansion_rule": "wait",
+  "mode": "bounded-write",
+  "role": "implement",
+  "cwd": "/tmp/example",
+  "commands": ["cargo test -p foo"]
+}

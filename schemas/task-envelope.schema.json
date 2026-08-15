@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Task envelope",
+  "type": "object",
+  "required": [
+    "goal",
+    "context",
+    "constraints",
+    "done_when",
+    "non_goals",
+    "risk_threshold",
+    "stop_condition",
+    "expansion_rule",
+    "mode",
+    "role",
+    "cwd"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "goal": { "type": "string", "minLength": 1 },
+    "context": { "type": "string" },
+    "constraints": { "type": "array", "items": { "type": "string" } },
+    "done_when": { "type": "array", "items": { "type": "string" } },
+    "non_goals": { "type": "array", "items": { "type": "string" } },
+    "risk_threshold": { "type": "string", "minLength": 1 },
+    "stop_condition": { "type": "string", "minLength": 1 },
+    "expansion_rule": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "enum": ["readonly", "bounded-write"] },
+    "role": { "type": "string", "minLength": 1 },
+    "cwd": { "type": "string", "minLength": 1 },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["verb"],
+        "additionalProperties": false,
+        "properties": {
+          "verb": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "parent_job": { "type": "string", "minLength": 1 },
+    "project": { "type": "object" }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Job result",
+  "type": "object",
+  "required": [
+    "job_id",
+    "status",
+    "mode",
+    "role",
+    "model",
+    "dir",
+    "exit",
+    "started",
+    "artifacts"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "refused",
+        "dirty",
+        "timeout",
+        "provider_error",
+        "awaiting_review",
+        "review_required_missing",
+        "review_failed"
+      ]
+    },
+    "mode": { "type": "string", "enum": ["readonly", "bounded-write"] },
+    "role": { "type": "string" },
+    "model": { "$ref": "model.schema.json" },
+    "dir": { "type": "string" },
+    "exit": { "type": ["integer", "null"] },
+    "started": { "type": "string" },
+    "finished": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "integrity": {
+      "type": "object",
+      "properties": {
+        "before": { "type": "string" },
+        "after": { "type": "string" },
+        "changed": { "type": "boolean" },
+        "identity_changed": { "type": "boolean" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "null"] }
+    },
+    "review": { "type": ["object", "null"] },
+    "process": {
+      "type": "object",
+      "properties": {
+        "pid": { "type": ["integer", "null"] },
+        "pgid": { "type": ["integer", "null"] },
+        "timed_out": { "type": "boolean" },
+        "orphans_remaining": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "error": { "type": "string" }
+  }
+}

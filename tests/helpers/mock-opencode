@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Hermetic OpenCode stand-in. Behavior selected by MOCK_OPENCODE_BEHAVIOR.
+set -euo pipefail
+
+if [ "${1:-}" = models ]; then
+  cat <<'EOF'
+opencode-go/qwen3.8-max
+opencode-go/glm-5.3
+opencode-go/kimi-k3
+opencode-go/deepseek-v4-pro
+opencode-go/deepseek-v4-flash
+opencode-go/gpt-5.6-luna
+EOF
+  exit 0
+fi
+
+dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir) dir=$2; shift 2 ;;
+    --model|--agent|--format|--title) shift 2 ;;
+    --pure) shift ;;
+    run) shift ;;
+    *) shift ;;
+  esac
+done
+
+behavior=${MOCK_OPENCODE_BEHAVIOR:-ok}
+
+emit_ok() {
+  local text=${1:-ok}
+  printf '{"type":"complete","text":%s}\n' "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$text")"
+}
+
+case "$behavior" in
+  ok)
+    emit_ok 'readonly complete'
+    ;;
+  edit-tracked)
+    printf '\nmutated\n' >> "$dir/README.md"
+    emit_ok 'edited tracked'
+    ;;
+  edit-dirty)
+    printf '\nagain\n' >> "$dir/untracked.txt"
+    emit_ok 'edited already-dirty'
+    ;;
+  edit-inside)
+    printf 'worker-edit\n' >> "$dir/tracked.txt"
+    emit_ok '{"summary":"edited tracked.txt","status":"awaiting_review","changes":["tracked.txt"],"remaining_risks":[],"next_action":"review"}'
+    ;;
+  edit-outside)
+    printf 'pwned\n' >> "${MOCK_OUTSIDE:?}"
+    emit_ok '{"summary":"escaped","status":"awaiting_review"}'
+    ;;
+  symlink-escape)
+    printf 'pwned-via-link\n' >> "$dir/link-outside"
+    emit_ok '{"summary":"symlink write","status":"awaiting_review"}'
+    ;;
+  symlink-primary)
+    printf 'pwned-primary\n' >> "$dir/link-primary/CANARY"
+    emit_ok '{"summary":"primary via symlink","status":"awaiting_review"}'
+    ;;
+  other-worktree)
+    printf 'other\n' >> "${MOCK_OTHER:?}/README.md"
+    emit_ok '{"summary":"other worktree","status":"awaiting_review"}'
+    ;;
+  primary-edit)
+    printf 'primary\n' >> "${MOCK_PRIMARY:?}/README.md"
+    emit_ok '{"summary":"primary edit","status":"awaiting_review"}'
+    ;;
+  ignored)
+    printf 'changed-ignored\n' > "$dir/ignored.txt"
+    emit_ok '{"summary":"ignored","status":"awaiting_review"}'
+    ;;
+  delete-untracked)
+    rm -f "$dir/untracked.txt"
+    emit_ok '{"summary":"deleted untracked","status":"awaiting_review"}'
+    ;;
+  git-commit)
+    git -C "$dir" add tracked.txt 2>/dev/null || true
+    printf 'x\n' >> "$dir/tracked.txt"
+    git -C "$dir" add tracked.txt
+    git -C "$dir" -c user.email=t@t -c user.name=t commit -q -m escape || true
+    emit_ok '{"summary":"committed","status":"awaiting_review"}'
+    ;;
+  git-config)
+    git -C "$dir" config user.evil true
+    emit_ok '{"summary":"config","status":"awaiting_review"}'
+    ;;
+  gitdir-abuse)
+    printf 'gitdir: /tmp/not-this-worktree\n' > "$dir/.git"
+    emit_ok '{"summary":"gitdir","status":"awaiting_review"}'
+    ;;
+  git-dir-mutate)
+    # try to write inside the gitdir
+    gdir=$(git -C "$dir" rev-parse --absolute-git-dir)
+    printf 'tamper\n' >> "$gdir/HEAD"
+    emit_ok '{"summary":"gitdir mutate","status":"awaiting_review"}'
+    ;;
+  malformed)
+    printf '{not-json'
+    ;;
+  truncated)
+    printf '{"type":"complete","text":'
+    ;;
+  exit0-no-handoff)
+    printf '{"type":"meta","ok":true}\n'
+    ;;
+  hang-grandchild)
+    sleep 300 &
+    echo $! > "${MOCK_CHILD_PIDFILE:-$dir/.mock-child.pid}"
+    sleep 300
+    ;;
+  hang-setsid)
+    setsid sleep 300 >/dev/null 2>&1 &
+    echo $! > "${MOCK_CHILD_PIDFILE:-$dir/.mock-child.pid}"
+    sleep 300
+    ;;
+  *)
+    echo "mock-opencode: unknown behavior $behavior" >&2
+    exit 2
+    ;;
+esac

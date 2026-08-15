@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Worker handoff (state directory only)",
+  "type": "object",
+  "required": ["summary", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "summary": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "minLength": 1 },
+    "changes": { "type": "array", "items": { "type": "string" } },
+    "remaining_risks": { "type": "array", "items": { "type": "string" } },
+    "next_action": { "type": "string" },
+    "verify_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["verb"],
+        "properties": {
+          "verb": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

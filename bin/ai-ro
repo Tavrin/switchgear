@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ai-ro — argv-only read-only git helper for the OpenCode rail.
+#
+# Invoked by ai-opencode (the wrapper), never by a free-form agent shell.
+# Does not eval. Refuses any argument that contains a shell metacharacter.
+set -euo pipefail
+
+usage() {
+  echo "usage: ai-ro --dir <git-dir> status|head|log|diff-stat|show <sha>" >&2
+  exit 2
+}
+
+is_safe_token() {
+  [[ "$1" =~ ^[A-Za-z0-9._/@:+=-]+$ ]]
+}
+
+has_meta() {
+  case "$1" in
+    *';'*|*'&'*|*'|'*|*'`'|*'$'*|*'('*|*')'*|*'<'*|*'>'*|*$'\n'*|*$'\r'*|*'*'*|*'?'*|*'!'*|*'['*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir)
+      [ $# -ge 2 ] || usage
+      dir=$2
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "ai-ro: unknown flag: $1" >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+[ -n "$dir" ] || usage
+is_safe_token "$dir" || { echo "ai-ro: REFUSING --dir (unsafe characters)" >&2; exit 2; }
+[ -d "$dir" ] || { echo "ai-ro: no such directory: $dir" >&2; exit 2; }
+if ! git -C "$dir" --no-optional-locks rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "ai-ro: $dir is not a git work tree" >&2
+  exit 2
+fi
+
+for arg in "$@"; do
+  if has_meta "$arg" || ! is_safe_token "$arg"; then
+    echo "ai-ro: REFUSING argument: $arg" >&2
+    exit 2
+  fi
+done
+
+cmd=${1:-}
+shift || true
+
+case "$cmd" in
+  status)
+    [ $# -eq 0 ] || { echo "ai-ro: status takes no arguments" >&2; exit 2; }
+    exec git -C "$dir" --no-optional-locks status --porcelain=v1
+    ;;
+  head)
+    [ $# -eq 0 ] || { echo "ai-ro: head takes no arguments" >&2; exit 2; }
+    exec git -C "$dir" --no-optional-locks rev-parse HEAD
+    ;;
+  log)
+    [ $# -eq 0 ] || { echo "ai-ro: log takes no arguments" >&2; exit 2; }
+    exec git -C "$dir" --no-optional-locks log -8 --oneline --decorate
+    ;;
+  diff-stat)
+    [ $# -eq 0 ] || { echo "ai-ro: diff-stat takes no arguments" >&2; exit 2; }
+    exec git -C "$dir" --no-optional-locks diff HEAD --stat
+    ;;
+  show)
+    [ $# -eq 1 ] || { echo "ai-ro: show <sha>" >&2; exit 2; }
+    sha=$1
+    [[ "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]] || {
+      echo "ai-ro: REFUSING show: not a hex sha" >&2
+      exit 2
+    }
+    exec git -C "$dir" --no-optional-locks show --stat --format=fuller "$sha"
+    ;;
+  *)
+    echo "ai-ro: unknown command: $cmd" >&2
+    usage
+    ;;
+esac
