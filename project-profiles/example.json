@@ -1,9 +1,7 @@
 {
   "name": "example",
   "provider": "opencode",
-  "state_dir": "${HOME}/.local/state/ai-opencode",
   "timeout_s": 600,
-  "timeout_env": "AI_OPENCODE_TIMEOUT",
   "timeout_min": 1,
   "timeout_max": 1800,
   "models": {
@@ -18,58 +16,6 @@
       "openai/*",
       "opencode-go/gpt-5.6-luna",
       "opencode-go/grok-4.5"
-    ],
-    "catalog": [
-      {
-        "id": "opencode-go/qwen3.8-max",
-        "provider": "opencode",
-        "model_family": "qwen",
-        "vendor_family": "alibaba",
-        "capabilities": ["review", "long-context"],
-        "cost_class": 2,
-        "context_class": "large",
-        "trust_stage": "review-proven"
-      },
-      {
-        "id": "opencode-go/glm-5.3",
-        "provider": "opencode",
-        "model_family": "glm",
-        "vendor_family": "zhipu",
-        "capabilities": ["write", "review", "tools"],
-        "cost_class": 2,
-        "context_class": "large",
-        "trust_stage": "unknown"
-      },
-      {
-        "id": "opencode-go/kimi-k3",
-        "provider": "opencode",
-        "model_family": "kimi",
-        "vendor_family": "moonshot",
-        "capabilities": ["review", "long-context"],
-        "cost_class": 3,
-        "context_class": "large",
-        "trust_stage": "review-proven"
-      },
-      {
-        "id": "opencode-go/deepseek-v4-pro",
-        "provider": "opencode",
-        "model_family": "deepseek",
-        "vendor_family": "deepseek",
-        "capabilities": ["review", "tools"],
-        "cost_class": 1,
-        "context_class": "medium",
-        "trust_stage": "review-proven"
-      },
-      {
-        "id": "opencode-go/deepseek-v4-flash",
-        "provider": "opencode",
-        "model_family": "deepseek",
-        "vendor_family": "deepseek",
-        "capabilities": ["review"],
-        "cost_class": 0,
-        "context_class": "medium",
-        "trust_stage": "unknown"
-      }
     ]
   },
   "roles": {
@@ -77,8 +23,6 @@
     "review": { "model": "opencode-go/deepseek-v4-pro", "mode": "readonly" },
     "implement": { "model": "opencode-go/glm-5.3", "mode": "bounded-write" }
   },
-  "external_read": ["/tmp/opencode/**"],
-  "quota_hook": null,
   "review": {
     "required_after_write": true,
     "independence": {
@@ -94,9 +38,5 @@
     "allow_primary_for_readonly": true
   },
   "write_enabled": false,
-  "containment": {
-    "mode": "none",
-    "required": false
-  },
   "commands": {}
 }

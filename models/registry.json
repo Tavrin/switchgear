@@ -1,0 +1,40 @@
+{
+  "provider": "opencode",
+  "models": {
+    "opencode-go/qwen3.8-max": {
+      "provider": "opencode",
+      "model_family": "qwen",
+      "vendor_family": "alibaba"
+    },
+    "opencode-go/glm-5.3": {
+      "provider": "opencode",
+      "model_family": "glm",
+      "vendor_family": "zhipu"
+    },
+    "opencode-go/glm-5.2": {
+      "provider": "opencode",
+      "model_family": "glm",
+      "vendor_family": "zhipu"
+    },
+    "opencode-go/kimi-k3": {
+      "provider": "opencode",
+      "model_family": "kimi",
+      "vendor_family": "moonshot"
+    },
+    "opencode-go/deepseek-v4-pro": {
+      "provider": "opencode",
+      "model_family": "deepseek",
+      "vendor_family": "deepseek"
+    },
+    "opencode-go/deepseek-v4-flash": {
+      "provider": "opencode",
+      "model_family": "deepseek",
+      "vendor_family": "deepseek"
+    }
+  },
+  "deny": [
+    "openai/*",
+    "opencode-go/gpt-5.6-luna",
+    "opencode-go/grok-4.5"
+  ]
+}

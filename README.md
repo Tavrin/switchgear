@@ -8,10 +8,12 @@ about any particular product, gate, or lock.
 
 ## Status
 
-Stage 0 prototype. Bash is an implementation choice, not an architectural
-commitment (see `docs/ARCHITECTURE.md`). Bounded-write is designed and
-tested against disposable synthetic git repos. It is **disabled** by default
-and must not be installed.
+Remediation of Stage-0 after independent review of `47e21bdd`.
+Python control plane + `bwrap` filesystem/process boundary.
+**Not installed. Not a production security authorization.**
+Write remains disabled on the example profile. Gate C is NO-GO.
+
+See `docs/SECURITY-REMEDIATION.md`.
 
 ## Do not install
 
@@ -20,14 +22,15 @@ See `docs/INSTALL-MAP.md`. The live OpenCode rail stays untouched.
 ## CLI
 
 ```
-ai-opencode [--profile PATH] models
-ai-opencode [--profile PATH] scout  <dir> "<prompt>"
-ai-opencode [--profile PATH] review <dir> <role> "<prompt>"
-ai-opencode [--profile PATH] run    --envelope FILE
-ai-opencode [--profile PATH] lease  acquire|release|show --dir <dir> --owner <id>
-ai-opencode [--profile PATH] status <job-id>
-ai-opencode [--profile PATH] write  <dir> <role> --envelope FILE
+ai-opencode --state DIR state provision DIR
+ai-opencode [--profile P] [--state S] [--provider ABS] models
+ai-opencode ... scout  <dir> "<prompt>"
+ai-opencode ... review <dir> <role> "<prompt>"
+ai-opencode ... write  <dir> <role> --envelope FILE
 ```
+
+`--provider` must be an absolute path. No PATH lookup. Live OpenCode
+requires `AI_OPS_ALLOW_LIVE_PROVIDER=1` and the pinned version.
 
 `write` is refused unless `AI_OPS_WRITE=1` **and** the profile has
 `write_enabled: true`. The example profile leaves write off.

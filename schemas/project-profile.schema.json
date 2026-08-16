@@ -2,14 +2,12 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Project profile",
   "type": "object",
-  "required": ["name", "provider", "state_dir", "models", "roles"],
+  "required": ["name", "provider", "models", "roles"],
   "additionalProperties": false,
   "properties": {
     "name": { "type": "string", "minLength": 1 },
     "provider": { "type": "string", "enum": ["opencode"] },
-    "state_dir": { "type": "string", "minLength": 1 },
     "timeout_s": { "type": "integer", "minimum": 1, "maximum": 1800 },
-    "timeout_env": { "type": "string" },
     "timeout_min": { "type": "integer", "minimum": 1 },
     "timeout_max": { "type": "integer", "maximum": 1800 },
     "models": {
@@ -18,11 +16,7 @@
       "additionalProperties": false,
       "properties": {
         "allow": { "type": "array", "items": { "type": "string" } },
-        "deny": { "type": "array", "items": { "type": "string" } },
-        "catalog": {
-          "type": "array",
-          "items": { "$ref": "model.schema.json" }
-        }
+        "deny": { "type": "array", "items": { "type": "string" } }
       }
     },
     "roles": {
@@ -35,11 +29,6 @@
           "mode": { "type": "string", "enum": ["readonly", "bounded-write"] }
         }
       }
-    },
-    "external_read": { "type": "array", "items": { "type": "string" } },
-    "quota_hook": {
-      "type": ["array", "null"],
-      "items": { "type": "string" }
     },
     "review": {
       "type": "object",
@@ -65,27 +54,9 @@
       }
     },
     "write_enabled": { "type": "boolean" },
-    "containment": {
-      "type": "object",
-      "properties": {
-        "mode": { "type": "string", "enum": ["none", "bwrap"] },
-        "required": { "type": "boolean" }
-      }
-    },
     "commands": {
       "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "required": ["argv"],
-        "properties": {
-          "argv": {
-            "type": "array",
-            "minItems": 1,
-            "items": { "type": "string" }
-          },
-          "allowed_args_pattern": { "type": "string" }
-        }
-      }
+      "additionalProperties": { "type": "boolean" }
     }
   }
 }

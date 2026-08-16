@@ -8,7 +8,10 @@
     "model",
     "role",
     "independence",
-    "verdict"
+    "verdict",
+    "subject_head",
+    "subject_tree_digest",
+    "subject_policy_digest"
   ],
   "additionalProperties": false,
   "properties": {
@@ -32,7 +35,7 @@
         "different_provider": { "type": "boolean" }
       }
     },
-    "verdict": { "type": "string" },
+    "verdict": { "type": "string", "enum": ["promote", "reject", "needs_changes"] },
     "findings": {
       "type": "array",
       "items": {
@@ -44,6 +47,9 @@
         }
       }
     },
+    "subject_head": { "type": "string" },
+    "subject_tree_digest": { "type": "string" },
+    "subject_policy_digest": { "type": "string" },
     "required_unmet": {
       "type": "array",
       "items": { "type": "string" }

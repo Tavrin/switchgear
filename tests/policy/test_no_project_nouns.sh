@@ -7,7 +7,7 @@ pattern='(^|[^A-Za-z0-9_-])(another project|Freelancer|the old merge-policy scri
 br_pattern='(^|[^A-Za-z0-9_-])br([^A-Za-z0-9_-]|$)'
 
 hits=$(grep -RInE "$pattern" \
-  "$ROOT/bin" "$ROOT/lib" "$ROOT/adapters" "$ROOT/policies" "$ROOT/skills" \
+  "$ROOT/bin" "$ROOT/lib" "$ROOT/python" "$ROOT/adapters" "$ROOT/policies" "$ROOT/skills" "$ROOT/models" "$ROOT/commands" \
   || true)
 if [ -n "$hits" ]; then
   echo "FAIL: project nouns in generic code:" >&2
@@ -17,7 +17,7 @@ fi
 
 # 'br' as a token (not branch/break/...)
 hits=$(grep -RInE "$br_pattern" \
-  "$ROOT/bin" "$ROOT/lib" "$ROOT/adapters" "$ROOT/policies" "$ROOT/skills" \
+  "$ROOT/bin" "$ROOT/lib" "$ROOT/python" "$ROOT/adapters" "$ROOT/policies" "$ROOT/skills" "$ROOT/models" "$ROOT/commands" \
   || true)
 if [ -n "$hits" ]; then
   echo "FAIL: tracker token in generic code:" >&2

@@ -21,7 +21,10 @@
     "boot_id": { "type": "string", "minLength": 1 },
     "acquired_at": { "type": "string", "minLength": 1 },
     "realpath": { "type": "string", "minLength": 1 },
+    "st_dev": { "type": "integer" },
+    "st_ino": { "type": "integer" },
     "mode": { "type": "string", "enum": ["readonly", "bounded-write"] },
+    "job_id": { "type": ["string", "null"] },
     "replaced_stale": { "type": "boolean" }
   }
 }

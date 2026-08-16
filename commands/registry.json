@@ -1,0 +1,8 @@
+{
+  "probe": {
+    "argv": ["/usr/bin/true"],
+    "arity": {"min": 0, "max": 0},
+    "allow_options": [],
+    "allow_paths": false
+  }
+}

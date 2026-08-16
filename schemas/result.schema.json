@@ -11,7 +11,7 @@
     "dir",
     "exit",
     "started",
-    "artifacts"
+    "generation"
   ],
   "additionalProperties": false,
   "properties": {
@@ -25,7 +25,6 @@
         "timeout",
         "provider_error",
         "awaiting_review",
-        "review_required_missing",
         "review_failed"
       ]
     },
@@ -36,16 +35,19 @@
     "exit": { "type": ["integer", "null"] },
     "started": { "type": "string" },
     "finished": { "type": "string" },
+    "generation": { "type": "integer", "minimum": 0 },
     "attempt": { "type": "integer", "minimum": 1 },
     "integrity": {
       "type": "object",
       "properties": {
-        "before": { "type": "string" },
-        "after": { "type": "string" },
-        "changed": { "type": "boolean" },
+        "git_identity_before": { "type": "string" },
+        "git_identity_after": { "type": "string" },
+        "tree_before": { "type": "string" },
+        "tree_after": { "type": "string" },
         "identity_changed": { "type": "boolean" }
       }
     },
+    "freeze": { "type": ["object", "null"] },
     "artifacts": {
       "type": "object",
       "additionalProperties": { "type": ["string", "null"] }
@@ -55,11 +57,12 @@
       "type": "object",
       "properties": {
         "pid": { "type": ["integer", "null"] },
-        "pgid": { "type": ["integer", "null"] },
-        "timed_out": { "type": "boolean" },
-        "orphans_remaining": { "type": "integer", "minimum": 0 }
+        "timed_out": { "type": "boolean" }
       }
     },
-    "error": { "type": "string" }
+    "policy_digest": { "type": "string" },
+    "profile_digest": { "type": "string" },
+    "error": { "type": "string" },
+    "lease_uuid": { "type": ["string", "null"] }
   }
 }

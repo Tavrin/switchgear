@@ -18,23 +18,19 @@ the envelope `project` object.
 
 ## Language disposition
 
-Bash is the Stage-0 implementation language so the contracts can be proved
-against the shape of the live OpenCode wrapper. **It is not a permanent
-architectural commitment.** Do not treat `lib/*.sh` as the long-term layout.
+The 2026-08-16 remediation **moved the security-sensitive control plane
+to Python** (`python/ai_ops/`). The independent review of
+`47e21bdd` showed Bash could not own config isolation, leases, process
+trees, schema authority, or sandbox construction safely.
 
-### Pre-Stage-2 decision gate
+Bash remaining: `bin/ai-opencode` is a tiny launcher that `exec`s
+`/usr/bin/python3` on the committed `__main__.py`. No security decision
+is encoded in the shell wrapper.
 
-Before any Stage 2 installation, evaluate moving the stateful/control-plane
-core (leases, process groups, schema validation, result/review state,
-routing, integrity snapshots, adapters) to Python. Keep shell only for
-tiny launch wrappers if a wrapper is still useful.
+Stage-0 `lib/*.sh` files remain in the tree as historical artifacts from
+the reviewed baseline. They are not sourced.
 
-Criteria: JSON/schema safety, atomic locking, subprocess process-group
-control, testability, and the cost of a second provider adapter.
-
-Default suspicion: Python wins (`asyncio`, `sqlite3`, `jsonschema`,
-`subprocess` process groups). Do not rewrite this prototype unless Stage-0
-evidence itself makes Bash untenable.
+See `docs/SECURITY-REMEDIATION.md` for finding dispositions.
 
 ## Data flow
 
