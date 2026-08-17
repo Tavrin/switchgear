@@ -173,7 +173,8 @@ def main() -> int:
 
         out = subprocess.run(
             ["/usr/bin/git", "-C", directory, "--no-optional-locks",
-             "status", "--porcelain=v1", "-z"],
+             "status", "--porcelain=v1", "-z",
+             "--untracked-files=all", "--ignored=matching"],
             capture_output=True,
         ).stdout
         changed = sorted(

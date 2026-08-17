@@ -76,9 +76,14 @@ def promote(
             raise Refuse("reviewer did not name the files it reviewed")
         if expected_files and not named:
             raise Refuse("reviewer did not name the files it reviewed")
-        if sorted({str(f) for f in named}) != sorted(set(expected_files)):
+        # Subset, not equality: the reviewer sees the whole dirty worktree (which
+        # may carry earlier jobs' uncommitted work), so it may legitimately name
+        # more than this subject changed. What it may NOT do is omit any of the
+        # subject's own delta -- that would be approving a change it never looked at.
+        missing = sorted(set(expected_files) - {str(f) for f in named})
+        if missing:
             raise Refuse(
-                "reviewer's file list does not match the subject's actual change"
+                f"reviewer did not cover the subject's change: {', '.join(missing)}"
             )
     if review_artifact.get("required_unmet"):
         raise Refuse("independence requirements unmet")

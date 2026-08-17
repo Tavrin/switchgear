@@ -34,6 +34,20 @@ def _timeout(policy: CompiledPolicy) -> int:
     return val
 
 
+def _reclaim_sandbox_home(home: str) -> None:
+    """Delete the per-job synthetic HOME once the record is written.
+
+    A live provider populates it with ~150MB of npm cache and node_modules per
+    job; it is never reused and nothing else ever reads it, so retaining it grew
+    the state store without bound. Evidence and result.json are kept.
+    """
+    import shutil
+
+    if os.environ.get("AI_OPS_KEEP_SANDBOX_HOME") == "1":
+        return
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def run_job(
     *,
     profile_path: str,
@@ -140,6 +154,7 @@ def run_job(
         )
         before_id = identity.git_identity_digest(ident)
         before_tree = identity.tree_digest(ident)
+        before_fp = identity.dirty_fingerprints(ident)
         timeout = _timeout(policy)
         result = process.run_sandboxed(bwrap_argv, env=env, timeout_s=timeout)
         # process set is the bwrap pid ns; after return it is dead
@@ -165,7 +180,10 @@ def run_job(
         status = "ok"
         err = ""
         handoff = None
-        if result.timed_out:
+        if result.truncated:
+            status = "provider_error"
+            err = "provider output exceeded the capture bound (evidence truncated)"
+        elif result.timed_out:
             status = "timeout"
             err = f"timed out after {timeout}s"
         elif id_changed:
@@ -262,6 +280,10 @@ def run_job(
                 "independence": (policy.review or {}).get("independence") or {},
                 "worktree": identity.identity_core(after),
                 "model": model,
+                # This job's OWN delta, not the cumulative worktree state.
+                "changed_files": identity.delta_paths(
+                    before_fp, identity.dirty_fingerprints(ident)
+                ),
                 # Pin the controller registry that resolved model families, so a
                 # later edit cannot relabel two same-family models as independent.
                 "models_registry_digest": registry_digest(),
@@ -271,6 +293,7 @@ def run_job(
             record.pop("error", None)
         validate(record, "result.schema.json")
         atomic_write_json(os.path.join(dirs["job"], "result.json"), record)
+        _reclaim_sandbox_home(dirs["home"])
         return record
 
     if lock_cm:
@@ -350,6 +373,10 @@ def attach_review(
             review_artifact=artifact,
             live_head=live.head,
             live_tree_digest=live_tree,
-            expected_files=identity.changed_files(live),
+            # The subject's OWN frozen change, not the live cumulative worktree
+            # delta: the worktree persists across jobs, so the live set is the
+            # union of everything uncommitted and would credit one job with
+            # another job's work.
+            expected_files=freeze.get("changed_files"),
             generation=int(subject.get("generation") or 0),
         )

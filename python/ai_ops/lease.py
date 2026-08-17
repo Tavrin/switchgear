@@ -180,12 +180,14 @@ class PromotionLock:
         self.fd: Optional[int] = None
 
     def __enter__(self) -> None:
-        lock_path = os.path.join(_dir(self.root, self.ident), "lock")
-        if not os.path.isfile(lock_path):
-            # No lease was ever taken on this worktree, so no bounded-write
-            # worker can be running against it; nothing to serialize with.
-            return None
-        self.fd = open_nofollow(lock_path, os.O_RDWR)
+        d = _dir(self.root, self.ident)
+        os.makedirs(d, exist_ok=True)
+        reject_symlinks(d, "lease dir")
+        lock_path = os.path.join(d, "lock")
+        # Always create and hold the lock. Skipping it when the file is absent
+        # skipped serialization in exactly the configuration where workers run
+        # lock-free (require_lease_for_write=false) -- the race this is for.
+        self.fd = open_nofollow(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:

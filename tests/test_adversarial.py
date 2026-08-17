@@ -661,6 +661,60 @@ class RailTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             parse_event_stream(b'{"type":[]}\n', require_handoff=False)
 
+    def test_k1_untracked_content_is_in_the_digest(self):
+        """kimi-1 (BLOCKER): a worker cannot stage (git dir is ro in-sandbox), so
+        every file it creates is untracked. `git status` reports untracked files
+        by NAME only and `git diff HEAD` covers tracked content only, so the
+        freeze/review/'changed after review' checks were blind to their content."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        ident = identity.inspect_worktree(str(self.wt))
+        (self.wt / "app.py").write_text("benign\n")
+        before = identity.tree_digest(ident)
+        (self.wt / "app.py").write_text("BACKDOOR\n")
+        after = identity.tree_digest(ident)
+        self.assertNotEqual(before, after, "untracked content must change the digest")
+
+    def test_k1_gitignored_content_cannot_hide(self):
+        """kimi-1b: .gitignore is worker-writable; ignored files must not vanish."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        ident = identity.inspect_worktree(str(self.wt))
+        (self.wt / ".gitignore").write_text("loot/\n")
+        (self.wt / "loot").mkdir(exist_ok=True)
+        (self.wt / "loot" / "secret").write_text("a\n")
+        before = identity.tree_digest(ident)
+        self.assertIn("loot/secret", identity.changed_files(ident))
+        (self.wt / "loot" / "secret").write_text("exfiltrated\n")
+        self.assertNotEqual(before, identity.tree_digest(ident))
+
+    def test_k2_pointer_to_common_gitdir_refused(self):
+        """kimi-2 (HIGH): containment is not ownership. git_dir == common passed
+        the containment checks, so a pointer at the PRIMARY's git dir was adopted
+        and then self-ratified forever."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+        from ai_ops.errors import Refuse
+
+        original = (self.wt / ".git").read_text()
+        (self.wt / ".git").write_text(f"gitdir: {self.primary}/.git\n")
+        try:
+            with self.assertRaises(Refuse):
+                identity.inspect_worktree(str(self.wt))
+        finally:
+            (self.wt / ".git").write_text(original)
+        self.assertTrue(identity.inspect_worktree(str(self.wt)).linked_worktree)
+
+    def test_k5_review_binds_to_the_subjects_own_change(self):
+        """kimi-5 / dogfood D2: the worktree persists across jobs, so comparing
+        against the LIVE cumulative delta credited one job with another's work."""
+        job = self._subject_awaiting_review()
+        rec = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertIn("changed_files", rec["freeze"])
+        self.assertIn("tracked.txt", rec["freeze"]["changed_files"])
+
     def test_d1_poisoned_gitdir_pointer_refused_across_jobs(self):
         """deepseek-F1 (BLOCKER): a .git pointer redirected by an earlier job
         PERSISTS on disk even though that job refused. A later job must not adopt

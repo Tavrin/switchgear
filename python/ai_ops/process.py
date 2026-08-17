@@ -18,6 +18,7 @@ class ProcResult:
     stderr: bytes
     timed_out: bool
     pid: int
+    truncated: bool = False
 
 
 def run_sandboxed(
@@ -53,12 +54,12 @@ def run_sandboxed(
         return _collect(proc, out_fh, err_fh, timed_out, max_output)
 
 
-def _read_capped(fh, cap: int) -> bytes:
+def _read_capped(fh, cap: int) -> tuple[bytes, bool]:
     fh.seek(0)
     data = fh.read(cap + 1)
     if len(data) > cap:
-        return data[:cap]
-    return data
+        return data[:cap], True
+    return data, False
 
 
 def _collect(proc, out_fh, err_fh, timed_out: bool, cap: int) -> ProcResult:
@@ -66,12 +67,15 @@ def _collect(proc, out_fh, err_fh, timed_out: bool, cap: int) -> ProcResult:
         proc.wait(timeout=5)
     if proc.poll() is None:
         raise ProviderError("sandbox process still alive after kill")
+    out, out_trunc = _read_capped(out_fh, cap)
+    err, _ = _read_capped(err_fh, 65536)
     return ProcResult(
         returncode=proc.returncode if proc.returncode is not None else -1,
-        stdout=_read_capped(out_fh, cap),
-        stderr=_read_capped(err_fh, 65536),
+        stdout=out,
+        stderr=err,
         timed_out=timed_out,
         pid=proc.pid,
+        truncated=out_trunc,
     )
 
 
