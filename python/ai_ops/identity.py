@@ -396,6 +396,22 @@ def changed_files(ident: WorktreeIdentity) -> list[str]:
     return sorted(set(tracked) | set(_nontracked_paths(ident, raw)))
 
 
+def worktree_diff(ident: WorktreeIdentity, max_bytes: int = 200_000) -> str:
+    """The uncommitted change, as the controller computes it.
+
+    Handed to a reviewer in its prompt. The reviewer agent has no shell and no
+    git, so it cannot obtain a diff itself -- and it should not: reviewing the
+    controller's own frozen diff is what binds the review to the change that will
+    actually be promoted, rather than to whatever the model managed to scrape.
+    """
+    assert_gitdir_pointer_intact(ident)
+    out = _git_pinned(ident, "diff", "--no-ext-diff", "--no-textconv", "HEAD", text=False)
+    text = out.decode("utf-8", "replace")
+    if len(text) > max_bytes:
+        text = text[:max_bytes] + "\n[diff truncated]\n"
+    return text
+
+
 def dirty_fingerprints(ident: WorktreeIdentity) -> dict[str, str]:
     """path -> content fingerprint, for every path that differs from HEAD.
 

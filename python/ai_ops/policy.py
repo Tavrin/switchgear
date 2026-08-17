@@ -88,7 +88,7 @@ class CompiledPolicy:
                 "",
                 "```json",
                 '{"handoff": {"summary": "<one line>", "status": "awaiting_review",',
-                ' "changes": ["<path>", "..."], "remaining_risks": ["..."],',
+                ' "changes": ["<repo-relative path>", "..."], "remaining_risks": ["..."],',
                 ' "next_action": "review"}}',
                 "```",
                 "",
@@ -96,8 +96,9 @@ class CompiledPolicy:
             ]
         elif role == "review":
             body = common + [
-                "Review the uncommitted change in this worktree. Read the diff first.",
-                "Judge only whether the change is correct and safe.",
+                "The complete diff is given to you in the prompt. Review exactly that.",
+                "You have no shell and no git: do not try to obtain the diff",
+                "yourself. Judge only whether the change is correct and safe.",
                 "",
                 "End your final message with a fenced json block:",
                 "",

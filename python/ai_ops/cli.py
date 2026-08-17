@@ -140,12 +140,30 @@ def cmd_review(ns: argparse.Namespace) -> int:
         env = json.loads(open(ns.envelope, encoding="utf-8").read())
         validate(env, "task-envelope.schema.json")
         prompt = env.get("goal") or prompt
+    # Give the reviewer the controller's frozen diff. It has no shell and no git,
+    # so without this it cannot see the change at all -- a live reviewer looped
+    # 35 times and timed out trying.
+    review_dir = os.path.abspath(ns.dir)
+    try:
+        ident = identity.inspect_worktree(review_dir)
+        diff = identity.worktree_diff(ident)
+        files = identity.changed_files(ident)
+    except Refuse:
+        diff, files = "", []
+    if diff:
+        prompt = (
+            f"{prompt or 'Review this change.'}\n\n"
+            f"Changed files: {', '.join(files)}\n\n"
+            "The complete uncommitted diff follows. Review THIS; do not go looking\n"
+            "for it yourself.\n\n"
+            f"```diff\n{diff}\n```\n"
+        )
     rec = job.run_job(
         profile_path=_profile_path(ns),
         state_path=_state_path(ns),
         mode="readonly",
         role=ns.role,
-        worktree=os.path.abspath(ns.dir),
+        worktree=review_dir,
         prompt=prompt or "review",
         provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
         envelope=env,
