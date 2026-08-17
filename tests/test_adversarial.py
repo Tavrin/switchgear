@@ -1041,6 +1041,9 @@ class BrokerUnit(unittest.TestCase):
                 except Exception:
                     return 0
             self.assertEqual(post("/v1/embeddings", "opencode-go/glm-5.3"), 403)
+            # /messages is a legitimate inference surface (Anthropic-shaped
+            # models route there); denying it broke qwen3.8-max in a live probe.
+            self.assertNotEqual(post("/v1/messages", "opencode-go/glm-5.3"), 403)
             self.assertEqual(post("/v1/chat/completions", "openai/gpt-4"), 403)
             self.assertGreaterEqual(len(bk.denials), 2)
 

@@ -180,7 +180,12 @@ class CredentialBroker:
         self.credential = credential
         self.upstream = upstream.rstrip("/")
         self.allowed_models = set(allowed_models or ())
-        self.allowed_paths = ("/chat/completions",)
+        # A provider routes different models over different wire APIs: OpenAI
+        # models use /chat/completions, Anthropic-shaped ones use /messages.
+        # Allowlisting only the first silently denied legitimate traffic
+        # (qwen3.8-max -> "broker: path not allowed: /messages"). These two are
+        # the inference surfaces; everything else stays refused.
+        self.allowed_paths = ("/chat/completions", "/messages")
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
         self.forwarded = 0
