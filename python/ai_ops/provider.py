@@ -126,6 +126,16 @@ def runtime_with_broker(runtime: dict[str, Any], base_url: str, model_id: str) -
     return out
 
 
+def write_agent_definition(synth_home: str, agent: str, definition: str) -> str:
+    """Materialise the generated agent file the provider will load."""
+    d = os.path.join(synth_home, ".config", "opencode", "agent")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, f"{agent}.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(definition)
+    return path
+
+
 def isolation_env(synth_home: str, runtime: dict[str, Any]) -> dict[str, str]:
     cfg_dir = os.path.join(synth_home, ".config", "opencode")
     os.makedirs(cfg_dir, exist_ok=True)

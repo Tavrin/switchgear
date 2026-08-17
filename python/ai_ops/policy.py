@@ -40,6 +40,83 @@ class CompiledPolicy:
             raise Refuse(f"model '{mid}' is not allowed by the profile")
         return model_record(mid)
 
+    def agent_definition(self, role: str) -> str:
+        """The OpenCode agent file: frontmatter policy + the prompt body.
+
+        Generated from this compiled policy so there is ONE source of truth.
+        Static agent markdown in the repo drifted from the runtime and was never
+        actually loaded; this is what the provider really reads.
+
+        The prompt matters for correctness, not just tone: a live provider never
+        emits `handoff` or `review` objects of its own, so the structured result
+        the rail requires has to be asked for here, in the model's own output.
+        """
+        bash = self.tools.get("bash", "deny")
+        edit = self.tools.get("edit", "deny")
+        head = [
+            "---",
+            f"description: agent-ops {self.mode} rail ({role})",
+            "mode: primary",
+            "permission:",
+            f"  edit: {edit}",
+            f"  bash: {bash}",
+            "  read: allow",
+            "  glob: allow",
+            "  grep: allow",
+            "  webfetch: deny",
+            "  websearch: deny",
+            "  task: deny",
+            "  todowrite: deny",
+            "  skill: deny",
+            "  external_directory:",
+            '    "*": deny',
+            "---",
+            "",
+        ]
+        common = [
+            "You are running inside an isolated sandbox on a single git worktree.",
+            "You cannot reach anything outside it, and you must not try.",
+            "Be concise. Do not narrate what you are about to do.",
+            "",
+        ]
+        if self.mode == "bounded-write":
+            body = common + [
+                "Make the smallest change that satisfies the task. Edit files directly.",
+                "Do not run git. Do not create commits. Do not touch .git.",
+                "",
+                "When you are done, end your final message with a fenced json block:",
+                "",
+                "```json",
+                '{"handoff": {"summary": "<one line>", "status": "awaiting_review",',
+                ' "changes": ["<path>", "..."], "remaining_risks": ["..."],',
+                ' "next_action": "review"}}',
+                "```",
+                "",
+                "The block is mandatory: without it the job is rejected.",
+            ]
+        elif role == "review":
+            body = common + [
+                "Review the uncommitted change in this worktree. Read the diff first.",
+                "Judge only whether the change is correct and safe.",
+                "",
+                "End your final message with a fenced json block:",
+                "",
+                "```json",
+                '{"review": {"verdict": "promote|reject|needs_changes",',
+                ' "reviewed_files": ["<every changed path you examined>"],',
+                ' "findings": [{"severity": "high", "claim": "...", "evidence": "..."}]}}',
+                "```",
+                "",
+                "reviewed_files must name every file the change touched; a review",
+                "that omits one is rejected. Use 'promote' only if you would ship it.",
+            ]
+        else:
+            body = common + [
+                "Inspect and report. Never modify anything.",
+                "Answer the question directly, citing file:line where useful.",
+            ]
+        return "\n".join(head + body) + "\n"
+
     def to_opencode_runtime(self) -> dict[str, Any]:
         bash = self.tools.get("bash", "deny") == "allow"
         edit = self.tools.get("edit", "deny") == "allow"

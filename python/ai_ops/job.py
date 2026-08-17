@@ -168,6 +168,10 @@ def run_job(
             if extra:
                 with open(os.path.join(dirs["home"], ".mock-extra"), "w", encoding="utf-8") as fh:
                     fh.write(extra)
+        agent_name = "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        provider.write_agent_definition(
+            dirs["home"], agent_name, policy.agent_definition(role)
+        )
         env = provider.isolation_env(dirs["home"], runtime)
         prov_argv, _live = provider.resolve_provider(provider_path)
         agent = "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
