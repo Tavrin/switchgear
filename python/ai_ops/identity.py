@@ -7,7 +7,7 @@ from typing import Any
 
 from .env import GIT, git_clean_env
 from .errors import Refuse
-from .paths import reject_symlinks, require_absolute, stat_identity
+from .paths import is_within, reject_symlinks, require_absolute, stat_identity
 
 
 @dataclass(frozen=True)
@@ -136,6 +136,27 @@ def inspect_worktree(path: str) -> WorktreeIdentity:
     linked = os.path.isfile(git_file) and not os.path.islink(git_file)
     if os.path.islink(git_file):
         raise Refuse("refusing symlink .git")
+
+    # Git-dir LEGITIMACY, not merely stability. git_dir/common_git_dir above were
+    # derived by following the in-tree .git pointer, which is worker-writable in
+    # bounded-write mode. A poisoned pointer SURVIVES the job that wrote it (that
+    # job refuses, but the bytes are already on disk), so a later job would adopt
+    # a worker-owned repository as authoritative and every downstream digest,
+    # freeze and promotion comparison would be computed against it.
+    if linked:
+        # A real linked worktree's git dir lives under the primary's
+        # .git/worktrees/, never inside the worktree itself.
+        if is_within(git_dir, abs_path):
+            raise Refuse(f"git dir {git_dir} is inside the worktree (poisoned .git pointer)")
+        if is_within(common, abs_path):
+            raise Refuse(f"common git dir {common} is inside the worktree (poisoned .git pointer)")
+        if not is_within(git_dir, common):
+            raise Refuse("linked worktree git dir is not a member of its common git dir")
+    else:
+        # Primary checkout: the git dir must be exactly <worktree>/.git.
+        expected = os.path.join(abs_path, ".git")
+        if os.path.realpath(git_dir) != os.path.realpath(expected):
+            raise Refuse(f"primary checkout git dir {git_dir} is not {expected}")
     # do not follow symlinks on the worktree root
     dev, ino = stat_identity(abs_path)
     cdev, cino = stat_identity(common if os.path.isdir(common) else os.path.dirname(common))

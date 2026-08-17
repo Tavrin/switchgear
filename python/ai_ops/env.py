@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from typing import Mapping
 
+from .errors import Refuse
+
 # The child environment is BUILT, not filtered: allowlisted_env() below constructs
 # it from scratch and it is handed to the child via Popen(env=...). There is
 # deliberately no drop-list here — a second, parallel representation of the same
@@ -52,6 +54,12 @@ def allowlisted_env(
 
 
 def assert_no_host_secrets(env: Mapping[str, str]) -> None:
+    """Raises Refuse (a RailError) so a violation is a clean refusal.
+
+    Previously raised bare RuntimeError, which cli.main does not catch — a
+    forwarding change would have surfaced as an unhandled traceback rather than
+    a refusal.
+    """
     for key in env:
         if key.startswith("OPENCODE_") and key not in {
             "OPENCODE_CONFIG",
@@ -67,6 +75,6 @@ def assert_no_host_secrets(env: Mapping[str, str]) -> None:
             "OPENCODE_PURE",
             "OPENCODE_FAKE_VCS",
         }:
-            raise RuntimeError(f"refusing to forward {key}")
+            raise Refuse(f"refusing to forward {key}")
         if key == "OPENCODE_PERMISSION":
-            raise RuntimeError("OPENCODE_PERMISSION must never be set")
+            raise Refuse("OPENCODE_PERMISSION must never be set")

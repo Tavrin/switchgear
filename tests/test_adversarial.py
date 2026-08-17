@@ -661,6 +661,54 @@ class RailTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             parse_event_stream(b'{"type":[]}\n', require_handoff=False)
 
+    def test_d1_poisoned_gitdir_pointer_refused_across_jobs(self):
+        """deepseek-F1 (BLOCKER): a .git pointer redirected by an earlier job
+        PERSISTS on disk even though that job refused. A later job must not adopt
+        a worker-owned repository as the authoritative git dir -- otherwise every
+        digest, freeze and promotion comparison is computed against it."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+        from ai_ops.errors import Refuse
+
+        evil = self.wt / "evilrepo"
+        evil.mkdir()
+        for args in (["init", "-q", "-b", "main"], ["config", "user.email", "a@b"],
+                     ["config", "user.name", "a"]):
+            subprocess.run(["/usr/bin/git", "-C", str(evil), *args], check=True, capture_output=True)
+        (evil / "f").write_text("x")
+        subprocess.run(["/usr/bin/git", "-C", str(evil), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(["/usr/bin/git", "-C", str(evil), "commit", "-qm", "x"], check=True, capture_output=True)
+        original = (self.wt / ".git").read_text()
+        (self.wt / ".git").write_text(f"gitdir: {evil}/.git\n")
+        try:
+            with self.assertRaises(Refuse):
+                identity.inspect_worktree(str(self.wt))
+        finally:
+            (self.wt / ".git").write_text(original)
+        # and the legitimate pointer still works
+        ident = identity.inspect_worktree(str(self.wt))
+        self.assertTrue(ident.linked_worktree)
+
+    def test_d1_primary_gitdir_must_be_dot_git(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        ident = identity.inspect_worktree(str(self.primary))
+        self.assertFalse(ident.linked_worktree)
+        self.assertEqual(
+            os.path.realpath(ident.git_dir),
+            os.path.realpath(str(self.primary / ".git")),
+        )
+
+    def test_d_note_host_secret_check_raises_refuse(self):
+        """deepseek note: bare RuntimeError is not caught by cli.main."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.env import assert_no_host_secrets
+        from ai_ops.errors import Refuse
+
+        with self.assertRaises(Refuse):
+            assert_no_host_secrets({"OPENCODE_PERMISSION": '{"bash":"allow"}'})
+
     def test_g4_invalid_utf8_is_provider_error(self):
         """glm-F4: invalid UTF-8 raised UnicodeDecodeError (a ValueError), which
         the rail's (ProviderError, Refuse) handler does not catch."""

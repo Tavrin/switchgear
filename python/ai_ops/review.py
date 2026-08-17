@@ -72,7 +72,9 @@ def promote(
     # NOTHING from promoting, which controller-side hashing alone cannot.
     if expected_files is not None:
         named = review_artifact.get("reviewed_files")
-        if not isinstance(named, list) or not named:
+        if not isinstance(named, list):
+            raise Refuse("reviewer did not name the files it reviewed")
+        if expected_files and not named:
             raise Refuse("reviewer did not name the files it reviewed")
         if sorted({str(f) for f in named}) != sorted(set(expected_files)):
             raise Refuse(
