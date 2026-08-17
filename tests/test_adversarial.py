@@ -904,6 +904,80 @@ class EventUnit(unittest.TestCase):
             parse_event_stream(raw, require_handoff=False)
 
 
+class RealProviderVocabularyUnit(unittest.TestCase):
+    """The committed mock invented an event vocabulary the real provider does
+    not use. These tests pin the SHAPE a live OpenCode run actually produces,
+    so the suite stops validating a fiction."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    # Captured from a real `opencode run --format json` (1.18.18).
+    REAL = (
+        b'{"type":"step_start","part":{"type":"step-start"}}\n'
+        b'{"type":"tool_use","part":{"type":"tool","tool":"read"}}\n'
+        b'{"type":"text","part":{"type":"text","text":"1. divide has no zero check."}}\n'
+        b'{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}\n'
+    )
+
+    def test_real_stream_is_accepted(self):
+        from ai_ops.events import parse_event_stream
+
+        term = parse_event_stream(self.REAL, require_handoff=False)
+        self.assertEqual(term["type"], "step_finish")
+        self.assertIn("divide has no zero check", term["_text"])
+
+    def test_real_error_event_is_a_provider_error(self):
+        from ai_ops.errors import ProviderError
+        from ai_ops.events import parse_event_stream
+
+        raw = b'{"type":"error","error":{"name":"APIError","data":{"message":"Forbidden"}}}\n'
+        with self.assertRaises(ProviderError) as ctx:
+            parse_event_stream(raw, require_handoff=False)
+        self.assertIn("Forbidden", str(ctx.exception))
+
+    @staticmethod
+    def _stream(model_text: str) -> bytes:
+        """Build a realistic stream: model text, then a step_finish."""
+        lines = [
+            json.dumps({"type": "text",
+                        "part": {"type": "text", "text": model_text}}),
+            json.dumps({"type": "step_finish",
+                        "part": {"type": "step-finish", "reason": "stop"}}),
+        ]
+        return ("\n".join(lines) + "\n").encode()
+
+    def test_handoff_is_read_from_model_text_on_a_live_run(self):
+        """Real OpenCode never emits a `handoff` object -- the model writes it
+        as text, so the rail must parse it out of the assistant output."""
+        from ai_ops.events import parse_event_stream
+
+        body = json.dumps({"handoff": {"summary": "fixed divide",
+                                       "status": "awaiting_review"}})
+        raw = self._stream("Done.\n```json\n" + body + "\n```")
+        term = parse_event_stream(raw, require_handoff=True)
+        self.assertEqual(term["_handoff"]["summary"], "fixed divide")
+
+    def test_review_verdict_is_read_from_model_text(self):
+        from ai_ops.events import extract_review_verdict
+
+        body = json.dumps({"review": {"verdict": "promote",
+                                      "reviewed_files": ["calc.py"],
+                                      "findings": []}})
+        verdict, findings, files = extract_review_verdict(
+            self._stream("```json\n" + body + "\n```"))
+        self.assertEqual(verdict, "promote")
+        self.assertEqual(files, ["calc.py"])
+
+    def test_prose_without_a_structured_object_is_refused(self):
+        """A model that just talks must not be read as an approval."""
+        from ai_ops.errors import ProviderError
+        from ai_ops.events import extract_review_verdict
+
+        with self.assertRaises(ProviderError):
+            extract_review_verdict(self._stream("Looks good to me, ship it."))
+
+
 class BrokerUnit(unittest.TestCase):
     """Credential broker + no-network sandbox."""
 

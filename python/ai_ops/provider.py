@@ -115,7 +115,10 @@ def runtime_with_broker(runtime: dict[str, Any], base_url: str, model_id: str) -
     providers = dict(out.get("provider") or {})
     entry = dict(providers.get(provider_id) or {})
     options = dict(entry.get("options") or {})
-    options["baseURL"] = base_url.rstrip("/") + "/v1"
+    # No "/v1" here: the registry upstream already carries the API version
+    # (e.g. .../zen/go/v1), and the broker concatenates upstream + request path.
+    # Appending it produced .../zen/go/v1/v1/chat/completions -> 404.
+    options["baseURL"] = base_url.rstrip("/")
     options["apiKey"] = "broker-placeholder-not-a-credential"
     entry["options"] = options
     providers[provider_id] = entry

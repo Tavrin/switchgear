@@ -36,6 +36,52 @@ DEFAULT_UPSTREAM = "https://opencode.ai/zen/go/v1"
 MAX_BODY = 8 * 1024 * 1024
 
 
+# Hop-by-hop headers must not be relayed (RFC 7230), plus Host/Content-Length
+# which urllib recomputes for the upstream request.
+_DROP_HEADERS = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
+    # urllib does not transparently decode content-encoding, so ask for identity.
+    "accept-encoding",
+    # replaced with the real credential
+    "authorization",
+})
+
+
+def _join_path(upstream: str, path: str) -> str:
+    """Avoid duplicating the API version segment.
+
+    Clients may address the broker with or without a leading /v1 depending on how
+    baseURL was written; the upstream already ends in /v1. Collapse the overlap
+    rather than trusting one convention.
+    """
+    if upstream.rstrip("/").endswith("/v1") and path.startswith("/v1/"):
+        return path[3:]
+    return path
+
+
+def _forward_headers(incoming, credential: str) -> dict:
+    """Relay the client's headers, swapping in the real credential.
+
+    Forwarding matters beyond politeness: the upstream sits behind a CDN that
+    rejects requests lacking the client's normal headers (notably User-Agent).
+    An earlier version sent only content-type/accept and was answered with a
+    Cloudflare 403 access-denied page.
+    """
+    out = {}
+    for key in incoming.keys():
+        low = key.lower()
+        if low in _DROP_HEADERS:
+            continue
+        value = incoming.get(key)
+        if value is not None:
+            out[low] = value
+    out["authorization"] = f"Bearer {credential}"
+    out.setdefault("content-type", "application/json")
+    out.setdefault("accept", "application/json")
+    return out
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     broker: "CredentialBroker"
 
@@ -70,14 +116,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._deny(403, f"model not allowed: {requested!r}")
                 return
         req = urllib.request.Request(
-            b.upstream + self.path,
+            b.upstream + _join_path(b.upstream, self.path),
             data=payload,
             method="POST",
-            headers={
-                "authorization": f"Bearer {b.credential}",
-                "content-type": self.headers.get("content-type", "application/json"),
-                "accept": self.headers.get("accept", "application/json"),
-            },
+            headers=_forward_headers(self.headers, b.credential),
         )
         try:
             with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
