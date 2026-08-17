@@ -1,40 +1,103 @@
 {
-  "provider": "opencode",
+  "providers": {
+    "opencode-go": {
+      "upstream": "https://opencode.ai/zen/go/v1",
+      "credential": "opencode-go"
+    },
+    "openrouter": {
+      "upstream": "https://openrouter.ai/api/v1",
+      "credential": "openrouter"
+    }
+  },
   "models": {
     "opencode-go/qwen3.8-max": {
-      "provider": "opencode",
+      "provider": "opencode-go",
       "model_family": "qwen",
       "vendor_family": "alibaba"
     },
     "opencode-go/glm-5.3": {
-      "provider": "opencode",
+      "provider": "opencode-go",
       "model_family": "glm",
       "vendor_family": "zhipu"
     },
     "opencode-go/glm-5.2": {
-      "provider": "opencode",
+      "provider": "opencode-go",
       "model_family": "glm",
       "vendor_family": "zhipu"
     },
     "opencode-go/kimi-k3": {
-      "provider": "opencode",
+      "provider": "opencode-go",
       "model_family": "kimi",
       "vendor_family": "moonshot"
     },
     "opencode-go/deepseek-v4-pro": {
-      "provider": "opencode",
+      "provider": "opencode-go",
       "model_family": "deepseek",
       "vendor_family": "deepseek"
     },
     "opencode-go/deepseek-v4-flash": {
-      "provider": "opencode",
+      "provider": "opencode-go",
       "model_family": "deepseek",
       "vendor_family": "deepseek"
+    },
+
+    "openrouter/anthropic/claude-sonnet-4.5": {
+      "provider": "openrouter",
+      "model_family": "claude",
+      "vendor_family": "anthropic"
+    },
+    "openrouter/openai/gpt-5.1": {
+      "provider": "openrouter",
+      "model_family": "gpt",
+      "vendor_family": "openai"
+    },
+    "openrouter/google/gemini-2.5-pro": {
+      "provider": "openrouter",
+      "model_family": "gemini",
+      "vendor_family": "google"
+    },
+    "openrouter/meta-llama/llama-4-maverick": {
+      "provider": "openrouter",
+      "model_family": "llama",
+      "vendor_family": "meta"
+    },
+    "openrouter/mistralai/mistral-large-2411": {
+      "provider": "openrouter",
+      "model_family": "mistral",
+      "vendor_family": "mistral"
+    },
+    "openrouter/x-ai/grok-4": {
+      "provider": "openrouter",
+      "model_family": "grok",
+      "vendor_family": "xai"
+    },
+    "openrouter/deepseek/deepseek-chat": {
+      "provider": "openrouter",
+      "model_family": "deepseek",
+      "vendor_family": "deepseek"
+    },
+    "openrouter/qwen/qwen3-max": {
+      "provider": "openrouter",
+      "model_family": "qwen",
+      "vendor_family": "alibaba"
     }
   },
   "deny": [
-    "openai/*",
-    "opencode-go/gpt-5.6-luna",
-    "opencode-go/grok-4.5"
+    "openai/*"
+  ],
+  "_note": [
+    "This registry is CONTROLLER-OWNED and is the only source of model family /",
+    "vendor identity. A project profile may name ids from here; it can never",
+    "declare a family, because that would let a profile manufacture reviewer",
+    "independence.",
+    "",
+    "The openrouter/* ids below are a curated starting set and are NOT verified",
+    "against OpenRouter's live catalog -- model ids there change. Validate an id",
+    "before relying on it (`ai-opencode models` resolves families; a bad id fails",
+    "at the provider, not silently). Add or remove entries freely: that is the",
+    "intended way to extend the pool.",
+    "",
+    "vendor_family is what makes cross-vendor review independence meaningful.",
+    "Two openrouter models from the same vendor are NOT independent reviewers."
   ]
 }

@@ -57,13 +57,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._deny(413, "request too large")
             return
         payload = self.rfile.read(length)
-        if b.allowed_model:
+        if b.allowed_models:
             try:
                 requested = json.loads(payload).get("model")
             except Exception:
                 self._deny(400, "unparseable request body")
                 return
-            if requested != b.allowed_model:
+            if requested not in b.allowed_models:
                 self._deny(403, f"model not allowed: {requested!r}")
                 return
         req = urllib.request.Request(
@@ -113,14 +113,14 @@ class CredentialBroker:
         credential: str,
         *,
         upstream: str = DEFAULT_UPSTREAM,
-        allowed_model: Optional[str] = None,
+        allowed_models: Optional[set] = None,
         timeout_s: int = 300,
     ) -> None:
         if not credential:
             raise Refuse("broker requires a credential")
         self.credential = credential
         self.upstream = upstream.rstrip("/")
-        self.allowed_model = allowed_model
+        self.allowed_models = set(allowed_models or ())
         self.allowed_paths = ("/chat/completions",)
         self.timeout_s = timeout_s
         self.forwarded = 0

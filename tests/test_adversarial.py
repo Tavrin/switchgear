@@ -904,6 +904,74 @@ class EventUnit(unittest.TestCase):
             parse_event_stream(raw, require_handoff=False)
 
 
+class MultiProviderUnit(unittest.TestCase):
+    """OpenRouter/multi-provider routing (agents, reviewers, swarms)."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def test_provider_routing_per_model(self):
+        from ai_ops.registry import model_record, provider_record
+
+        go = model_record("opencode-go/glm-5.3")
+        orr = model_record("openrouter/anthropic/claude-sonnet-4.5")
+        self.assertEqual(go["provider"], "opencode-go")
+        self.assertEqual(orr["provider"], "openrouter")
+        self.assertNotEqual(
+            provider_record(go["provider"])["upstream"],
+            provider_record(orr["provider"])["upstream"],
+        )
+
+    def test_unknown_provider_refused(self):
+        from ai_ops.errors import Refuse
+        from ai_ops.registry import provider_record
+
+        with self.assertRaises(Refuse):
+            provider_record("not-a-provider")
+
+    def test_broker_model_pin_accepts_either_wire_form(self):
+        """A provider may send the full id or the provider-stripped suffix."""
+        from ai_ops.registry import wire_model_names
+
+        names = wire_model_names("openrouter/anthropic/claude-sonnet-4.5")
+        self.assertIn("openrouter/anthropic/claude-sonnet-4.5", names)
+        self.assertIn("anthropic/claude-sonnet-4.5", names)
+        self.assertNotIn("anthropic/claude-opus-4", names)
+
+    def test_cross_vendor_independence_is_expressible(self):
+        """The point of OpenRouter here: reviewers from a different vendor.
+
+        different_family alone is weak -- two models can share a vendor. The
+        registry carries vendor_family so a profile can demand real diversity.
+        """
+        from ai_ops.registry import model_record
+        from ai_ops.review import independence
+
+        subject = model_record("opencode-go/deepseek-v4-pro")
+        same_vendor = model_record("openrouter/deepseek/deepseek-chat")
+        cross_vendor = model_record("openrouter/anthropic/claude-sonnet-4.5")
+
+        self.assertEqual(subject["vendor_family"], same_vendor["vendor_family"])
+        self.assertNotEqual(subject["vendor_family"], cross_vendor["vendor_family"])
+        ind = independence(subject, cross_vendor, "a", "b")
+        self.assertTrue(ind["different_model"])
+        self.assertTrue(ind["different_family"])
+
+    def test_credentials_are_per_provider(self):
+        from ai_ops.provider import credential_path
+
+        os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
+        self.assertTrue(credential_path("openrouter").endswith("provider-credential")
+                        or "credentials/openrouter" in credential_path("openrouter"))
+        os.environ["AI_OPS_PROVIDER_CREDENTIAL_FILE"] = "/tmp/override-cred"
+        try:
+            self.assertEqual(credential_path("openrouter"), "/tmp/override-cred")
+        finally:
+            os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
+
+
+
+
+
 if __name__ == "__main__":
-    sys.path.insert(0, str(ROOT / "python"))
-    unittest.main(verbosity=2)
+    unittest.main()

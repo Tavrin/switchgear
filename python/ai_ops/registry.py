@@ -44,8 +44,33 @@ def model_record(model_id: str) -> dict[str, Any]:
         raise Refuse(f"model '{model_id}' is not in the controller registry")
     out = dict(rec)
     out["id"] = model_id
-    out.setdefault("provider", "opencode")
+    out.setdefault("provider", model_id.split("/", 1)[0] if "/" in model_id else "opencode")
     return out
+
+
+def provider_record(provider_id: str) -> dict[str, Any]:
+    """Upstream + credential name for a provider, from the controller registry."""
+    reg = load_models()
+    rec = (reg.get("providers") or {}).get(provider_id)
+    if not rec:
+        raise Refuse(f"provider '{provider_id}' is not in the controller registry")
+    if not rec.get("upstream"):
+        raise Refuse(f"provider '{provider_id}' has no upstream")
+    return rec
+
+
+def wire_model_names(model_id: str) -> set[str]:
+    """Names a provider may legitimately put in the request body.
+
+    Registry ids are provider-qualified (`openrouter/anthropic/claude-...`), but
+    a client may send either the full id or the provider-stripped suffix
+    (`anthropic/claude-...`). Accept both rather than guessing, so the broker's
+    model pin cannot be defeated by a naming convention.
+    """
+    names = {model_id}
+    if "/" in model_id:
+        names.add(model_id.split("/", 1)[1])
+    return names
 
 
 def command_record(verb: str) -> dict[str, Any]:

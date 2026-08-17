@@ -13,7 +13,7 @@ from .errors import ProviderError, Refuse
 from .paths import require_disjoint
 from .policy import CompiledPolicy, compile_policy
 from .profile import load_profile
-from .registry import model_record, registry_digest
+from .registry import model_record, provider_record as registry_provider, registry_digest, wire_model_names
 from .schema import validate
 from .state import StateRoot, atomic_write_json, new_job_id, read_json
 
@@ -136,14 +136,17 @@ def run_job(
         loopback URL and a placeholder key. See broker.py.
         """
         cred = None
+        provider_id = model.get("provider") or "opencode-go"
         if os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1":
-            cred = provider.load_provider_credential()
+            prec = registry_provider(provider_id)
+            cred = provider.load_provider_credential(prec.get("credential") or provider_id)
+            upstream = os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or prec["upstream"]
         if not cred:
             return _execute(None)
         with brokermod.CredentialBroker(
             cred,
-            upstream=os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or brokermod.DEFAULT_UPSTREAM,
-            allowed_model=model["id"],
+            upstream=upstream,
+            allowed_models=wire_model_names(model["id"]),
         ) as bk:
             rec = _execute(bk)
             rec.setdefault("provider_calls", {})

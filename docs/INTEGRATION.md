@@ -80,6 +80,42 @@ human-clicked merge remains the only path to main. agent-ops adds an OS boundary
 *under* atelier's worktree isolation; it does not replace the merge gate, the
 event log, or verification from the real test suite.
 
+## Multiple providers (OpenRouter, swarms)
+
+Models are provider-qualified and the controller registry maps each provider to
+an upstream and a credential name:
+
+```
+opencode-go/glm-5.3                     -> https://opencode.ai/zen/go/v1
+openrouter/anthropic/claude-sonnet-4.5  -> https://openrouter.ai/api/v1
+```
+
+Install one credential per provider, mode 600:
+
+```
+~/.config/ai-ops/credentials/opencode-go
+~/.config/ai-ops/credentials/openrouter
+```
+
+Each job starts a broker bound to *that model's* upstream and credential, and
+pins the request to that model, so a job for one provider cannot spend another
+provider's key.
+
+**Why OpenRouter matters for review independence.** `different_family` is weak on
+its own -- two ids can share a vendor. The registry therefore carries
+`vendor_family`, and it is controller-owned: a project profile may name model
+ids but can never declare a family, because that would let a profile manufacture
+its own reviewer independence. OpenRouter gives a genuinely cross-vendor pool, so
+`implement` on one vendor can be reviewed by another.
+
+**Swarms.** The rail is one job per invocation; a swarm is N invocations by the
+caller. Two constraints:
+
+- Leases are per-worktree and exclusive, so **parallel writers need one worktree
+  each**. Verified: a second writer on a held worktree is refused, and three
+  concurrent jobs on separate worktrees run cleanly.
+- Readonly jobs (scouts, reviewers) can fan out freely on the same worktree.
+
 ## Environment knobs
 
 | Variable | Effect |
@@ -87,7 +123,7 @@ event log, or verification from the real test suite.
 | `AI_OPS_STATE`, `AI_OPS_PROFILE`, `AI_OPS_PROVIDER` | defaults for the flags |
 | `AI_OPS_WRITE=1` | required kill-switch for any bounded-write job |
 | `AI_OPS_ALLOW_LIVE_PROVIDER=1` | permit the pinned live provider |
-| `AI_OPS_PROVIDER_CREDENTIAL_FILE` | credential file (default `~/.config/ai-ops/provider-credential`, mode 600 enforced) |
+| `AI_OPS_PROVIDER_CREDENTIAL_FILE` | single-credential override; otherwise `~/.config/ai-ops/credentials/<provider>`, mode 600 enforced |
 | `AI_OPS_PROVIDER_UPSTREAM` | broker upstream base URL |
 | `AI_OPENCODE_TIMEOUT` | per-job timeout, bounded by the profile |
 | `AI_OPS_MIN_FREE_BYTES`, `AI_OPS_MAX_UNTRACKED_BYTES` | disk/digest bounds |

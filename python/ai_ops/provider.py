@@ -52,10 +52,29 @@ def assert_pinned_version(returncode: int, stdout: bytes, timed_out: bool) -> st
 
 
 CREDENTIAL_ENV = "OPENCODE_API_KEY"
+CREDENTIAL_DIR = os.path.expanduser("~/.config/ai-ops/credentials")
 DEFAULT_CREDENTIAL_FILE = os.path.expanduser("~/.config/ai-ops/provider-credential")
 
 
-def load_provider_credential() -> str | None:
+def credential_path(name: str | None = None) -> str:
+    """Where a provider's credential lives.
+
+    Per-provider files under ~/.config/ai-ops/credentials/<name> so each pool
+    (opencode-go, openrouter, ...) is separately installable and separately
+    revocable. AI_OPS_PROVIDER_CREDENTIAL_FILE overrides for a single-provider
+    setup; the legacy single-file path stays supported.
+    """
+    override = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE")
+    if override:
+        return override
+    if name:
+        per = os.path.join(CREDENTIAL_DIR, name)
+        if os.path.isfile(per):
+            return per
+    return DEFAULT_CREDENTIAL_FILE
+
+
+def load_provider_credential(name: str | None = None) -> str | None:
     """Read the provider credential from an operator-owned file.
 
     Deliberately NOT taken from the controller's environment: the host env is
@@ -69,7 +88,7 @@ def load_provider_credential() -> str | None:
     provider options.baseURL, plus --unshare-net) removes this residual by never
     placing the credential inside the sandbox at all.
     """
-    path = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE") or DEFAULT_CREDENTIAL_FILE
+    path = credential_path(name)
     if not os.path.isfile(path):
         return None
     st = os.stat(path)
