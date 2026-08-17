@@ -661,6 +661,32 @@ class RailTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             parse_event_stream(b'{"type":[]}\n', require_handoff=False)
 
+    def test_g4_invalid_utf8_is_provider_error(self):
+        """glm-F4: invalid UTF-8 raised UnicodeDecodeError (a ValueError), which
+        the rail's (ProviderError, Refuse) handler does not catch."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.errors import ProviderError
+        from ai_ops.events import parse_event_stream
+
+        with self.assertRaises(ProviderError):
+            parse_event_stream(b"\xff\xfe\x00bad", require_handoff=False)
+
+    def test_g6_host_side_version_check_is_gone(self):
+        """glm-F6: the orphaned host-exec version check must not be reintroduced."""
+        src = (ROOT / "python" / "ai_ops" / "compat.py").read_text()
+        code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+        self.assertNotIn("import subprocess", code)
+        self.assertNotIn("subprocess.run", code)
+        self.assertNotIn("def check_opencode_version", code)
+
+    def test_g7_evidence_survives_failed_integrity_assert(self):
+        """glm-F7: a worker that trips a post-run assert must not erase its own
+        evidence -- events.jsonl is written before the asserts run."""
+        job_src = (ROOT / "python" / "ai_ops" / "job.py").read_text()
+        ev = job_src.index('ev_path = os.path.join(dirs["evidence"]')
+        assert_at = job_src.index("identity.assert_gitdir_pointer_intact(ident)")
+        self.assertLess(ev, assert_at, "evidence must be persisted before integrity asserts")
+
     def test_n2_legacy_unsandboxed_binaries_are_gone(self):
         """N2: the pre-Python host-side command path must not be shipped."""
         for stale in ("bin/ai-cmd", "bin/ai-ro", "lib/common.sh", "lib/policy.sh"):

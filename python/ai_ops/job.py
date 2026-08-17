@@ -143,6 +143,17 @@ def run_job(
         timeout = _timeout(policy)
         result = process.run_sandboxed(bwrap_argv, env=env, timeout_s=timeout)
         # process set is the bwrap pid ns; after return it is dead
+
+        # Persist evidence BEFORE the integrity asserts. Those asserts can raise
+        # (e.g. a worker that redirected .git), and a worker must not be able to
+        # erase the record of its own run by tripping one.
+        ev_path = os.path.join(dirs["evidence"], "events.jsonl")
+        with open(ev_path, "wb") as fh:
+            fh.write(result.stdout)
+        err_path = os.path.join(dirs["evidence"], "stderr")
+        with open(err_path, "wb") as fh:
+            fh.write(result.stderr)
+
         identity.assert_gitdir_pointer_intact(ident)
         after = identity.inspect_worktree(ident.realpath)
         if not identity.same_core(ident, after):
@@ -150,13 +161,6 @@ def run_job(
         after_id = identity.git_identity_digest(ident)
         after_tree = identity.tree_digest(ident)
         id_changed = before_id != after_id
-
-        ev_path = os.path.join(dirs["evidence"], "events.jsonl")
-        with open(ev_path, "wb") as fh:
-            fh.write(result.stdout)
-        err_path = os.path.join(dirs["evidence"], "stderr")
-        with open(err_path, "wb") as fh:
-            fh.write(result.stderr)
 
         status = "ok"
         err = ""

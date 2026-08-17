@@ -15,7 +15,12 @@ def parse_event_stream(raw: bytes, *, require_handoff: bool) -> dict[str, Any]:
         raise ProviderError("provider output exceeds bound")
     if not raw.strip():
         raise ProviderError("empty provider output")
-    text = raw.decode("utf-8", errors="strict")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        # A ValueError, so it is NOT caught by the rail's (ProviderError, Refuse)
+        # handler; unconverted it kills run_job before any result record exists.
+        raise ProviderError(f"provider output is not valid UTF-8: {exc}") from exc
     # Reject concatenated non-JSONL blobs by requiring newline-delimited objects
     # plus no trailing leftover after the last parse.
     terminals: list[dict[str, Any]] = []

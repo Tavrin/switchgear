@@ -101,20 +101,10 @@ def acquire(
             os.close(fd)
             raise Refuse("live lease lock already held on this worktree") from exc
         # we hold flock only for metadata mutation here; worker will re-lock
-        if os.path.isfile(token_path):
-            existing = read_json(token_path)
-            try:
-                validate(existing, "lease.schema.json")
-            except Refuse:
-                pass
-            else:
-                if _alive(int(existing["owner_pid"]), existing["owner_starttime"], existing["boot_id"]):
-                    # check if lock is held by another process: we just got the lock, so
-                    # if owner is still alive they may be between acquire and worker.
-                    # If we obtained LOCK_EX, no worker is holding it.
-                    if existing.get("job_id"):
-                        # job claimed but lock was free → stale job
-                        pass
+        # Holding LOCK_EX here means no worker is mid-job on this worktree, so an
+        # existing token is stale by definition and is replaced. (A previous
+        # version computed owner liveness here and then discarded the result;
+        # dead code that looks like an exclusivity check is worse than none.)
         start = _starttime(owner_pid)
         token = {
             "lease_uuid": str(uuid.uuid4()),

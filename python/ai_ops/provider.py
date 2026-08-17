@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 
-from .compat import PINNED_BINARY, check_opencode_version
+from .compat import PINNED_BINARY
 from .errors import Refuse
 from .paths import reject_symlinks
 
