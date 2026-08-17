@@ -10,6 +10,10 @@ from .policy import CompiledPolicy
 
 TRUSTED_BWRAP = BWRAP
 
+# Fixed in-sandbox path for the brokered upstream socket.
+BROKER_SOCKET_PATH = "/run/ai-ops-broker.sock"
+BROKER_RELAY_PORT = 8_099
+
 
 def require_bwrap() -> str:
     if not os.path.isfile(TRUSTED_BWRAP) or not os.access(TRUSTED_BWRAP, os.X_OK):
@@ -33,6 +37,7 @@ def build_bwrap_argv(
     synth_home: str,
     provider_argv: Sequence[str],
     command_binds: Sequence[str] | None = None,
+    broker_socket: str | None = None,
 ) -> list[str]:
     bwrap = require_bwrap()
     argv: list[str] = [
@@ -49,7 +54,14 @@ def build_bwrap_argv(
         "--tmpfs",
         "/tmp",
     ]
-    # Network remains available (OpenCode). Do not pretend otherwise.
+    if broker_socket:
+        # With the credential broker reachable over a bind-mounted unix socket,
+        # the sandbox needs no network of its own. Unix sockets are filesystem
+        # objects and keep working across a network namespace, so this removes
+        # ALL outbound reachability except the one brokered upstream.
+        argv.append("--unshare-net")
+        argv.extend(["--bind", broker_socket, BROKER_SOCKET_PATH])
+    # Without a broker the provider needs the host network to reach its API.
     for src, dst in (
         ("/usr", "/usr"),
         ("/bin", "/bin"),

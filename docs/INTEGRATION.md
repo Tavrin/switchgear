@@ -137,6 +137,28 @@ caller. Two constraints:
   (`RLIMIT_FSIZE`) and the rail refuses to start without headroom, but bwrap
   offers no quota for a bind mount. Run bounded-write on a filesystem you are
   willing to see filled, or a size-limited one.
-- **The provider has network access** while a job runs. The credential itself
-  stays in the controller (see the broker), but the provider proxies through it
-  for the job's duration.
+- **The provider can spend the credential while a job runs.** It cannot read it
+  (the broker holds it) and it has no other network, but it is proxying through
+  the broker by design, so it can issue model calls for the job's duration.
+  Bound that by installing a per-provider key with its own budget.
+
+## Network posture
+
+When a credential broker is in play the sandbox runs with `--unshare-net` and
+has **no network at all**. Its only reachable endpoint is a bind-mounted unix
+socket to the controller-side broker, which allowlists the chat-completions path
+and pins the request to the job's model. Unix sockets are filesystem objects, so
+they keep working across a network namespace -- that is what makes a
+zero-network sandbox compatible with a provider that needs an API.
+
+Measured from inside a real job:
+
+```
+direct_internet : BLOCKED:OSError        (1.1.1.1:443 unreachable)
+via_broker      : OK 200                 (the one brokered upstream)
+upstream saw    : Bearer <real key>      (injected controller-side)
+sandbox saw     : broker-placeholder-not-a-credential
+```
+
+Without a credential (mock providers, hermetic tests) there is no broker and the
+sandbox keeps host networking, since nothing sensitive is present.

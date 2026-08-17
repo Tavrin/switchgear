@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
+import socket
+import socketserver
 import threading
 import urllib.error
 import urllib.request
@@ -105,6 +108,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return
 
 
+class _UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
+    """HTTP over a unix socket. BaseHTTPRequestHandler needs these attributes."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    server_name = "broker"
+    server_port = 0
+
+    def get_request(self):
+        req, _ = super().get_request()
+        return req, ("127.0.0.1", 0)  # handler expects an addr pair
+
+
 class CredentialBroker:
     """Loopback credential broker scoped to one job."""
 
@@ -115,6 +131,7 @@ class CredentialBroker:
         upstream: str = DEFAULT_UPSTREAM,
         allowed_models: Optional[set] = None,
         timeout_s: int = 300,
+        unix_socket: Optional[str] = None,
     ) -> None:
         if not credential:
             raise Refuse("broker requires a credential")
@@ -123,6 +140,7 @@ class CredentialBroker:
         self.allowed_models = set(allowed_models or ())
         self.allowed_paths = ("/chat/completions",)
         self.timeout_s = timeout_s
+        self.unix_socket = unix_socket
         self.forwarded = 0
         self.denials: list[str] = []
         self._srv: Optional[http.server.ThreadingHTTPServer] = None
@@ -132,18 +150,34 @@ class CredentialBroker:
     def base_url(self) -> str:
         if self._srv is None:
             raise Refuse("broker is not running")
+        if self.unix_socket:
+            raise Refuse("unix-socket broker is addressed through the in-sandbox relay")
         host, port = self._srv.server_address[:2]
         return f"http://{host}:{port}"
 
     def __enter__(self) -> "CredentialBroker":
         handler = type("BoundHandler", (_Handler,), {"broker": self})
-        self._srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        if self.unix_socket:
+            # Unix socket mode: the sandbox can then run --unshare-net and still
+            # reach us, because unix sockets are filesystem objects and survive a
+            # network namespace. Mode 600 -- only this user's processes.
+            if os.path.exists(self.unix_socket):
+                os.unlink(self.unix_socket)
+            self._srv = _UnixHTTPServer(self.unix_socket, handler)
+            os.chmod(self.unix_socket, 0o600)
+        else:
+            self._srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self._srv.daemon_threads = True
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()
         return self
 
     def __exit__(self, *exc) -> None:
+        if self._srv is not None and self.unix_socket:
+            try:
+                os.unlink(self.unix_socket)
+            except OSError:
+                pass
         if self._srv is not None:
             self._srv.shutdown()
             self._srv.server_close()

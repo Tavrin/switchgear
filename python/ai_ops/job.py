@@ -143,20 +143,23 @@ def run_job(
             upstream = os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or prec["upstream"]
         if not cred:
             return _execute(None)
+        sock = os.path.join(dirs["job"], "broker.sock")
         with brokermod.CredentialBroker(
             cred,
             upstream=upstream,
             allowed_models=wire_model_names(model["id"]),
+            unix_socket=sock,
         ) as bk:
-            rec = _execute(bk)
-            rec.setdefault("provider_calls", {})
-            rec["provider_calls"] = {"forwarded": bk.forwarded, "denied": len(bk.denials)}
-            return rec
+            return _execute(bk)
 
     def _execute(bk) -> dict[str, Any]:
         runtime = policy.to_opencode_runtime()
         if bk is not None:
-            runtime = provider.runtime_with_broker(runtime, bk.base_url, model["id"])
+            runtime = provider.runtime_with_broker(
+                runtime,
+                f"http://127.0.0.1:{sandbox.BROKER_RELAY_PORT}",
+                model["id"],
+            )
         mock_beh = os.environ.get("AI_OPS_MOCK_BEHAVIOR")
         if mock_beh:
             with open(os.path.join(dirs["home"], ".mock-behavior"), "w", encoding="utf-8") as fh:
@@ -186,6 +189,18 @@ def run_job(
         ]
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
+        broker_sock = None
+        if bk is not None:
+            relay = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_relay.py")
+            extra_binds = list(extra_binds) + [relay]
+            broker_sock = bk.unix_socket
+            inner_prefix = [
+                "/usr/bin/python3", relay,
+                "--socket", sandbox.BROKER_SOCKET_PATH,
+                "--port", str(sandbox.BROKER_RELAY_PORT), "--",
+            ]
+        else:
+            inner_prefix = []
         if _live:
             # Validate the pinned version by running the provider INSIDE the
             # boundary. Never execute an untrusted provider on the host.
@@ -205,8 +220,9 @@ def run_job(
             ident=ident,
             policy=policy,
             synth_home=dirs["home"],
-            provider_argv=inner,
+            provider_argv=inner_prefix + inner,
             command_binds=extra_binds,
+            broker_socket=broker_sock,
         )
         before_id = identity.git_identity_digest(ident)
         before_tree = identity.tree_digest(ident)
@@ -327,6 +343,13 @@ def run_job(
         if handoff:
             hp = os.path.join(dirs["evidence"], "handoff.json")
             atomic_write_json(hp, handoff)
+        if bk is not None:
+            # Recorded before the record is persisted; mutating it afterwards
+            # left provider_calls null on disk.
+            record["provider_calls"] = {
+                "forwarded": bk.forwarded,
+                "denied": len(bk.denials),
+            }
         if status == "awaiting_review":
             record["freeze"] = {
                 "head": after.head,

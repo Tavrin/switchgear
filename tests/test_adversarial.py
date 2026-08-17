@@ -904,6 +904,73 @@ class EventUnit(unittest.TestCase):
             parse_event_stream(raw, require_handoff=False)
 
 
+class BrokerUnit(unittest.TestCase):
+    """Credential broker + no-network sandbox."""
+
+    primary = None
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        if BrokerUnit.primary is None:
+            tmp = Path(tempfile.mkdtemp(prefix="aiops-broker-"))
+            proc = subprocess.run(["bash", str(MAKE_REPO), str(tmp / "syn")],
+                                  check=True, capture_output=True, text=True)
+            vals = dict(l.split("=", 1) for l in proc.stdout.splitlines() if "=" in l)
+            BrokerUnit.primary = Path(vals["PRIMARY"])
+
+    def test_sandbox_argv_unshares_net_only_with_a_broker(self):
+        from ai_ops import identity, sandbox
+        from ai_ops.policy import compile_policy
+        from ai_ops.profile import load_profile
+
+        pol = compile_policy(load_profile(str(EXAMPLE)), "readonly")
+        ident = identity.inspect_worktree(str(self.__class__.primary))
+        without = sandbox.build_bwrap_argv(
+            ident=ident, policy=pol, synth_home="/tmp", provider_argv=["/x"]
+        )
+        self.assertNotIn("--unshare-net", without)
+        with_broker = sandbox.build_bwrap_argv(
+            ident=ident, policy=pol, synth_home="/tmp", provider_argv=["/x"],
+            broker_socket="/tmp/fake.sock",
+        )
+        self.assertIn("--unshare-net", with_broker)
+        self.assertIn(sandbox.BROKER_SOCKET_PATH, with_broker)
+
+    def test_credential_never_appears_in_the_runtime_config(self):
+        from ai_ops.provider import runtime_with_broker
+
+        rt = runtime_with_broker({"tools": {}}, "http://127.0.0.1:8099", "opencode-go/glm-5.3")
+        blob = json.dumps(rt)
+        self.assertIn("broker-placeholder-not-a-credential", blob)
+        self.assertIn("127.0.0.1:8099", blob)
+        opts = rt["provider"]["opencode-go"]["options"]
+        self.assertNotIn("REAL", opts["apiKey"].upper())
+
+    def test_broker_pins_model_and_path(self):
+        import urllib.error
+        import urllib.request
+
+        from ai_ops.broker import CredentialBroker
+
+        with CredentialBroker("SECRET", upstream="http://127.0.0.1:9/v1",
+                              allowed_models={"opencode-go/glm-5.3"}) as bk:
+            def post(path, model):
+                req = urllib.request.Request(
+                    bk.base_url + path,
+                    data=json.dumps({"model": model}).encode(),
+                    headers={"content-type": "application/json"}, method="POST")
+                try:
+                    urllib.request.urlopen(req, timeout=5)
+                    return 200
+                except urllib.error.HTTPError as exc:
+                    return exc.code
+                except Exception:
+                    return 0
+            self.assertEqual(post("/v1/embeddings", "opencode-go/glm-5.3"), 403)
+            self.assertEqual(post("/v1/chat/completions", "openai/gpt-4"), 403)
+            self.assertGreaterEqual(len(bk.denials), 2)
+
+
 class MultiProviderUnit(unittest.TestCase):
     """OpenRouter/multi-provider routing (agents, reviewers, swarms)."""
 
