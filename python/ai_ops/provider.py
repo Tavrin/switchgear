@@ -85,6 +85,25 @@ def load_provider_credential() -> str | None:
     return value
 
 
+def runtime_with_broker(runtime: dict[str, Any], base_url: str, model_id: str) -> dict[str, Any]:
+    """Point the provider at the loopback broker with a placeholder key.
+
+    The sandbox never receives the real credential: options.apiKey here is a
+    literal placeholder that the broker overwrites on the way upstream.
+    """
+    out = dict(runtime)
+    provider_id = model_id.split("/", 1)[0] if "/" in model_id else model_id
+    providers = dict(out.get("provider") or {})
+    entry = dict(providers.get(provider_id) or {})
+    options = dict(entry.get("options") or {})
+    options["baseURL"] = base_url.rstrip("/") + "/v1"
+    options["apiKey"] = "broker-placeholder-not-a-credential"
+    entry["options"] = options
+    providers[provider_id] = entry
+    out["provider"] = providers
+    return out
+
+
 def isolation_env(synth_home: str, runtime: dict[str, Any]) -> dict[str, str]:
     cfg_dir = os.path.join(synth_home, ".config", "opencode")
     os.makedirs(cfg_dir, exist_ok=True)
@@ -108,13 +127,9 @@ def isolation_env(synth_home: str, runtime: dict[str, Any]) -> dict[str, str]:
     }
     from .env import allowlisted_env, assert_no_host_secrets
 
-    # Live runs need a credential or the provider cannot reach any model. Only
-    # ever injected when the operator has explicitly opted into a live provider.
-    if os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1":
-        cred = load_provider_credential()
-        if cred:
-            extra[CREDENTIAL_ENV] = cred
-
+    # NOTE: the credential is deliberately NOT placed here. job.run_job runs a
+    # controller-side broker and rewrites the runtime config to point at it, so
+    # the sandbox holds a placeholder rather than a usable key.
     env = allowlisted_env(home=synth_home, extra=extra)
     assert_no_host_secrets(env)
     return env

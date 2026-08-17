@@ -5,6 +5,7 @@ import os
 import time
 from typing import Any, Optional
 
+from . import broker as brokermod
 from . import commands as cmdlib
 from . import events, identity, lease, process, provider, review, sandbox, state
 from .digest import sha256_json
@@ -128,8 +129,31 @@ def run_job(
             lock_cm = lease.WorktreeLock(root, ident)
         _require_disk_headroom(ident.realpath)
 
-    def _execute() -> dict[str, Any]:
+    def _execute_with_broker() -> dict[str, Any]:
+        """Run the job, fronting the provider with a credential broker when live.
+
+        The credential stays in the controller process; the sandbox is given a
+        loopback URL and a placeholder key. See broker.py.
+        """
+        cred = None
+        if os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1":
+            cred = provider.load_provider_credential()
+        if not cred:
+            return _execute(None)
+        with brokermod.CredentialBroker(
+            cred,
+            upstream=os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or brokermod.DEFAULT_UPSTREAM,
+            allowed_model=model["id"],
+        ) as bk:
+            rec = _execute(bk)
+            rec.setdefault("provider_calls", {})
+            rec["provider_calls"] = {"forwarded": bk.forwarded, "denied": len(bk.denials)}
+            return rec
+
+    def _execute(bk) -> dict[str, Any]:
         runtime = policy.to_opencode_runtime()
+        if bk is not None:
+            runtime = provider.runtime_with_broker(runtime, bk.base_url, model["id"])
         mock_beh = os.environ.get("AI_OPS_MOCK_BEHAVIOR")
         if mock_beh:
             with open(os.path.join(dirs["home"], ".mock-behavior"), "w", encoding="utf-8") as fh:
@@ -327,8 +351,8 @@ def run_job(
 
     if lock_cm:
         with lock_cm:
-            return _execute()
-    return _execute()
+            return _execute_with_broker()
+    return _execute_with_broker()
 
 
 def attach_review(

@@ -15,7 +15,10 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "job_id": { "type": "string", "minLength": 1 },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "status": {
       "type": "string",
       "enum": [
@@ -28,41 +31,122 @@
         "review_failed"
       ]
     },
-    "mode": { "type": "string", "enum": ["readonly", "bounded-write"] },
-    "role": { "type": "string" },
-    "model": { "$ref": "model.schema.json" },
-    "dir": { "type": "string" },
-    "exit": { "type": ["integer", "null"] },
-    "started": { "type": "string" },
-    "finished": { "type": "string" },
-    "generation": { "type": "integer", "minimum": 0 },
-    "attempt": { "type": "integer", "minimum": 1 },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "readonly",
+        "bounded-write"
+      ]
+    },
+    "role": {
+      "type": "string"
+    },
+    "model": {
+      "$ref": "model.schema.json"
+    },
+    "dir": {
+      "type": "string"
+    },
+    "exit": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "started": {
+      "type": "string"
+    },
+    "finished": {
+      "type": "string"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
     "integrity": {
       "type": "object",
       "properties": {
-        "git_identity_before": { "type": "string" },
-        "git_identity_after": { "type": "string" },
-        "tree_before": { "type": "string" },
-        "tree_after": { "type": "string" },
-        "identity_changed": { "type": "boolean" }
+        "git_identity_before": {
+          "type": "string"
+        },
+        "git_identity_after": {
+          "type": "string"
+        },
+        "tree_before": {
+          "type": "string"
+        },
+        "tree_after": {
+          "type": "string"
+        },
+        "identity_changed": {
+          "type": "boolean"
+        }
       }
     },
-    "freeze": { "type": ["object", "null"] },
+    "freeze": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "artifacts": {
       "type": "object",
-      "additionalProperties": { "type": ["string", "null"] }
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
     },
-    "review": { "type": ["object", "null"] },
+    "review": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "process": {
       "type": "object",
       "properties": {
-        "pid": { "type": ["integer", "null"] },
-        "timed_out": { "type": "boolean" }
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
       }
     },
-    "policy_digest": { "type": "string" },
-    "profile_digest": { "type": "string" },
-    "error": { "type": "string" },
-    "lease_uuid": { "type": ["string", "null"] }
+    "policy_digest": {
+      "type": "string"
+    },
+    "profile_digest": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "lease_uuid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider_calls": {
+      "type": "object",
+      "properties": {
+        "forwarded": {
+          "type": "integer"
+        },
+        "denied": {
+          "type": "integer"
+        }
+      }
+    }
   }
 }

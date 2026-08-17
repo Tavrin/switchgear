@@ -37,7 +37,25 @@ def _profile_path(ns: argparse.Namespace) -> str:
     return here
 
 
-def _print_job(record: dict[str, Any]) -> None:
+def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
+    if as_json:
+        # Stable machine-readable contract for programmatic callers (atelier
+        # adapters, MCP wrappers, CI). Keep these keys additive-only.
+        print(json.dumps({
+            "job_id": record["job_id"],
+            "status": record["status"],
+            "mode": record["mode"],
+            "role": record["role"],
+            "model": record["model"]["id"],
+            "dir": record["dir"],
+            "exit": record.get("exit"),
+            "error": record.get("error"),
+            "artifacts": record.get("artifacts") or {},
+            "freeze": record.get("freeze"),
+            "review": record.get("review"),
+            "provider_calls": record.get("provider_calls"),
+        }, indent=2))
+        return
     print(f"model={record['model']['id']}")
     print(f"dir={record['dir']}")
     print(f"exit={record.get('exit')}")
@@ -101,7 +119,7 @@ def cmd_run_like(ns: argparse.Namespace, mode: str, role: str, directory: str, p
         envelope=envelope,
         lease_token=getattr(ns, "token", None),
     )
-    _print_job(rec)
+    _print_job(rec, getattr(ns, "json", False))
     if rec["status"] == "dirty":
         return 2
     if rec["status"] in {"timeout"}:
@@ -132,7 +150,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
         provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
         envelope=env,
     )
-    _print_job(rec)
+    _print_job(rec, getattr(ns, "json", False))
     parent = (env or {}).get("parent_job")
     if parent and rec["status"] == "ok":
         ev = open(rec["artifacts"]["events"], "rb").read()
@@ -211,6 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile")
     p.add_argument("--state")
     p.add_argument("--provider")
+    p.add_argument("--json", action="store_true", help="machine-readable output for programmatic callers")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("state")
