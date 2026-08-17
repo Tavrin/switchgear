@@ -51,6 +51,40 @@ def assert_pinned_version(returncode: int, stdout: bytes, timed_out: bool) -> st
     return ver
 
 
+CREDENTIAL_ENV = "OPENCODE_API_KEY"
+DEFAULT_CREDENTIAL_FILE = os.path.expanduser("~/.config/ai-ops/provider-credential")
+
+
+def load_provider_credential() -> str | None:
+    """Read the provider credential from an operator-owned file.
+
+    Deliberately NOT taken from the controller's environment: the host env is
+    where unrelated secrets live (work keys, cloud tokens), and this rail must
+    forward exactly one credential and never a whole environment.
+
+    RESIDUAL, accepted knowingly: the provider process receives a usable
+    credential and has network access, so a hostile provider can exfiltrate it.
+    Use a DEDICATED, separately-budgeted, independently revocable key -- never a
+    personal or shared one. Stage 2 (a controller-side broker proxy addressed via
+    provider options.baseURL, plus --unshare-net) removes this residual by never
+    placing the credential inside the sandbox at all.
+    """
+    path = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE") or DEFAULT_CREDENTIAL_FILE
+    if not os.path.isfile(path):
+        return None
+    st = os.stat(path)
+    if st.st_mode & 0o077:
+        raise Refuse(
+            f"provider credential file {path} is group/world accessible "
+            f"(mode {st.st_mode & 0o777:o}); chmod 600 it"
+        )
+    with open(path, encoding="utf-8") as fh:
+        value = fh.read().strip()
+    if not value:
+        return None
+    return value
+
+
 def isolation_env(synth_home: str, runtime: dict[str, Any]) -> dict[str, str]:
     cfg_dir = os.path.join(synth_home, ".config", "opencode")
     os.makedirs(cfg_dir, exist_ok=True)
@@ -73,6 +107,13 @@ def isolation_env(synth_home: str, runtime: dict[str, Any]) -> dict[str, str]:
         "OPENCODE_PURE": "1",
     }
     from .env import allowlisted_env, assert_no_host_secrets
+
+    # Live runs need a credential or the provider cannot reach any model. Only
+    # ever injected when the operator has explicitly opted into a live provider.
+    if os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1":
+        cred = load_provider_credential()
+        if cred:
+            extra[CREDENTIAL_ENV] = cred
 
     env = allowlisted_env(home=synth_home, extra=extra)
     assert_no_host_secrets(env)

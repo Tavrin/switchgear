@@ -685,12 +685,52 @@ class RailTests(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
-        leaked = [k for k in env if k.endswith(("_API_KEY", "_TOKEN", "_SECRET"))]
+        # Exactly one credential may ever be forwarded, and only deliberately
+        # (provider.CREDENTIAL_ENV, injected from an operator-owned file under an
+        # explicit live opt-in). Anything else credential-shaped is a leak.
+        from ai_ops.provider import CREDENTIAL_ENV
+
+        leaked = [
+            k for k in env
+            if k.endswith(("_API_KEY", "_TOKEN", "_SECRET")) and k != CREDENTIAL_ENV
+        ]
         self.assertEqual(leaked, [], f"credential-shaped vars leaked: {leaked}")
         for k, v in env.items():
             self.assertNotIn("sk-should-never-appear", str(v), f"{k} carries a host secret")
         for k in hostile:
             self.assertNotIn(k, env)
+
+    def test_provider_credential_never_read_from_host_env(self):
+        """The one forwarded credential comes from an operator-owned file, never
+        from the controller's environment (where unrelated secrets live)."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.provider import CREDENTIAL_ENV, load_provider_credential
+
+        missing = self.tmp / "no-such-credential"
+        os.environ["AI_OPS_PROVIDER_CREDENTIAL_FILE"] = str(missing)
+        os.environ[CREDENTIAL_ENV] = "host-env-value-must-be-ignored"
+        try:
+            self.assertIsNone(load_provider_credential())
+        finally:
+            os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
+            os.environ.pop(CREDENTIAL_ENV, None)
+
+    def test_provider_credential_file_must_not_be_world_readable(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.errors import Refuse
+        from ai_ops.provider import load_provider_credential
+
+        cred = self.tmp / "cred"
+        cred.write_text("secret\n")
+        cred.chmod(0o644)
+        os.environ["AI_OPS_PROVIDER_CREDENTIAL_FILE"] = str(cred)
+        try:
+            with self.assertRaises(Refuse):
+                load_provider_credential()
+            cred.chmod(0o600)
+            self.assertEqual(load_provider_credential(), "secret")
+        finally:
+            os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
 
     def test_k1_untracked_content_is_in_the_digest(self):
         """kimi-1 (BLOCKER): a worker cannot stage (git dir is ro in-sandbox), so

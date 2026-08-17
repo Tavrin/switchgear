@@ -74,6 +74,7 @@ def assert_no_host_secrets(env: Mapping[str, str]) -> None:
             "OPENCODE_DISABLE_AUTOUPDATE",
             "OPENCODE_PURE",
             "OPENCODE_FAKE_VCS",
+            "OPENCODE_API_KEY",
         }:
             raise Refuse(f"refusing to forward {key}")
         if key == "OPENCODE_PERMISSION":
