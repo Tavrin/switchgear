@@ -166,6 +166,42 @@ def load_token(root: StateRoot, ident: WorktreeIdentity) -> dict[str, Any]:
     return token
 
 
+class WorktreeLock:
+    """Exclusive worktree flock with no lease-token requirement.
+
+    Used for bounded-write when the profile opts out of leases: the token is an
+    authorization concern, mutual exclusion is a correctness one, and dropping
+    the latter with the former left writers racing promotion.
+    """
+
+    def __init__(self, root: StateRoot, ident: WorktreeIdentity) -> None:
+        self.root = root
+        self.ident = ident
+        self.fd: Optional[int] = None
+
+    def __enter__(self) -> dict[str, Any]:
+        d = _dir(self.root, self.ident)
+        os.makedirs(d, exist_ok=True)
+        reject_symlinks(d, "lease dir")
+        self.fd = open_nofollow(os.path.join(d, "lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(self.fd)
+            self.fd = None
+            raise Refuse("another worker holds this worktree") from exc
+        return {}
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.fd is not None:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(self.fd)
+            self.fd = None
+
+
 class PromotionLock:
     """Exclusive worktree lock held across the promotion decision AND write.
 
@@ -227,6 +263,16 @@ class WorkerLock:
     def __enter__(self) -> dict[str, Any]:
         d = _dir(self.root, self.ident)
         lock_path = os.path.join(d, "lock")
+        self.fd = open_nofollow(lock_path, os.O_RDWR)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(self.fd)
+            self.fd = None
+            raise Refuse("another worker holds this worktree lease") from exc
+        # Validate only AFTER holding the lock. Reading the token first and
+        # writing it back afterwards let a concurrent re-acquire be clobbered by
+        # a stale token, resurrecting a revoked lease (luna-4).
         token = load_token(self.root, self.ident)
         if token["lease_uuid"] != self.token_uuid:
             raise Refuse("forged lease token")
@@ -236,13 +282,6 @@ class WorkerLock:
             raise Refuse("lease worktree identity mismatch")
         if token.get("mode") and token["mode"] != self.mode:
             raise Refuse("lease mode mismatch")
-        self.fd = open_nofollow(lock_path, os.O_RDWR)
-        try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            os.close(self.fd)
-            self.fd = None
-            raise Refuse("another worker holds this worktree lease") from exc
         token["job_id"] = self.job_id
         atomic_write_json(os.path.join(d, "token.json"), token)
         return token

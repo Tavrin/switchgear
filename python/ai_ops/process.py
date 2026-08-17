@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import resource
 import signal
 import subprocess
 import tempfile
@@ -28,6 +29,7 @@ def run_sandboxed(
     timeout_s: int,
     cwd: str | None = None,
     max_output: int = 2_000_000,
+    max_file_bytes: int = 256 * 1024 * 1024,
 ) -> ProcResult:
     if not argv:
         raise Refuse("empty sandbox argv")
@@ -38,6 +40,15 @@ def run_sandboxed(
     # provider can emit unbounded output, and communicate() buffers all of it
     # before any size limit is consulted.
     with tempfile.TemporaryFile() as out_fh, tempfile.TemporaryFile() as err_fh:
+        def _apply_limits() -> None:
+            # RLIMIT_FSIZE is inherited by every process in the sandbox and is
+            # enforced by the kernel, so it bounds BOTH the stdout/stderr spool
+            # (which would otherwise fill the host disk before any cap was
+            # consulted -- luna-5) and any single file the worker writes into
+            # its worktree. Polling for size cannot do this: a worker writes
+            # 500MB in 0.1s, far inside any poll interval.
+            resource.setrlimit(resource.RLIMIT_FSIZE, (max_file_bytes, max_file_bytes))
+
         try:
             proc = subprocess.Popen(
                 list(argv),
@@ -47,6 +58,7 @@ def run_sandboxed(
                 cwd=cwd,
                 start_new_session=True,
                 close_fds=True,
+                preexec_fn=_apply_limits,
             )
         except OSError as exc:
             raise Refuse(f"failed to start sandbox: {exc}") from exc

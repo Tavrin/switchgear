@@ -34,6 +34,28 @@ def _timeout(policy: CompiledPolicy) -> int:
     return val
 
 
+MIN_FREE_BYTES = int(os.environ.get("AI_OPS_MIN_FREE_BYTES") or 2 * 1024 * 1024 * 1024)
+
+
+def _require_disk_headroom(path: str) -> None:
+    """Refuse to START a write job when the filesystem is already low.
+
+    A worker can write into its worktree as fast as the disk allows (measured:
+    500MB in 0.1s), and bwrap offers no aggregate quota for a bind mount, so
+    this bounds only the STARTING condition. Real aggregate containment needs a
+    size-limited filesystem for the worktree -- see docs.
+    """
+    import shutil
+
+    free = shutil.disk_usage(path).free
+    if free < MIN_FREE_BYTES:
+        raise Refuse(
+            f"only {free // (1024*1024)}MB free on the worktree filesystem; "
+            f"bounded-write needs {MIN_FREE_BYTES // (1024*1024)}MB headroom "
+            "(set AI_OPS_MIN_FREE_BYTES to override)"
+        )
+
+
 def _reclaim_sandbox_home(home: str) -> None:
     """Delete the per-job synthetic HOME once the record is written.
 
@@ -89,15 +111,22 @@ def run_job(
     dirs = state.create_job_dirs(root, job_id)
     lock_cm = None
     token_uuid = None
-    if mode == "bounded-write" and policy.require_lease_for_write:
-        # Refuse first if no lease exists at all, then require the caller to
-        # actually present its token. Reading the token off disk and validating
-        # it against itself is not authorization (finding N6).
-        lease.load_token(root, ident)
-        if not lease_token:
-            raise Refuse("bounded-write requires the lease token (--token)")
-        token_uuid = lease_token
-        lock_cm = lease.WorkerLock(root, ident, token_uuid, job_id, mode)
+    if mode == "bounded-write":
+        if policy.require_lease_for_write:
+            # Refuse first if no lease exists at all, then require the caller to
+            # actually present its token. Reading the token off disk and
+            # validating it against itself is not authorization (finding N6).
+            lease.load_token(root, ident)
+            if not lease_token:
+                raise Refuse("bounded-write requires the lease token (--token)")
+            token_uuid = lease_token
+            lock_cm = lease.WorkerLock(root, ident, token_uuid, job_id, mode)
+        else:
+            # Lock-free mode still needs mutual exclusion: promotion takes the
+            # same flock, and an unserialized writer could move the tree between
+            # the live sample and the status write (luna-2).
+            lock_cm = lease.WorktreeLock(root, ident)
+        _require_disk_headroom(ident.realpath)
 
     def _execute() -> dict[str, Any]:
         runtime = policy.to_opencode_runtime()

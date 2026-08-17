@@ -661,6 +661,37 @@ class RailTests(unittest.TestCase):
         with self.assertRaises(ProviderError):
             parse_event_stream(b'{"type":[]}\n', require_handoff=False)
 
+    def test_no_host_api_keys_can_reach_a_provider(self):
+        """The provider environment is BUILT, not filtered. Nothing resembling a
+        host credential may appear in it, whatever is set on the host."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.env import allowlisted_env
+
+        hostile = {
+            "OPENAI_API_KEY": "sk-should-never-appear",
+            "AZURE_OPENAI_API_KEY": "x",
+            "ANTHROPIC_API_KEY": "x",
+            "GEMINI_API_KEY": "x",
+            "AWS_SECRET_ACCESS_KEY": "x",
+            "GITHUB_TOKEN": "x",
+        }
+        saved = {k: os.environ.get(k) for k in hostile}
+        os.environ.update(hostile)
+        try:
+            env = allowlisted_env(home="/tmp/probe-home")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        leaked = [k for k in env if k.endswith(("_API_KEY", "_TOKEN", "_SECRET"))]
+        self.assertEqual(leaked, [], f"credential-shaped vars leaked: {leaked}")
+        for k, v in env.items():
+            self.assertNotIn("sk-should-never-appear", str(v), f"{k} carries a host secret")
+        for k in hostile:
+            self.assertNotIn(k, env)
+
     def test_k1_untracked_content_is_in_the_digest(self):
         """kimi-1 (BLOCKER): a worker cannot stage (git dir is ro in-sandbox), so
         every file it creates is untracked. `git status` reports untracked files

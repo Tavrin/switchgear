@@ -287,8 +287,13 @@ def _nontracked_paths(ident: WorktreeIdentity, status: bytes) -> list[str]:
         abs_path = os.path.join(ident.realpath, path)
         if path.endswith("/") or (os.path.isdir(abs_path) and not os.path.islink(abs_path)):
             for root, dirs, files in os.walk(abs_path):
-                dirs.sort()
-                for name in sorted(files):
+                # os.walk puts a symlink-to-DIRECTORY in `dirs` and never
+                # descends it, so collecting only `files` left those entries
+                # invisible to both the digest and changed_files -- a worker
+                # could repoint one freely (luna-1).
+                linkdirs = [d for d in dirs if os.path.islink(os.path.join(root, d))]
+                dirs[:] = sorted(d for d in dirs if d not in linkdirs)
+                for name in sorted(files) + sorted(linkdirs):
                     rel = os.path.relpath(os.path.join(root, name), ident.realpath)
                     out.append(rel)
         else:
@@ -296,7 +301,8 @@ def _nontracked_paths(ident: WorktreeIdentity, status: bytes) -> list[str]:
     return sorted(set(out))
 
 
-MAX_UNTRACKED_BYTES = 64 * 1024 * 1024
+# Hashing is streamed (O(1) memory); this bounds WORK, not memory.
+MAX_UNTRACKED_BYTES = int(os.environ.get("AI_OPS_MAX_UNTRACKED_BYTES") or 2 * 1024 * 1024 * 1024)
 
 
 def _content_fingerprint(abs_path: str, budget: list[int] | None = None) -> bytes:
@@ -322,12 +328,16 @@ def _content_fingerprint(abs_path: str, budget: list[int] | None = None) -> byte
         if budget[0] < 0:
             # Fail closed: never silently skip content a reviewer would not see.
             raise Refuse(
-                "non-tracked content in this worktree exceeds the digest bound "
-                f"({MAX_UNTRACKED_BYTES} bytes); clean build artefacts or raise the bound"
+                "non-tracked content exceeds the digest bound "
+                f"({MAX_UNTRACKED_BYTES} bytes); largest offender so far: {abs_path}. "
+                "Remove it or raise AI_OPS_MAX_UNTRACKED_BYTES."
             )
     elif st.st_size > MAX_UNTRACKED_BYTES:
         raise Refuse(f"untracked file exceeds the digest bound: {abs_path}")
     h = hashlib.sha256()
+    # Mode is part of the content story: making an existing dirty file
+    # executable changes nothing byte-wise but changes what it IS (luna-3).
+    h.update(b"MODE:%o\0" % stat.S_IMODE(st.st_mode))
     with open(abs_path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
