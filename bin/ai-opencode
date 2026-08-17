@@ -1,4 +1,10 @@
 #!/bin/sh
 # Tiny launcher. No security decisions. exec the Python control plane.
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+# Resolve symlinks first: when installed as ~/.local/bin/ai-opencode -> here,
+# $0 is the symlink, and deriving ROOT from it would point at the wrong tree.
+SELF=$0
+if command -v readlink >/dev/null 2>&1; then
+  RESOLVED=$(readlink -f -- "$0" 2>/dev/null) && [ -n "$RESOLVED" ] && SELF=$RESOLVED
+fi
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
 exec /usr/bin/python3 -s "$ROOT/python/ai_ops/__main__.py" "$@"

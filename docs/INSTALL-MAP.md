@@ -1,9 +1,41 @@
 # Install map
 
-**DO NOT INSTALL NOW.**
+**Status: the launcher IS installed.**
 
-This table is the *eventual* destination list after Stage 2/3 decisions.
-Nothing in this work copies these files into a live location.
+`~/.local/bin/ai-opencode` is a symlink to `agent-ops/bin/ai-opencode`, so the
+installed command tracks this working tree — an edit here is live immediately.
+That is intentional for a lab tool and worth remembering when debugging.
+
+Installing changes no security property. The code was always reachable by
+absolute path; a symlink grants nothing new. It exists because a shell alias is
+invisible to callers that spawn with argv arrays rather than through a shell —
+atelier adapters, Codex, `execFile`, cron — and "callable by any agent" is the
+point of the tool.
+
+## What actually constrains use
+
+Not the install state. These:
+
+- `write_enabled: false` in the project profile
+- `AI_OPS_WRITE=1` required for any bounded-write job
+- a lease token that must be presented, not read off disk
+- `AI_OPS_ALLOW_LIVE_PROVIDER=1` plus a pinned binary for live runs
+- **and above all: which directory you point it at**
+
+## Current standing instruction
+
+**Disposable and lab repositories only.** The write lane has exactly one live
+end-to-end cycle behind it (a three-line change in a two-file toy repo, 2026-08-18).
+That is enough to call it working, not enough to call it trusted. Do not point
+bounded-write at a real project until the write lane has meaningful mileage and a
+cross-vendor review has been demonstrated.
+
+Read-only `scout` and `review` against a disposable clone are the intended use
+today.
+
+## Eventual destinations
+
+This table is the destination list after Stage 2/3 decisions.
 
 | Source in this repo | Eventual destination | When |
 |---|---|---|
