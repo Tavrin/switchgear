@@ -33,6 +33,7 @@ def promote(
     review_artifact: dict[str, Any],
     live_head: str,
     live_tree_digest: str,
+    expected_files: list[str] | None = None,
     generation: int,
 ) -> dict[str, Any]:
     validate(review_artifact, "review.schema.json")
@@ -64,6 +65,19 @@ def promote(
         raise Refuse("worktree changed after review")
     if review_artifact["verdict"] != "promote":
         raise Refuse(f"verdict {review_artifact['verdict']} cannot promote")
+
+    # The reviewer must name the change it is approving. This does not prove
+    # semantic review -- a hostile reviewer inside the sandbox can read the tree
+    # and echo the names back -- but it does stop a reviewer that inspected
+    # NOTHING from promoting, which controller-side hashing alone cannot.
+    if expected_files is not None:
+        named = review_artifact.get("reviewed_files")
+        if not isinstance(named, list) or not named:
+            raise Refuse("reviewer did not name the files it reviewed")
+        if sorted({str(f) for f in named}) != sorted(set(expected_files)):
+            raise Refuse(
+                "reviewer's file list does not match the subject's actual change"
+            )
     if review_artifact.get("required_unmet"):
         raise Refuse("independence requirements unmet")
     subject["status"] = "ok"

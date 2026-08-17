@@ -589,6 +589,78 @@ class RailTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("AI_OPENCODE_TIMEOUT", p.stderr)
 
+    # ---- F-series regressions (second adversarial review) ----
+
+    def test_f2_noop_reviewer_cannot_promote(self):
+        """F2: a reviewer that inspected nothing must not promote, even on the
+        correct worktree. Controller-side hashing is not inspection evidence."""
+        job = self._subject_awaiting_review()
+        rf = self.tmp / "r.json"
+        rf.write_text(json.dumps(envelope(str(self.wt), role="review", mode="readonly", parent_job=job)))
+        p = run_cli(
+            self.args("review", str(self.wt), "review", "--envelope", str(rf)),
+            env={"AI_OPS_MOCK_BEHAVIOR": "review-promote-noop"},
+        )
+        self.assertNotEqual(p.returncode, 0)
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "awaiting_review")
+
+    def test_f3_repo_config_cannot_execute_on_host(self):
+        """F3: a repository-owned diff.external must not run during tree_digest."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        marker = self.tmp / "F3_MARKER"
+        evil = self.wt / "evil.sh"
+        evil.write_text(f"#!/bin/sh\necho ran > {marker}\nexit 0\n")
+        evil.chmod(0o755)
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(self.wt), "config", "diff.external", str(evil)],
+            check=True, capture_output=True,
+        )
+        (self.wt / "tracked.txt").write_text("changed-for-diff\n")
+        ident = identity.inspect_worktree(str(self.wt))
+        identity.tree_digest(ident)
+        self.assertFalse(marker.exists(), "repo-configured diff.external executed on the host")
+
+    def test_f4_state_root_inside_worktree_refused(self):
+        """F4: state inside the target would nest a writable bind in a --ro-bind."""
+        inner = self.wt / ".ai-ops-state"
+        p = run_cli(["--state", str(inner), "state", "provision", str(inner)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = run_cli(
+            [
+                "--profile", str(self.profile), "--state", str(inner),
+                "--provider", str(MOCK), "scout", str(self.wt), "x",
+            ],
+            env={"AI_OPS_MOCK_BEHAVIOR": "ok"},
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("overlap", p.stderr)
+
+    def test_f6_symlinked_job_dir_refused(self):
+        """F6: a symlinked jobs/<uuid> must not redirect state reads."""
+        outside = self.tmp / "outside"
+        uuid = "11111111-2222-3333-4444-555555555555"
+        (outside / uuid).mkdir(parents=True)
+        (outside / uuid / "result.json").write_text(json.dumps({
+            "job_id": uuid, "status": "ok", "mode": "readonly", "role": "review",
+            "model": {"id": "x"}, "dir": "/tmp", "exit": 0, "started": "s", "generation": 0,
+        }))
+        (self.state / "jobs" / uuid).symlink_to(outside / uuid)
+        p = run_cli(self.args("status", uuid))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("symlink", p.stderr.lower())
+
+    def test_f7_unhashable_event_type_is_provider_error(self):
+        """F7: {"type": []} must not crash the controller with a TypeError."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.errors import ProviderError
+        from ai_ops.events import parse_event_stream
+
+        with self.assertRaises(ProviderError):
+            parse_event_stream(b'{"type":[]}\n', require_handoff=False)
+
     def test_n2_legacy_unsandboxed_binaries_are_gone(self):
         """N2: the pre-Python host-side command path must not be shipped."""
         for stale in ("bin/ai-cmd", "bin/ai-ro", "lib/common.sh", "lib/policy.sh"):

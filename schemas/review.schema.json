@@ -14,14 +14,25 @@
     "subject_policy_digest",
     "reviewed_dir",
     "reviewed_tree_digest",
-    "models_registry_digest"
+    "models_registry_digest",
+    "reviewed_files"
   ],
   "additionalProperties": false,
   "properties": {
-    "subject_job": { "type": "string", "minLength": 1 },
-    "reviewer_job": { "type": "string", "minLength": 1 },
-    "model": { "$ref": "model.schema.json" },
-    "role": { "type": "string" },
+    "subject_job": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewer_job": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "$ref": "model.schema.json"
+    },
+    "role": {
+      "type": "string"
+    },
     "independence": {
       "type": "object",
       "required": [
@@ -32,33 +43,77 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "different_job": { "type": "boolean" },
-        "different_model": { "type": "boolean" },
-        "different_family": { "type": "boolean" },
-        "different_provider": { "type": "boolean" }
+        "different_job": {
+          "type": "boolean"
+        },
+        "different_model": {
+          "type": "boolean"
+        },
+        "different_family": {
+          "type": "boolean"
+        },
+        "different_provider": {
+          "type": "boolean"
+        }
       }
     },
-    "verdict": { "type": "string", "enum": ["promote", "reject", "needs_changes"] },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "promote",
+        "reject",
+        "needs_changes"
+      ]
+    },
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "severity": { "type": "string" },
-          "claim": { "type": "string" },
-          "evidence": { "type": "string" }
+          "severity": {
+            "type": "string"
+          },
+          "claim": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
         }
       }
     },
-    "subject_head": { "type": "string" },
-    "subject_tree_digest": { "type": "string" },
-    "subject_policy_digest": { "type": "string" },
-    "reviewed_dir": { "type": "string", "minLength": 1 },
-    "reviewed_tree_digest": { "type": "string", "minLength": 1 },
-    "models_registry_digest": { "type": "string", "minLength": 1 },
+    "subject_head": {
+      "type": "string"
+    },
+    "subject_tree_digest": {
+      "type": "string"
+    },
+    "subject_policy_digest": {
+      "type": "string"
+    },
+    "reviewed_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewed_tree_digest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "models_registry_digest": {
+      "type": "string",
+      "minLength": 1
+    },
     "required_unmet": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
+    },
+    "reviewed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   }
 }

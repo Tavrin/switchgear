@@ -167,6 +167,28 @@ def main() -> int:
         return 0
 
     if beh == "review-promote":
+        # A reviewer must name the change it approves, which means actually
+        # inspecting the worktree. This is the honest path: read it with git.
+        import subprocess
+
+        out = subprocess.run(
+            ["/usr/bin/git", "-C", directory, "--no-optional-locks",
+             "status", "--porcelain=v1", "-z"],
+            capture_output=True,
+        ).stdout
+        changed = sorted(
+            {e[3:].decode("utf-8", "replace").strip() for e in out.split(b"\x00") if e}
+        )
+        emit(
+            {
+                "type": "complete",
+                "review": {"verdict": "promote", "findings": [], "reviewed_files": changed},
+            }
+        )
+        return 0
+
+    if beh == "review-promote-noop":
+        # Reviewer that inspected nothing but votes promote.
         emit({"type": "complete", "review": {"verdict": "promote", "findings": []}})
         return 0
 

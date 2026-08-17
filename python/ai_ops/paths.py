@@ -79,6 +79,24 @@ def mkdir_exclusive(path: str, mode: int = 0o700) -> None:
     os.mkdir(path, mode)
 
 
+def is_within(inner: str, outer: str) -> bool:
+    """True if `inner` is `outer` or lives underneath it, after canonicalization."""
+    a = os.path.realpath(inner)
+    b = os.path.realpath(outer)
+    return a == b or a.startswith(b.rstrip(os.sep) + os.sep)
+
+
+def require_disjoint(a: str, b: str, label_a: str, label_b: str) -> None:
+    """Refuse if either path contains the other.
+
+    The synthetic HOME is bind-mounted writable and lives under the state root.
+    If the state root sits inside the target worktree, that writable bind nests
+    inside a --ro-bind and punches a real hole in readonly containment.
+    """
+    if is_within(a, b) or is_within(b, a):
+        raise Refuse(f"{label_a} and {label_b} must not overlap ({a} vs {b})")
+
+
 def stat_identity(path: str) -> tuple[int, int]:
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):

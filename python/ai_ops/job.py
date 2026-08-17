@@ -9,6 +9,7 @@ from . import commands as cmdlib
 from . import events, identity, lease, process, provider, review, sandbox, state
 from .digest import sha256_json
 from .errors import ProviderError, Refuse
+from .paths import require_disjoint
 from .policy import CompiledPolicy, compile_policy
 from .profile import load_profile
 from .registry import model_record, registry_digest
@@ -65,6 +66,11 @@ def run_job(
         raise Refuse("primary checkout not allowed for this readonly profile")
 
     root = StateRoot(state_path)
+    # The synthetic HOME is bind-mounted writable and lives under the state root.
+    # If the state root overlapped the target, that writable bind would nest
+    # inside the --ro-bind and defeat readonly containment on the host.
+    require_disjoint(root.path, ident.realpath, "state root", "worktree")
+    require_disjoint(root.path, ident.common_git_dir, "state root", "git dir")
     job_id = new_job_id()
     dirs = state.create_job_dirs(root, job_id)
     lock_cm = None
@@ -110,6 +116,21 @@ def run_job(
         ]
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
+        if _live:
+            # Validate the pinned version by running the provider INSIDE the
+            # boundary. Never execute an untrusted provider on the host.
+            probe = process.run_sandboxed(
+                sandbox.build_bwrap_argv(
+                    ident=ident,
+                    policy=policy,
+                    synth_home=dirs["home"],
+                    provider_argv=list(prov_argv) + ["--version"],
+                    command_binds=extra_binds,
+                ),
+                env=env,
+                timeout_s=30,
+            )
+            provider.assert_pinned_version(probe.returncode, probe.stdout, probe.timed_out)
         bwrap_argv = sandbox.build_bwrap_argv(
             ident=ident,
             policy=policy,
@@ -261,6 +282,7 @@ def attach_review(
     reviewer_record: dict[str, Any],
     verdict: str,
     findings: list[dict[str, Any]] | None,
+    reviewed_files: list[str] | None = None,
 ) -> dict[str, Any]:
     root = StateRoot(state_path)
     subject_path = os.path.join(root.job_dir(subject_job), "result.json")
@@ -314,11 +336,16 @@ def attach_review(
         "required_unmet": unmet,
     }
     live = identity.inspect_worktree(subject["dir"])
-    live_tree = identity.tree_digest(live)
-    return review.promote(
-        subject_path=subject_path,
-        review_artifact=artifact,
-        live_head=live.head,
-        live_tree_digest=live_tree,
-        generation=int(subject.get("generation") or 0),
-    )
+    # Sample the live tree and commit the promotion under one exclusive hold, so
+    # a concurrent bounded-write worker cannot move the tree in between.
+    with lease.PromotionLock(root, live):
+        live_tree = identity.tree_digest(live)
+        artifact["reviewed_files"] = reviewed_files
+        return review.promote(
+            subject_path=subject_path,
+            review_artifact=artifact,
+            live_head=live.head,
+            live_tree_digest=live_tree,
+            expected_files=identity.changed_files(live),
+            generation=int(subject.get("generation") or 0),
+        )

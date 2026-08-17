@@ -24,12 +24,31 @@ def resolve_provider(explicit: str | None) -> tuple[list[str], bool]:
     if is_live:
         if not allow_live:
             raise Refuse("refusing live OpenCode without AI_OPS_ALLOW_LIVE_PROVIDER=1")
-        check_opencode_version(path)
+        # The version check deliberately does NOT run here: executing the
+        # provider on the host to ask its version hands a hostile binary
+        # controller-side execution with the full inherited environment, before
+        # any boundary exists. job.run_job runs the probe inside bwrap instead.
         return [path], True
     # committed mock: python script or executable
     if path.endswith(".py"):
         return ["/usr/bin/python3", path], False
     return [path], False
+
+
+def assert_pinned_version(returncode: int, stdout: bytes, timed_out: bool) -> str:
+    """Validate `--version` output captured from inside the sandbox."""
+    from .compat import PINNED_OPENCODE
+
+    if timed_out:
+        raise Refuse("provider version probe timed out")
+    if returncode != 0:
+        raise Refuse(f"provider version probe exited {returncode}")
+    text = stdout.decode("utf-8", "replace").strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    ver = lines[-1] if lines else ""
+    if ver != PINNED_OPENCODE:
+        raise Refuse(f"OpenCode version {ver!r} is outside the tested contract {PINNED_OPENCODE}")
+    return ver
 
 
 def isolation_env(synth_home: str, runtime: dict[str, Any]) -> dict[str, str]:

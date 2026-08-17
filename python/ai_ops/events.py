@@ -34,6 +34,10 @@ def parse_event_stream(raw: bytes, *, require_handoff: bool) -> dict[str, Any]:
         idx = end
         if not isinstance(obj, dict) or "type" not in obj:
             raise ProviderError("provider event missing type")
+        if not isinstance(obj["type"], str):
+            # `x in TERMINAL` raises TypeError on an unhashable value, which
+            # would escape as an uncaught controller crash with no result record.
+            raise ProviderError("provider event type must be a string")
         if obj["type"] in TERMINAL:
             terminals.append(obj)
     # leftover non-space is truncated/garbage tail
@@ -58,7 +62,7 @@ def parse_event_stream(raw: bytes, *, require_handoff: bool) -> dict[str, Any]:
     return term
 
 
-def extract_review_verdict(raw: bytes) -> tuple[str, list[dict[str, Any]]]:
+def extract_review_verdict(raw: bytes) -> tuple[str, list[dict[str, Any]], list[str]]:
     term = parse_event_stream(raw, require_handoff=False)
     payload = term.get("review")
     if not isinstance(payload, dict):
@@ -69,4 +73,7 @@ def extract_review_verdict(raw: bytes) -> tuple[str, list[dict[str, Any]]]:
     findings = payload.get("findings") or []
     if not isinstance(findings, list):
         raise ProviderError("findings must be a list")
-    return verdict, findings
+    files = payload.get("reviewed_files") or []
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        raise ProviderError("reviewed_files must be a list of strings")
+    return verdict, findings, files

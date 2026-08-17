@@ -139,7 +139,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
         from . import events as evmod
 
         try:
-            verdict, findings = evmod.extract_review_verdict(ev)
+            verdict, findings, reviewed_files = evmod.extract_review_verdict(ev)
         except Exception as exc:
             print(f"ai-opencode: review not attachable: {exc}", file=sys.stderr)
             return 1
@@ -149,6 +149,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
             reviewer_record=rec,
             verdict=verdict,
             findings=findings,
+            reviewed_files=reviewed_files,
         )
     if rec["status"] == "dirty":
         return 2
@@ -192,13 +193,14 @@ def cmd_promote(ns: argparse.Namespace) -> int:
     ev = open(rev["artifacts"]["events"], "rb").read()
     from . import events as evmod
 
-    verdict, findings = evmod.extract_review_verdict(ev)
+    verdict, findings, reviewed_files = evmod.extract_review_verdict(ev)
     rec = job.attach_review(
         state_path=_state_path(ns),
         subject_job=ns.subject,
         reviewer_record=rev,
         verdict=verdict,
         findings=findings,
+        reviewed_files=reviewed_files,
     )
     print(json.dumps({"status": rec["status"], "job": rec["job_id"]}, indent=2))
     return 0 if rec["status"] == "ok" else 1

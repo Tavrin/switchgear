@@ -43,7 +43,13 @@ class StateRoot:
 
     def job_dir(self, job_id: str) -> str:
         require_job_id(job_id)
-        return os.path.join(self.jobs, job_id)
+        path = os.path.join(self.jobs, job_id)
+        # Every component, not just the top-level jobs/ dir: a symlinked
+        # jobs/<uuid> would otherwise redirect result.json reads (and therefore
+        # `promote --review`) outside the state root.
+        if os.path.lexists(path):
+            reject_symlinks(path, "job dir")
+        return path
 
 
 def provision(path: str) -> str:
@@ -87,10 +93,15 @@ def atomic_write_json(path: str, obj: Any) -> None:
 
 
 def read_json(path: str) -> Any:
-    if os.path.islink(path):
-        raise Refuse(f"refusing to read symlink {path}")
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    # Check the whole path, not only the final component: a symlinked parent
+    # directory redirects the read just as effectively.
+    reject_symlinks(path, "read path")
+    fd = open_nofollow(path, os.O_RDONLY)
+    try:
+        with os.fdopen(fd, encoding="utf-8", closefd=False) as fh:
+            return json.load(fh)
+    finally:
+        os.close(fd)
 
 
 def create_job_dirs(root: StateRoot, job_id: str) -> dict[str, str]:

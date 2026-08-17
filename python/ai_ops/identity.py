@@ -197,9 +197,31 @@ def tree_digest(ident: WorktreeIdentity) -> str:
     assert_gitdir_pointer_intact(ident)
     head = _git_pinned(ident, "rev-parse", "HEAD")
     status = _git_pinned(ident, "status", "--porcelain=v1", "-z", text=False)
-    diff = _git_pinned(ident, "diff", "HEAD", text=False)
+    # --no-ext-diff / --no-textconv are the only reliable way to stop a
+    # repository-owned diff.external or diff.<d>.textconv from executing on the
+    # host. --git-dir pinning does not help when the repository's OWN config is
+    # hostile (a disposable clone), which is the case this rail must survive.
+    diff = _git_pinned(ident, "diff", "--no-ext-diff", "--no-textconv", "HEAD", text=False)
     blob = head.encode() + b"\n" + status + b"\n" + diff
     return hashlib.sha256(blob).hexdigest()
+
+
+def changed_files(ident: WorktreeIdentity) -> list[str]:
+    """Paths the subject job actually touched, tracked + untracked.
+
+    Used to check that a reviewer names the change it claims to have reviewed.
+    """
+    assert_gitdir_pointer_intact(ident)
+    out = _git_pinned(ident, "status", "--porcelain=v1", "-z", text=False)
+    names: list[str] = []
+    for entry in out.split(b"\x00"):
+        if not entry:
+            continue
+        # porcelain v1 -z: XY<space>path ; rename targets arrive as a separate record
+        path = entry[3:].decode("utf-8", "replace").strip()
+        if path:
+            names.append(path)
+    return sorted(set(names))
 
 
 def git_identity_digest(ident: WorktreeIdentity) -> str:

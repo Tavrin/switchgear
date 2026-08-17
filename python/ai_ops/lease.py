@@ -176,6 +176,44 @@ def load_token(root: StateRoot, ident: WorktreeIdentity) -> dict[str, Any]:
     return token
 
 
+class PromotionLock:
+    """Exclusive worktree lock held across the promotion decision AND write.
+
+    Promotion samples the live tree and then writes `ok`. Without this lock a
+    bounded-write worker can change the tree in between, so the subject is
+    promoted against a tree that no longer matches the reviewed freeze.
+    """
+
+    def __init__(self, root: StateRoot, ident: WorktreeIdentity) -> None:
+        self.root = root
+        self.ident = ident
+        self.fd: Optional[int] = None
+
+    def __enter__(self) -> None:
+        lock_path = os.path.join(_dir(self.root, self.ident), "lock")
+        if not os.path.isfile(lock_path):
+            # No lease was ever taken on this worktree, so no bounded-write
+            # worker can be running against it; nothing to serialize with.
+            return None
+        self.fd = open_nofollow(lock_path, os.O_RDWR)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(self.fd)
+            self.fd = None
+            raise Refuse("cannot promote while a worker holds this worktree") from exc
+        return None
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.fd is not None:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(self.fd)
+            self.fd = None
+
+
 class WorkerLock:
     """Exclusive flock held for the entire worker lifetime."""
 
