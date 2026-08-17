@@ -27,6 +27,27 @@ def unmet_required(policy_indep: dict[str, str], indep: dict[str, bool]) -> list
     return unmet
 
 
+# Severities that disqualify a promotion regardless of the stated verdict.
+BLOCKING_SEVERITIES = ("blocker", "critical", "high")
+
+
+def blocking_findings(
+    findings: Any, severities: tuple[str, ...] = BLOCKING_SEVERITIES
+) -> list[dict[str, Any]]:
+    """Findings serious enough to override an approving verdict.
+
+    A live reviewer documented two real defects and still returned
+    `promote` -- and a second run of the SAME model on the SAME diff returned
+    `needs_changes`. The verdict is a probabilistic judgement; the findings the
+    reviewer itself wrote down are harder evidence, so they get a vote.
+    """
+    out = []
+    for f in findings or []:
+        if isinstance(f, dict) and str(f.get("severity", "")).lower() in severities:
+            out.append(f)
+    return out
+
+
 def promote(
     *,
     subject_path: str,
@@ -34,6 +55,7 @@ def promote(
     live_head: str,
     live_tree_digest: str,
     expected_files: list[str] | None = None,
+    blocking_severities: tuple[str, ...] = BLOCKING_SEVERITIES,
     generation: int,
 ) -> dict[str, Any]:
     validate(review_artifact, "review.schema.json")
@@ -87,6 +109,14 @@ def promote(
             )
     if review_artifact.get("required_unmet"):
         raise Refuse("independence requirements unmet")
+
+    blocking = blocking_findings(review_artifact.get("findings"), blocking_severities)
+    if blocking:
+        claims = "; ".join(str(f.get("claim", "?"))[:80] for f in blocking[:3])
+        raise Refuse(
+            f"review reports {len(blocking)} disqualifying finding(s) despite a "
+            f"promote verdict: {claims}"
+        )
     subject["status"] = "ok"
     subject["review"] = review_artifact
     subject["generation"] = generation + 1

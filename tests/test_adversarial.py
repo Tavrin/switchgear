@@ -978,6 +978,59 @@ class RealProviderVocabularyUnit(unittest.TestCase):
             extract_review_verdict(self._stream("Looks good to me, ship it."))
 
 
+class FindingsGateUnit(unittest.TestCase):
+    """A promote verdict must not override the reviewer's own serious findings."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def test_blocking_severities_detected(self):
+        from ai_ops.review import blocking_findings
+
+        f = [{"severity": "low", "claim": "nit"},
+             {"severity": "high", "claim": "real bug"},
+             {"severity": "info", "claim": "fyi"}]
+        self.assertEqual(len(blocking_findings(f)), 1)
+        self.assertEqual(blocking_findings([{"severity": "LOW"}]), [])
+        self.assertEqual(len(blocking_findings([{"severity": "Critical"}])), 1)
+
+    def test_promote_refuses_on_high_severity_findings(self):
+        import tempfile
+
+        from ai_ops.errors import Refuse
+        from ai_ops.review import promote
+        from ai_ops.state import atomic_write_json
+
+        d = Path(tempfile.mkdtemp(prefix="aiops-findings-"))
+        subj = d / "result.json"
+        freeze = {"head": "H", "tree_digest": "T", "policy_digest": "P",
+                  "models_registry_digest": "R", "changed_files": ["a.py"]}
+        atomic_write_json(str(subj), {
+            "job_id": "S", "status": "awaiting_review", "mode": "bounded-write",
+            "role": "implement", "model": {"id": "m", "provider": "p"}, "dir": str(d),
+            "exit": 0, "started": "s", "generation": 0, "freeze": freeze,
+        })
+        art = {"subject_job": "S", "reviewer_job": "R",
+               "model": {"id": "m2", "provider": "p"},
+               "role": "review", "independence": {"different_job": True,
+               "different_model": True, "different_family": True,
+               "different_provider": False}, "verdict": "promote",
+               "subject_head": "H", "subject_tree_digest": "T",
+               "subject_policy_digest": "P", "reviewed_dir": str(d),
+               "reviewed_tree_digest": "T", "models_registry_digest": "R",
+               "reviewed_files": ["a.py"], "required_unmet": [],
+               "findings": [{"severity": "high", "claim": "negative qty unvalidated"}]}
+        with self.assertRaises(Refuse) as ctx:
+            promote(subject_path=str(subj), review_artifact=art, live_head="H",
+                    live_tree_digest="T", expected_files=["a.py"], generation=0)
+        self.assertIn("disqualifying finding", str(ctx.exception))
+        # and it still promotes when the findings are only advisory
+        art["findings"] = [{"severity": "low", "claim": "style"}]
+        rec = promote(subject_path=str(subj), review_artifact=art, live_head="H",
+                      live_tree_digest="T", expected_files=["a.py"], generation=0)
+        self.assertEqual(rec["status"], "ok")
+
+
 class BrokerUnit(unittest.TestCase):
     """Credential broker + no-network sandbox."""
 
