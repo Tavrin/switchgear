@@ -27,10 +27,25 @@ class WorktreeIdentity:
         return asdict(self)
 
 
+# Repo-local config knobs that make git execute an arbitrary command. A worker that
+# can write inside its worktree must never be able to reach these through the host
+# controller's git invocations.
+# Note: there is no way to *unset* diff.external via -c (an empty value makes git
+# exec ""), so it is not listed here. The real defence is --git-dir pinning below:
+# config is read from the trusted git dir, never from a repo the worker controls.
+_SAFE_CONFIG = (
+    "-c", "core.fsmonitor=false",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "protocol.ext.allow=never",
+)
+
+
 def _git(cwd: str, *args: str) -> str:
+    """Discovery-only git. Follows the in-tree .git pointer, so it must stay
+    restricted to commands that never scan the tree (rev-parse and friends)."""
     env = git_clean_env()
     proc = subprocess.run(
-        [GIT, "-C", cwd, "--no-optional-locks", *args],
+        [GIT, "-C", cwd, "--no-optional-locks", *_SAFE_CONFIG, *args],
         check=False,
         capture_output=True,
         text=True,
@@ -39,6 +54,61 @@ def _git(cwd: str, *args: str) -> str:
     if proc.returncode != 0:
         raise Refuse(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout
+
+
+def _git_pinned(ident: "WorktreeIdentity", *args: str, text: bool = True):
+    """Git pinned to the validated git dir.
+
+    The worktree is worker-writable in bounded-write mode, and for a linked
+    worktree `.git` is a regular file *inside* it. Passing --git-dir means git
+    never consults that pointer, so a worker cannot redirect the controller's
+    git at a repository whose config it also controls (textconv / fsmonitor).
+    """
+    env = git_clean_env()
+    proc = subprocess.run(
+        [
+            GIT,
+            "--git-dir",
+            ident.git_dir,
+            "--work-tree",
+            ident.realpath,
+            "--no-optional-locks",
+            *_SAFE_CONFIG,
+            *args,
+        ],
+        check=False,
+        capture_output=True,
+        text=text,
+        env=env,
+        cwd=ident.realpath,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr if text else proc.stderr.decode("utf-8", "replace")
+        raise Refuse(f"git {' '.join(args)} failed: {err.strip()}")
+    return proc.stdout
+
+
+def assert_gitdir_pointer_intact(ident: "WorktreeIdentity") -> None:
+    """Refuse if the worktree's .git pointer no longer resolves to the git dir we
+    validated. Makes the ordering guarantee explicit instead of incidental."""
+    git_file = os.path.join(ident.realpath, ".git")
+    if os.path.islink(git_file):
+        raise Refuse("worktree .git became a symlink during the job")
+    if ident.linked_worktree:
+        try:
+            with open(git_file, encoding="utf-8") as fh:
+                raw = fh.read()
+        except OSError as exc:
+            raise Refuse(f"worktree .git pointer unreadable: {exc}") from exc
+        if raw.count("gitdir:") != 1:
+            raise Refuse("worktree .git pointer is malformed")
+        target = raw.split("gitdir:", 1)[1].strip()
+        if not os.path.isabs(target):
+            target = os.path.abspath(os.path.join(ident.realpath, target))
+        if os.path.realpath(target) != os.path.realpath(ident.git_dir):
+            raise Refuse("worktree .git pointer was redirected during the job")
+    elif not os.path.isdir(git_file):
+        raise Refuse("worktree .git is no longer a directory")
 
 
 def inspect_worktree(path: str) -> WorktreeIdentity:
@@ -116,35 +186,29 @@ def same_core(a: WorktreeIdentity, b: WorktreeIdentity) -> bool:
     return identity_core(a) == identity_core(b)
 
 
-def tree_digest(path: str) -> str:
-    """NUL-safe content digest of porcelain + HEAD + diff."""
-    from .digest import sha256_text
+def tree_digest(ident: WorktreeIdentity) -> str:
+    """NUL-safe content digest of porcelain + HEAD + diff.
 
-    head = _git(path, "rev-parse", "HEAD")
-    status = subprocess.run(
-        [GIT, "-C", path, "--no-optional-locks", "status", "--porcelain=v1", "-z"],
-        check=True,
-        capture_output=True,
-        env=git_clean_env(),
-    ).stdout
-    diff = subprocess.run(
-        [GIT, "-C", path, "--no-optional-locks", "diff", "HEAD"],
-        check=True,
-        capture_output=True,
-        env=git_clean_env(),
-    ).stdout
-    blob = head.encode() + b"\n" + status + b"\n" + diff
+    These are the tree-scanning commands, so they run pinned to the validated
+    git dir and only after the .git pointer has been re-checked.
+    """
     import hashlib
 
+    assert_gitdir_pointer_intact(ident)
+    head = _git_pinned(ident, "rev-parse", "HEAD")
+    status = _git_pinned(ident, "status", "--porcelain=v1", "-z", text=False)
+    diff = _git_pinned(ident, "diff", "HEAD", text=False)
+    blob = head.encode() + b"\n" + status + b"\n" + diff
     return hashlib.sha256(blob).hexdigest()
 
 
-def git_identity_digest(path: str) -> str:
+def git_identity_digest(ident: WorktreeIdentity) -> str:
     from .digest import sha256_text
 
-    head = _git(path, "rev-parse", "HEAD").strip()
-    branch = _git(path, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    remotes = _git(path, "remote", "-v")
-    wtl = _git(path, "worktree", "list", "--porcelain")
-    cfg = _git(path, "config", "--list", "--local")
+    assert_gitdir_pointer_intact(ident)
+    head = _git_pinned(ident, "rev-parse", "HEAD").strip()
+    branch = _git_pinned(ident, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    remotes = _git_pinned(ident, "remote", "-v")
+    wtl = _git_pinned(ident, "worktree", "list", "--porcelain")
+    cfg = _git_pinned(ident, "config", "--list", "--local")
     return sha256_text("\n".join([head, branch, remotes, wtl, cfg]))

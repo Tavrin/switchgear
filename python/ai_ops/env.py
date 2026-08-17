@@ -3,39 +3,10 @@ from __future__ import annotations
 import os
 from typing import Mapping
 
-# Dangerous families never forwarded.
-_DROP_PREFIXES = (
-    "GIT_",
-    "OPENCODE_",
-    "LD_",
-    "PYTHON",
-    "BASH_",
-    "ENV",
-    "SHELLOPTS",
-    "GCONV_PATH",
-    "NLSPATH",
-    "HOSTALIASES",
-    "LOCALDOMAIN",
-    "RES_OPTIONS",
-    "TERMINFO",
-    "TERMPATH",
-    "XDG_",
-)
-
-_KEEP = frozenset(
-    {
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "TERM",
-        "TZ",
-        "TMPDIR",
-    }
-)
+# The child environment is BUILT, not filtered: allowlisted_env() below constructs
+# it from scratch and it is handed to the child via Popen(env=...). There is
+# deliberately no drop-list here — a second, parallel representation of the same
+# policy is exactly the drift this rail is meant to avoid (finding N8 / F20).
 
 TRUSTED_PATH = "/usr/bin:/bin"
 GIT = "/usr/bin/git"

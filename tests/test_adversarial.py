@@ -387,7 +387,7 @@ class RailTests(unittest.TestCase):
         self.assertIn("forged", p.stderr)
 
     def test_simultaneous_workers(self):
-        self._acquire()
+        token = self._acquire()
         envf = self.tmp / "e.json"
         envf.write_text(json.dumps(envelope(str(self.wt))))
         env = os.environ.copy()
@@ -398,8 +398,11 @@ class RailTests(unittest.TestCase):
                 "AI_OPS_PROVIDER": str(MOCK),
             }
         )
+        wargs = self.args(
+            "write", str(self.wt), "implement", "--envelope", str(envf), "--token", token
+        )
         a = subprocess.Popen(
-            [PYTHON, str(MAIN), *self.args("write", str(self.wt), "implement", "--envelope", str(envf))],
+            [PYTHON, str(MAIN), *wargs],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -407,7 +410,7 @@ class RailTests(unittest.TestCase):
         )
         time.sleep(0.4)
         b = subprocess.run(
-            [PYTHON, str(MAIN), *self.args("write", str(self.wt), "implement", "--envelope", str(envf))],
+            [PYTHON, str(MAIN), *wargs],
             env=env,
             capture_output=True,
             text=True,
@@ -478,6 +481,137 @@ class RailTests(unittest.TestCase):
             env={"GIT_DIR": "/tmp/does-not-exist-git", "AI_OPS_MOCK_BEHAVIOR": "ok"},
         )
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    # ---- N-series regressions (see docs/REVIEW-6d217a6.md) ----
+
+    def _subject_awaiting_review(self):
+        """A bounded-write job parked in awaiting_review on self.wt."""
+        token = self._acquire()
+        envf = self.tmp / "e.json"
+        envf.write_text(json.dumps(envelope(str(self.wt))))
+        p = run_cli(
+            self.args("write", str(self.wt), "implement", "--envelope", str(envf), "--token", token),
+            env={"AI_OPS_WRITE": "1", "AI_OPS_MOCK_BEHAVIOR": "edit-inside"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
+        job = [ln.split("=", 1)[1] for ln in p.stdout.splitlines() if ln.startswith("job=")][0]
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "awaiting_review")
+        return job
+
+    def test_n1_review_of_other_worktree_cannot_promote(self):
+        """N1 (CRITICAL): a reviewer that never inspected the subject must not promote it.
+
+        Regression guard for the freeze-compared-to-itself defect: promotion used
+        to copy subject_tree_digest out of the subject's own freeze and compare it
+        back, so a review of an unrelated worktree promoted the subject.
+        """
+        job = self._subject_awaiting_review()
+        # Reviewer runs against a DIFFERENT worktree and votes promote.
+        rf = self.tmp / "r.json"
+        rf.write_text(json.dumps(envelope(str(self.wt2), role="review", mode="readonly", parent_job=job)))
+        p = run_cli(
+            self.args("review", str(self.wt2), "review", "--envelope", str(rf)),
+            env={"AI_OPS_MOCK_BEHAVIOR": "review-promote"},
+        )
+        self.assertNotEqual(p.returncode, 0, "review of another worktree must not promote")
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "awaiting_review")
+
+    def test_n1_promote_cli_rejects_unrelated_review_job(self):
+        """N1: the promote subcommand must also refuse a review job from elsewhere."""
+        job = self._subject_awaiting_review()
+        p = run_cli(
+            self.args("review", str(self.wt2), "review", "x"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "review-promote"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rev = [ln.split("=", 1)[1] for ln in p.stdout.splitlines() if ln.startswith("job=")][0]
+        p = run_cli(self.args("promote", "--subject", job, "--review", rev))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("did not inspect the subject worktree", p.stderr + p.stdout)
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "awaiting_review")
+
+    def test_n1_subject_cannot_review_itself(self):
+        """N1: the subject's own job record must never serve as its review."""
+        job = self._subject_awaiting_review()
+        p = run_cli(self.args("promote", "--subject", job, "--review", job))
+        self.assertNotEqual(p.returncode, 0)
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "awaiting_review")
+
+    def test_n1_matching_review_still_promotes(self):
+        """The binding must not be so strict that a legitimate review fails."""
+        job = self._subject_awaiting_review()
+        rf = self.tmp / "r.json"
+        rf.write_text(json.dumps(envelope(str(self.wt), role="review", mode="readonly", parent_job=job)))
+        p = run_cli(
+            self.args("review", str(self.wt), "review", "--envelope", str(rf)),
+            env={"AI_OPS_MOCK_BEHAVIOR": "review-promote"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "ok")
+        self.assertEqual(st["review"]["reviewed_tree_digest"], st["freeze"]["tree_digest"])
+
+    def test_n4_nonzero_write_exit_is_provider_error(self):
+        """N4: a bounded-write provider that crashes must not reach awaiting_review."""
+        token = self._acquire()
+        envf = self.tmp / "e.json"
+        envf.write_text(json.dumps(envelope(str(self.wt))))
+        p = run_cli(
+            self.args("write", str(self.wt), "implement", "--envelope", str(envf), "--token", token),
+            env={"AI_OPS_WRITE": "1", "AI_OPS_MOCK_BEHAVIOR": "exit-nonzero"},
+        )
+        self.assertNotEqual(p.returncode, 0)
+        job = [ln.split("=", 1)[1] for ln in p.stdout.splitlines() if ln.startswith("job=")][0]
+        st = json.loads((self.state / "jobs" / job / "result.json").read_text())
+        self.assertEqual(st["status"], "provider_error")
+
+    def test_n6_write_requires_presented_token(self):
+        """N6: the lease token is an authorization factor, not read off disk."""
+        self._acquire()  # a lease exists, but we present no token
+        envf = self.tmp / "e.json"
+        envf.write_text(json.dumps(envelope(str(self.wt))))
+        p = run_cli(
+            self.args("write", str(self.wt), "implement", "--envelope", str(envf)),
+            env={"AI_OPS_WRITE": "1", "AI_OPS_MOCK_BEHAVIOR": "edit-inside"},
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("lease token", p.stderr)
+
+    def test_n7_non_numeric_timeout_refused(self):
+        p = run_cli(
+            self.args("scout", str(self.primary), "x"),
+            env={"AI_OPENCODE_TIMEOUT": "abc", "AI_OPS_MOCK_BEHAVIOR": "ok"},
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("AI_OPENCODE_TIMEOUT", p.stderr)
+
+    def test_n2_legacy_unsandboxed_binaries_are_gone(self):
+        """N2: the pre-Python host-side command path must not be shipped."""
+        for stale in ("bin/ai-cmd", "bin/ai-ro", "lib/common.sh", "lib/policy.sh"):
+            self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
+
+
+class PathUnit(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="aiops-paths-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_n8_symlink_after_missing_component_is_detected(self):
+        """N8: the walker used to stop at the first missing component and report clean."""
+        from ai_ops.paths import _symlink_in_path
+
+        link = self.tmp / "link"
+        link.symlink_to("/etc")
+        # A missing component precedes the symlink in the walk order.
+        probe = str(self.tmp / "link" / "deep" / "leaf")
+        self.assertEqual(_symlink_in_path(probe), str(link))
 
 
 class EventUnit(unittest.TestCase):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .errors import Refuse
@@ -43,12 +44,22 @@ def promote(
     freeze = subject.get("freeze") or {}
     if review_artifact["subject_job"] != subject["job_id"]:
         raise Refuse("review subject_job mismatch")
-    if review_artifact["subject_head"] != freeze.get("head"):
-        raise Refuse("stale review: subject HEAD mismatch")
-    if review_artifact["subject_tree_digest"] != freeze.get("tree_digest"):
-        raise Refuse("stale review: tree digest mismatch")
-    if review_artifact["subject_policy_digest"] != freeze.get("policy_digest"):
-        raise Refuse("stale review: policy digest mismatch")
+
+    # The binding gate: what the REVIEWER inspected must be the subject's frozen
+    # tree. Comparing freeze-derived fields back to the freeze proves nothing,
+    # so the authoritative comparison is reviewer-attested -> freeze.
+    reviewed = review_artifact.get("reviewed_tree_digest")
+    if not reviewed:
+        raise Refuse("review carries no reviewed-tree evidence")
+    if reviewed != freeze.get("tree_digest"):
+        raise Refuse("review does not correspond to the subject's frozen tree")
+    if os.path.realpath(review_artifact.get("reviewed_dir") or "") != os.path.realpath(
+        subject.get("dir") or ""
+    ):
+        raise Refuse("review was performed against a different worktree")
+    if review_artifact.get("models_registry_digest") != freeze.get("models_registry_digest"):
+        raise Refuse("model registry changed between implementation and review")
+
     if live_head != freeze.get("head") or live_tree_digest != freeze.get("tree_digest"):
         raise Refuse("worktree changed after review")
     if review_artifact["verdict"] != "promote":

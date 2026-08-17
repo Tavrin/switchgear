@@ -19,6 +19,18 @@ def load_commands() -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def registry_digest() -> str:
+    """Digest of the controller-owned model registry as it is right now.
+
+    Frozen onto a subject job so a later edit to models/registry.json cannot
+    relabel model families to manufacture reviewer independence.
+    """
+    from .digest import sha256_bytes
+
+    path = _ROOT / "models" / "registry.json"
+    return sha256_bytes(path.read_bytes())
+
+
 def model_record(model_id: str) -> dict[str, Any]:
     reg = load_models()
     deny = reg.get("deny") or []

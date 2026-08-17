@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Test double. Must be named `opencode` so PATH injection wins.
-exec "$(dirname -- "$0")/mock-opencode" "$@"

@@ -188,6 +188,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
 def cmd_promote(ns: argparse.Namespace) -> int:
     root = StateRoot(_state_path(ns))
     rev = read_json(os.path.join(root.job_dir(ns.review), "result.json"))
+    validate(rev, "result.schema.json")
     ev = open(rev["artifacts"]["events"], "rb").read()
     from . import events as evmod
 
@@ -239,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     rn = sub.add_parser("run")
     rn.add_argument("--envelope", required=True)
+    rn.add_argument("--token")
     rn.set_defaults(func=cmd_run)
 
     ls = sub.add_parser("lease")

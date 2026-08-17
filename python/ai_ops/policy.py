@@ -38,10 +38,7 @@ class CompiledPolicy:
         mid = spec["model"]
         if mid not in self.models_allow:
             raise Refuse(f"model '{mid}' is not allowed by the profile")
-        rec = model_record(mid)
-        if spec["mode"] != self.mode and name != spec.get("mode"):
-            pass
-        return rec
+        return model_record(mid)
 
     def to_opencode_runtime(self) -> dict[str, Any]:
         bash = self.tools.get("bash", "deny") == "allow"
@@ -100,10 +97,10 @@ def compile_policy(profile: dict[str, Any], mode: str) -> CompiledPolicy:
     for verb, enabled in (profile.get("commands") or {}).items():
         if enabled:
             cmds[verb] = command_record(verb)
-    for mid in (profile.get("models") or {}).get("deny") or []:
-        # extra profile deny is enforced at compile by dropping from allow
-        pass
-    allow = [m for m in ((profile.get("models") or {}).get("allow") or []) if m not in ((profile.get("models") or {}).get("deny") or [])]
+    # Profile deny is enforced by dropping denied ids out of allow at compile time.
+    models = profile.get("models") or {}
+    denied = models.get("deny") or []
+    allow = [m for m in (models.get("allow") or []) if m not in denied]
     wt = profile.get("worktree") or {}
     payload = {
         "mode": mode,

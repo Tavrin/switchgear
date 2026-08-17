@@ -120,6 +120,22 @@ def main() -> int:
         emit({"type": "complete"})
         return 0
 
+    if beh == "exit-nonzero":
+        # Well-formed handoff, but the provider crashed. Must not be promotable.
+        emit(
+            {
+                "type": "complete",
+                "handoff": {
+                    "summary": "crashed after writing",
+                    "status": "awaiting_review",
+                    "changes": [],
+                    "remaining_risks": [],
+                    "next_action": "review",
+                },
+            }
+        )
+        return 7
+
     if beh == "malformed":
         sys.stdout.write("{not-json")
         return 0

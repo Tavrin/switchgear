@@ -42,10 +42,10 @@ def _symlink_in_path(abs_path: str) -> Optional[str]:
     built = os.sep
     for name in segs:
         built = os.path.join(built, name) if built != os.sep else os.path.join(os.sep, name)
+        # Walk every component. Stopping at the first missing one would report
+        # "clean" for a path whose later components are symlinks (finding N8).
         if os.path.islink(built):
             return built
-        if not os.path.exists(built):
-            break
     return None
 
 
