@@ -88,7 +88,7 @@ a broker the network namespace applies and that call would not leave the sandbox
 
 ---
 
-## Grok — the handoff was wrong about this one, not yet probed
+## Grok — the handoff was wrong about this one; isolation now proven
 
 `HANDOFF.md` states Grok has "**no** agent/permission model at all, so it would
 rely purely on the OS boundary." That is not what the binary reports.
@@ -109,14 +109,42 @@ than Codex: headless mode, structured streaming, allow/deny rules, and
 `~/.grok/auth.json` is a file-based credential store rather than an OAuth
 session.
 
-**Not yet established** (do not write the adapter until it is):
+### Isolation: PROVEN, and it was the most exposed of the three
 
-- config discovery — does `~/.grok/config.toml` resolution follow `$HOME`? Run
-  the equivalent no-model probe.
-- whether host agents, plugins and `~/.grok/bundled` leak into a synthetic HOME.
-- the real event vocabulary — capture a stream and commit it as a fixture.
-- whether its credential can go through the broker, i.e. whether it is an API key
-  against an OpenAI- or Anthropic-shaped endpoint.
+`grok inspect` ("show the configuration Grok discovers for this directory") is
+the config dump. Host vs the same binary under `build_bwrap_argv` with a
+synthetic HOME:
+
+| Resolved | Host | Inside the sandbox |
+|---|---|---|
+| Project instructions | **`~/.claude/CLAUDE.md`** (~2448 tokens) | 0 — none |
+| Permissions | **375 rules** from `~/.claude/settings.local.json` | 0 loaded |
+| Skills | **46** (user + bundled, several tagged `[claude]`) | 0 |
+| Plugins / MCP / LSP / Hooks | present | 0 / 0 / 0 / 0 |
+| Config sources | user + project | none |
+| Agents | host set | 3 builtin only |
+
+Note what the host row says: Grok reads **Claude Code's own configuration** — its
+CLAUDE.md as agent instructions and its `settings.local.json` as permission
+rules. Its "harness compatibility" layer deliberately ingests other harnesses'
+config. That is a far larger leak surface than OpenCode's, and it is exactly the
+F04 class of problem: a delegated agent inheriting the operator's own harness
+instructions and permission grants. The synthetic HOME closes all of it.
+
+One fail-open default worth recording: `Project trusted: yes` in **both** runs.
+On the host that comes from `trusted_folders.toml`; inside, with no config at
+all, it still defaults to trusted. Grok's own trust gate is therefore not a
+control we can lean on — the OS boundary is, which is the standing posture
+anyway.
+
+**Still not established** (do not write the adapter until it is):
+
+- the real event vocabulary — capture a `-p --output-format streaming-json`
+  stream and commit it as a fixture. This is the remaining blocker and it needs
+  a small credit spend.
+- whether its credential can go through the broker, i.e. whether `~/.grok/auth.json`
+  is an API key against an OpenAI- or Anthropic-shaped endpoint, or an OAuth
+  session like Codex's.
 
 ---
 
