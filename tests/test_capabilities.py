@@ -130,6 +130,29 @@ class Usable(unittest.TestCase):
         out = capmod.describe(build_parser(), None, None)
         self.assertEqual(out["containment"]["platform"], "linux-only")
         self.assertIn("NOT a uid boundary", out["containment"]["note"])
+        # A platform limit must come with what to do about it, like every other
+        # bad news this tool reports.
+        self.assertIn("VM", out["containment"]["elsewhere"])
+
+    def test_the_non_linux_remedy_does_not_send_people_after_apt(self):
+        """Telling a macOS user to `apt install bubblewrap` is worse than saying
+        nothing: it sends them after a package that does not exist for their OS
+        and hides that this is a platform limit, not a missing dependency."""
+        import platform as plat
+
+        from ai_ops import doctor, sandbox
+
+        real_system, real_bwrap = plat.system, sandbox.TRUSTED_BWRAP
+        plat.system = lambda: "Darwin"
+        sandbox.TRUSTED_BWRAP = "/nonexistent/bwrap"
+        try:
+            check = doctor.check_sandbox()[0]
+        finally:
+            plat.system, sandbox.TRUSTED_BWRAP = real_system, real_bwrap
+        self.assertEqual(check["status"], "fail")
+        self.assertNotIn("apt install", check["remedy"])
+        self.assertIn("Linux-only", check["remedy"])
+        self.assertIn("PORTABILITY", check["remedy"])
 
 
 if __name__ == "__main__":

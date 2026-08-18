@@ -31,17 +31,34 @@ def _check(name: str, status: str, detail: str, remedy: str = "") -> dict[str, A
 def check_sandbox() -> list[dict[str, Any]]:
     """The containment backend. There is deliberately no fallback: if this fails,
     nothing may run, so it is the one check that is unambiguously fatal."""
+    import platform
+
     from .errors import Refuse
     from .sandbox import require_bwrap
 
     try:
         path = require_bwrap()
     except Refuse as exc:
-        return [_check(
-            "sandbox.backend", FAIL, str(exc),
-            "install bubblewrap (Debian/Ubuntu: apt install bubblewrap). There is "
-            "no unsandboxed fallback and there will not be one.",
-        )]
+        system = platform.system()
+        if system == "Linux":
+            remedy = ("install bubblewrap (Debian/Ubuntu: apt install bubblewrap). "
+                      "There is no unsandboxed fallback and there will not be one.")
+        else:
+            # Telling a macOS user to apt-get bubblewrap is worse than saying
+            # nothing: it sends them after a package that does not exist for
+            # their OS, and hides that this is a platform limit rather than a
+            # missing dependency.
+            remedy = (
+                f"agent-ops runs its containment on bubblewrap, which is "
+                f"Linux-only — there is no {system} build to install, and the "
+                "rail refuses to run without a boundary rather than degrading to "
+                "an unsandboxed one. Run it inside a Linux VM or container "
+                "(Lima, OrbStack, UTM, Docker) where every containment property "
+                "holds unchanged. A native backend would have to be written and "
+                "its containment re-proven on that platform; see "
+                "docs/PORTABILITY.md."
+            )
+        return [_check("sandbox.backend", FAIL, str(exc), remedy)]
     return [_check("sandbox.backend", PASS, f"{path} present and trusted")]
 
 

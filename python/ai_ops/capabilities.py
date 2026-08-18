@@ -142,6 +142,9 @@ def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
             "note": ("The worktree is the only writable mount for bounded-write; "
                      "the git dir is read-only. This is a mount/network boundary, "
                      "NOT a uid boundary."),
+            "elsewhere": ("Run inside a Linux VM or container — every containment "
+                          "property holds unchanged. There is no unsandboxed "
+                          "fallback. See docs/PORTABILITY.md."),
         },
     }
     if profile:
