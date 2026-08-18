@@ -196,10 +196,67 @@ class BrokerUsesTheCredential(unittest.TestCase):
         from ai_ops.broker import CredentialBroker
 
         with CredentialBroker("PLAIN", upstream="http://127.0.0.1:9/v1") as bk:
-            self.assertEqual(bk.authorization(), "Bearer PLAIN")
+            self.assertEqual(bk.auth_value(), "Bearer PLAIN")
         cred = creds.Credential(token="TOK", cls="oauth", source="/x")
         with CredentialBroker(cred, upstream="http://127.0.0.1:9/v1") as bk:
-            self.assertEqual(bk.authorization(), "Bearer TOK")
+            self.assertEqual(bk.auth_value(), "Bearer TOK")
+
+    def test_anthropic_shaped_provider_swaps_x_api_key_not_authorization(self):
+        """Measured: Claude Code authenticates with `x-api-key`, not Authorization.
+
+        A broker that only rewrote Authorization would forward the sandbox's
+        PLACEHOLDER x-api-key to the backend and inject the real credential into
+        a header the backend ignores -- i.e. leak the placeholder AND fail auth.
+        This drives a recording upstream and checks the header the real value
+        lands in, with no spend.
+        """
+        import http.server
+        import threading
+        import urllib.request
+
+        seen = {}
+
+        class Up(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                n = int(self.headers.get("content-length") or 0)
+                self.rfile.read(n)
+                seen["x-api-key"] = self.headers.get("x-api-key")
+                seen["authorization"] = self.headers.get("authorization")
+                body = b"{}"
+                self.send_response(200)
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        up = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Up)
+        threading.Thread(target=up.serve_forever, daemon=True).start()
+        upstream = f"http://127.0.0.1:{up.server_address[1]}/v1"
+
+        from ai_ops.broker import CredentialBroker
+
+        with CredentialBroker(
+            "REAL-ANTHROPIC-TOKEN", upstream=upstream,
+            allowed_paths=("/messages",),
+            auth_header="x-api-key", auth_scheme="",
+        ) as bk:
+            req = urllib.request.Request(
+                bk.base_url + "/v1/messages",
+                data=b'{"model":"m"}',
+                # The sandbox's placeholder, in the header a real Claude sends.
+                headers={"content-type": "application/json",
+                         "x-api-key": "broker-placeholder-not-a-credential"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5).read()
+        up.shutdown()
+
+        # Real token in x-api-key, no scheme prefix; the placeholder is gone; and
+        # it did NOT leak into Authorization either.
+        self.assertEqual(seen["x-api-key"], "REAL-ANTHROPIC-TOKEN")
+        self.assertIsNone(seen["authorization"])
 
     def test_get_is_denied_unless_a_provider_opens_it(self):
         """A GET surface is a read of the account, not inference, so it stays

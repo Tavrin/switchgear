@@ -185,6 +185,8 @@ def run_job(
             max_calls=quotamod.max_provider_calls(),
             allowed_paths=tuple(prec.get("allowed_paths") or ()) or None,
             allowed_get_paths=tuple(prec.get("allowed_get_paths") or ()) or None,
+            auth_header=prec.get("auth_header") or "authorization",
+            auth_scheme=prec.get("auth_scheme", "Bearer"),
         ) as bk:
             return _execute(bk)
 

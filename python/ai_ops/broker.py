@@ -51,8 +51,13 @@ _DROP_HEADERS = frozenset({
     "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length",
     # urllib does not transparently decode content-encoding, so ask for identity.
     "accept-encoding",
-    # replaced with the real credential
-    "authorization",
+    # both auth headers are stripped: the broker re-adds exactly one, in the
+    # scheme the upstream expects. x-api-key matters because an Anthropic-shaped
+    # client (Claude Code) authenticates with it, not with Authorization -- so a
+    # broker that only rewrote Authorization would forward the sandbox's
+    # PLACEHOLDER x-api-key untouched and inject the real value in a header the
+    # backend ignores.
+    "authorization", "x-api-key",
 })
 
 
@@ -68,13 +73,18 @@ def _join_path(upstream: str, path: str) -> str:
     return path
 
 
-def _forward_headers(incoming, authorization: str) -> dict:
+def _forward_headers(incoming, auth_header: str, auth_value: str) -> dict:
     """Relay the client's headers, swapping in the real credential.
 
     Forwarding matters beyond politeness: the upstream sits behind a CDN that
     rejects requests lacking the client's normal headers (notably User-Agent).
     An earlier version sent only content-type/accept and was answered with a
     Cloudflare 403 access-denied page.
+
+    `auth_header` is where the real credential goes -- "authorization" for
+    OpenAI/xAI-shaped backends, "x-api-key" for Anthropic-shaped ones. Both
+    incoming auth headers were dropped above, so exactly one leaves here and it
+    carries the real value, never the sandbox's placeholder.
     """
     out = {}
     for key in incoming.keys():
@@ -84,7 +94,7 @@ def _forward_headers(incoming, authorization: str) -> dict:
         value = incoming.get(key)
         if value is not None:
             out[low] = value
-    out["authorization"] = authorization
+    out[auth_header] = auth_value
     out.setdefault("content-type", "application/json")
     out.setdefault("accept", "application/json")
     return out
@@ -133,7 +143,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             b.upstream + _join_path(b.upstream, self.path),
             data=payload,
             method="POST",
-            headers=_forward_headers(self.headers, b.authorization()),
+            headers=_forward_headers(self.headers, b.auth_header, b.auth_value()),
         )
         try:
             with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
@@ -168,7 +178,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         req = urllib.request.Request(
             b.upstream + _join_path(b.upstream, self.path),
             method="GET",
-            headers=_forward_headers(self.headers, b.authorization()),
+            headers=_forward_headers(self.headers, b.auth_header, b.auth_value()),
         )
         try:
             with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
@@ -223,6 +233,8 @@ class CredentialBroker:
         max_calls: Optional[int] = None,
         allowed_paths: Optional[tuple[str, ...]] = None,
         allowed_get_paths: Optional[tuple[str, ...]] = None,
+        auth_header: str = "authorization",
+        auth_scheme: str = "Bearer",
     ) -> None:
         if not credential:
             raise Refuse("broker requires a credential")
@@ -243,6 +255,11 @@ class CredentialBroker:
         # legitimate traffic or be widened until it allowlists nothing.
         self.allowed_paths = tuple(allowed_paths or DEFAULT_ALLOWED_PATHS)
         self.allowed_get_paths = tuple(allowed_get_paths or DEFAULT_ALLOWED_GET_PATHS)
+        # Where and how the real credential is presented upstream. Anthropic
+        # wants `x-api-key: <token>` with no scheme; OpenAI/xAI want
+        # `authorization: Bearer <token>`.
+        self.auth_header = auth_header.lower()
+        self.auth_scheme = auth_scheme
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
         self.forwarded = 0
@@ -262,15 +279,16 @@ class CredentialBroker:
         self._srv: Optional[http.server.ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
-    def authorization(self) -> str:
-        """The Authorization header value, resolved per request.
+    def auth_value(self) -> str:
+        """The credential value for the upstream auth header, resolved per request.
 
         Per request rather than once at construction so that a credential which
         learns to refresh itself needs no change in the request path -- and so a
         long job cannot keep using a value that has since expired.
         """
         cred = self.credential
-        return cred.authorization() if hasattr(cred, "authorization") else f"Bearer {cred}"
+        token = cred.token if hasattr(cred, "token") else str(cred)
+        return f"{self.auth_scheme} {token}".strip() if self.auth_scheme else token
 
     @property
     def base_url(self) -> str:
