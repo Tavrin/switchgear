@@ -1358,6 +1358,173 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- gc: what must SURVIVE ----------------------------------------------
+
+    def _aged_job(self, job_id, age_s, status="ok", **extra):
+        """A finished job of a given age. Used to test retention without
+        waiting an hour for the cool-down floor."""
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - age_s))
+        rec = {"status": status, "role": "scout", "mode": "readonly"}
+        rec.update(extra)
+        (jd / "result.json").write_text(json.dumps(rec))
+        return jd
+
+    def _gc(self, *args):
+        p = run_cli(["--state", str(self.state), "--json", "gc", *args])
+        return p, (json.loads(p.stdout) if p.stdout.strip() else {})
+
+    def test_gc_without_a_selector_refuses_and_deletes_nothing(self):
+        self._aged_job("00000000-0000-4000-8000-00000000aa01", 90000)
+        p = run_cli(["--state", str(self.state), "gc"])
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("selector", p.stderr)
+        self.assertTrue((self.state / "jobs" / "00000000-0000-4000-8000-00000000aa01").exists())
+
+    def test_dry_run_is_the_default(self):
+        jd = self._aged_job("00000000-0000-4000-8000-00000000aa02", 90000)
+        p, out = self._gc("--older-than", "1h")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(out["dry_run"])
+        self.assertIn("00000000-0000-4000-8000-00000000aa02",
+                      [c["job_id"] for c in out["jobs"]])
+        self.assertTrue(jd.exists(), "dry run must not delete")
+
+    def test_yes_actually_deletes(self):
+        jd = self._aged_job("00000000-0000-4000-8000-00000000aa03", 90000)
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("00000000-0000-4000-8000-00000000aa03", out["removed"])
+        self.assertFalse(jd.exists())
+
+    def test_awaiting_review_is_never_removed(self):
+        """The whole point of the rail: unpromoted work must not be collected."""
+        jd = self._aged_job("00000000-0000-4000-8000-00000000aa04", 900000,
+                            status="awaiting_review")
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertTrue(jd.exists(), "awaiting_review job was deleted")
+        reasons = {x["job_id"]: x["reason"] for x in out.get("protected", [])}
+        self.assertNotIn("00000000-0000-4000-8000-00000000aa04", out.get("removed", []))
+
+    def test_an_unpromoted_review_chain_survives_whole(self):
+        """A review whose promotion has not happened is indistinguishable from a
+        free-standing one WITHOUT review_of, which is why that key is persisted
+        unconditionally. Both halves must survive."""
+        subject = "00000000-0000-4000-8000-00000000aa05"
+        reviewer = "00000000-0000-4000-8000-00000000aa06"
+        sd = self._aged_job(subject, 900000, status="awaiting_review")
+        rd = self._aged_job(reviewer, 900000, status="ok", review_of=subject)
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertTrue(sd.exists(), "subject awaiting review was deleted")
+        self.assertTrue(rd.exists(), "its pending review was deleted")
+
+    def test_liveness_unknown_is_protected(self):
+        """A missing record is never evidence of a benign state — the rule this
+        rail applies everywhere else. Deleting here would be the one place that
+        reads absence as death, on the job most likely to be mid-flight."""
+        job_id = "00000000-0000-4000-8000-00000000aa07"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 900000))
+        # No result.json, no runner.json, no launch record -> state `unknown`.
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertTrue(jd.exists(), "a job of unknown liveness was deleted")
+
+    def test_the_cooldown_floor_applies_on_top_of_the_selector(self):
+        """--older-than 1s must not mean "delete everything"."""
+        jd = self._aged_job("00000000-0000-4000-8000-00000000aa08", 60)
+        p, out = self._gc("--older-than", "1s", "--yes")
+        self.assertTrue(jd.exists(), "cool-down floor did not apply")
+
+    def test_keep_last_keeps_the_most_recent(self):
+        ids = []
+        for i in range(4):
+            jid = f"00000000-0000-4000-8000-00000000ab{i:02d}"
+            self._aged_job(jid, 90000 + (4 - i) * 1000)
+            ids.append(jid)
+        p, out = self._gc("--keep-last", "2", "--yes")
+        # ids[0] is oldest by construction; the two newest must survive.
+        self.assertTrue((self.state / "jobs" / ids[3]).exists())
+        self.assertTrue((self.state / "jobs" / ids[2]).exists())
+        self.assertFalse((self.state / "jobs" / ids[0]).exists())
+
+    def test_sessions_need_include_sessions_on_top_of_yes(self):
+        """A job directory can be recreated by re-running the job; a session
+        store is the only durable copy of a conversation."""
+        key = "f" * 64
+        sess = self.state / "sessions" / key
+        (sess / "opencode").mkdir(parents=True)
+        (sess / "worktree.json").write_text(json.dumps(
+            {"worktree": str(self.tmp / "deleted-worktree")}))
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertTrue(sess.exists(), "a bare --yes removed a session store")
+
+        p, out = self._gc("--older-than", "1h", "--yes", "--include-sessions")
+        self.assertFalse(sess.exists(), "--include-sessions did not remove it")
+
+    def test_a_session_whose_worktree_still_exists_is_kept(self):
+        key = "e" * 64
+        sess = self.state / "sessions" / key
+        (sess / "opencode").mkdir(parents=True)
+        (sess / "worktree.json").write_text(json.dumps({"worktree": str(self.primary)}))
+        p, out = self._gc("--older-than", "1h", "--yes", "--include-sessions")
+        self.assertTrue(sess.exists())
+
+    def test_an_unidentifiable_session_is_skipped_and_reported(self):
+        """Unverifiable is not absent. A store with no marker must be reported,
+        never guessed at — preferring to keep something eligible over destroying
+        something irreplaceable."""
+        key = "d" * 64
+        sess = self.state / "sessions" / key
+        (sess / "opencode").mkdir(parents=True)
+        p, out = self._gc("--older-than", "1h", "--include-sessions")
+        self.assertTrue(sess.exists())
+        self.assertIn(key, [s["key"] for s in out["sessions_skipped"]])
+
+    def test_orphaned_launch_records_are_swept(self):
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        orphan = launch / "00000000-0000-4000-8000-00000000ac01.json"
+        orphan.write_text(json.dumps({"pid": 2 ** 22, "starttime": "1", "boot_id": "x"}))
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertFalse(orphan.exists())
+
+    def test_protected_entries_explain_themselves(self):
+        """A caller who expected a job to go must be able to see which rule kept
+        it, rather than concluding gc is broken."""
+        self._aged_job("00000000-0000-4000-8000-00000000ac02", 60)
+        p, out = self._gc("--older-than", "1h")
+        self.assertTrue(out["protected"])
+        for entry in out["protected"]:
+            self.assertTrue(entry["reason"], "a protected job with no reason")
+
+    def test_reclaimed_bytes_match_du(self):
+        """Reported bytes must be what is actually reclaimed. Measured by block
+        count and never os.path.getsize, which follows symlinks — Codex symlinks
+        ~258MB of binaries into each sandbox home, and that once made a 10MB
+        state root report as 2GB."""
+        import subprocess as sp
+
+        from ai_ops.gc import _dir_bytes
+
+        jd = self._aged_job("00000000-0000-4000-8000-00000000ac03", 90000)
+        (jd / "evidence" / "events.jsonl").write_text("x" * 50000)
+        du = int(sp.run(["du", "-s", "--block-size=1", str(jd)],
+                        capture_output=True, text=True).stdout.split()[0])
+        self.assertEqual(_dir_bytes(str(jd)), du)
+
+    def test_a_symlink_is_not_counted_as_its_target(self):
+        """The measurement bug that nearly shaped the retention design."""
+        from ai_ops.gc import _dir_bytes
+
+        jd = self._aged_job("00000000-0000-4000-8000-00000000ac04", 90000)
+        big = self.tmp / "big-binary"
+        big.write_bytes(b"\0" * 2_000_000)
+        os.symlink(big, jd / "linked")
+        self.assertLess(_dir_bytes(str(jd)), 500_000,
+                        "symlink target was counted as reclaimable")
+
     # --- secret scanning of worker OUTPUT ----------------------------------
 
     def test_a_leaking_job_is_flagged_but_still_completes(self):

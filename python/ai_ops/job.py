@@ -437,6 +437,21 @@ def run_job(
         # ends -- which is why the first resume attempt failed with "No
         # conversation found with session ID".
         session_binds = []
+        if adapter.session_store_paths():
+            # Which worktree this store belongs to, recorded where retention can
+            # read it. The directory name is sha256(st_dev:st_ino:realpath), which
+            # cannot be reversed -- so without this marker `gc` could not tell an
+            # orphaned store from a live one by inspection, and would have to
+            # guess. Written once, beside the store, never inside it.
+            key_dir = os.path.join(root.path, "sessions", lease.identity_key(ident))
+            os.makedirs(key_dir, mode=0o700, exist_ok=True)
+            marker = os.path.join(key_dir, "worktree.json")
+            if not os.path.exists(marker):
+                atomic_write_json(marker, {
+                    "worktree": ident.realpath,
+                    "st_dev": ident.st_dev,
+                    "st_ino": ident.st_ino,
+                })
         for rel in adapter.session_store_paths():
             src = os.path.join(
                 root.path, "sessions", lease.identity_key(ident), adapter.name, rel

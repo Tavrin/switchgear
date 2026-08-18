@@ -795,6 +795,57 @@ def cmd_execution_profile(ns: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gc(ns: argparse.Namespace) -> int:
+    """Reclaim old jobs. Opt-in, dry-run by default, selector required.
+
+    Evidence is audit material, so nothing here is automatic and nothing happens
+    without both a selector and --yes.
+    """
+    from . import gc as gcmod
+    from .joblist import parse_duration
+
+    older = parse_duration(ns.older_than) if getattr(ns, "older_than", None) else None
+    planned = gcmod.plan(
+        _state_path(ns),
+        older_than_s=older,
+        keep_last=getattr(ns, "keep_last", None),
+        include_sessions=bool(getattr(ns, "include_sessions", False)),
+    )
+
+    if not ns.yes:
+        planned["dry_run"] = True
+        if ns.json:
+            print(json.dumps(planned, indent=2))
+        else:
+            mb = planned["bytes"] / (1024 * 1024)
+            print(f"would remove {len(planned['jobs'])} job(s), {mb:.1f}MB")
+            for c in planned["jobs"]:
+                print(f"  {c['job_id'][:8]}  {c['state']:16} age {c['age_s']}s")
+            if planned["orphan_launch_records"]:
+                print(f"  + {len(planned['orphan_launch_records'])} orphaned launch record(s)")
+            for sess in planned["sessions"]:
+                print(f"  session {sess['key'][:8]} (worktree gone: {sess['worktree']})")
+            for sk in planned["sessions_skipped"]:
+                print(f"  SKIPPED session {sk['key'][:8]}: {sk['reason']}")
+            if planned["protected"]:
+                print(f"protected ({len(planned['protected'])}):")
+                for pr in planned["protected"][:10]:
+                    print(f"  {pr['job_id'][:8]}  {pr['reason']}")
+            print("\nnothing was removed — add --yes to apply")
+        return 0
+
+    result = gcmod.apply(_state_path(ns), planned)
+    result["dry_run"] = False
+    if ns.json:
+        print(json.dumps(result, indent=2))
+    else:
+        mb = result["bytes_freed"] / (1024 * 1024)
+        print(f"removed {len(result['removed'])} job(s), freed {mb:.1f}MB")
+        for k in result["kept"]:
+            print(f"  kept {k['job_id'][:8]}: {k['reason']}")
+    return 0
+
+
 def cmd_doctor(ns: argparse.Namespace) -> int:
     """Check the install and report what to do about anything broken.
 
@@ -1149,6 +1200,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     ep = sub.add_parser("execution-profile", help="content digest of the launcher and package, for pinning")
     ep.set_defaults(func=cmd_execution_profile)
+
+    gp = sub.add_parser("gc", help="reclaim old jobs (opt-in; dry-run unless --yes)")
+    gp.add_argument("--older-than", dest="older_than",
+                    help="remove jobs older than this, e.g. 24h, 7d")
+    gp.add_argument("--keep-last", dest="keep_last", type=int,
+                    help="keep the N most recent jobs, remove the rest")
+    gp.add_argument("--yes", action="store_true",
+                    help="actually delete (without this, gc only reports)")
+    gp.add_argument("--include-sessions", dest="include_sessions", action="store_true",
+                    help="also remove session stores whose worktree is gone. Needs "
+                         "--yes as well: a job directory can be recreated by "
+                         "re-running the job, a conversation cannot")
+    gp.set_defaults(func=cmd_gc)
 
     dr = sub.add_parser("doctor", help="check this install and report how to fix what is broken")
     dr.set_defaults(func=cmd_doctor)

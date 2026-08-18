@@ -199,6 +199,36 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Retention: `gc`
+
+Nothing is ever removed unless you ask. `gc` is opt-in, reports by default, and
+needs a selector — a bare `gc` refuses rather than guessing what "clean up" meant.
+
+```
+ai-opencode --state <root> gc --older-than 7d          # report only
+ai-opencode --state <root> gc --older-than 7d --yes    # actually delete
+```
+
+Protected regardless of the selector: anything `awaiting_review`; any job whose
+process is alive (re-checked at delete time, since a job can start between the
+plan and the deletion); any review whose subject still awaits review; and any job
+whose **liveness could not be established at all**. That last one matters —
+`unknown` is not `dead`, and the rest of the rail never reads a missing record as
+a benign state.
+
+A cool-down floor (`AI_OPS_GC_MIN_AGE_S`, default 1h) applies **on top of** your
+selector, so `--older-than 1s` still does not mean "delete everything".
+
+Session stores need `--include-sessions` **in addition to** `--yes`: a job
+directory is reproducible by re-running the job, while a session store is the
+only durable copy of a conversation you may still want to `resume`. A store whose
+worktree cannot be stat'ed is reported as **skipped**, never deleted —
+unverifiable is not absent.
+
+Every protected entry carries the reason it was kept, so a caller who expected a
+job to go can see which rule kept it instead of concluding `gc` is broken. Bytes
+are measured by block count, never `os.path.getsize`, which follows symlinks.
+
 ### Secrets in worker output
 
 The rail guards credentials going **in** — the broker keeps them out of the
