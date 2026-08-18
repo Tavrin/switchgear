@@ -316,10 +316,10 @@ class ProviderProfileConsistency(unittest.TestCase):
 
         from ai_ops.compat import PINNED_PROVIDERS
 
-        claude = PINNED_PROVIDERS["claude"]["path"]
-        codex = PINNED_PROVIDERS["codex"]["path"]
-        if not (os.path.exists(claude) and os.path.exists(codex)):
-            self.skipTest("both providers not installed")
+        claude = (PINNED_PROVIDERS.get("claude") or {}).get("path")
+        codex = (PINNED_PROVIDERS.get("codex") or {}).get("path")
+        if not (claude and codex and os.path.exists(claude) and os.path.exists(codex)):
+            self.skipTest("both providers not discovered on this machine")
         prof = json.loads((ROOT / "project-profiles" / "example.json").read_text())
         prof["provider"] = "claude"
         prof["models"] = {"allow": ["claude/claude-sonnet-5"], "deny": []}
@@ -428,13 +428,23 @@ class ProviderPinning(unittest.TestCase):
     def test_every_pinned_binary_is_recognised_as_live(self):
         from ai_ops.compat import PINNED_PROVIDERS, pinned_for_path
 
+        checked = 0
         for name, rec in PINNED_PROVIDERS.items():
-            path = rec["path"]
-            if not os.path.exists(path):
-                continue  # not installed on this machine; nothing to assert
+            path = rec.get("path")
+            if not path or not os.path.exists(path):
+                continue  # not installed here; discovery reports None, not a path
             match = pinned_for_path(path)
             self.assertIsNotNone(match, f"{name} not recognised at {path}")
             self.assertEqual(match[0], name)
+            checked += 1
+            # Every registered build, not just the primary: a self-updating CLI
+            # keeps several installed, and an unrecognised real binary would be
+            # treated as a committed mock and run without the live gate.
+            for other in rec.get("paths") or []:
+                if os.path.exists(other):
+                    self.assertEqual(pinned_for_path(other)[0], name, other)
+        if checked == 0:
+            self.skipTest("no providers discovered on this machine")
 
     def test_a_symlinked_launcher_resolves_to_the_same_identity(self):
         """~/.grok/bin/grok is a symlink into ~/.grok/downloads. Comparing raw
@@ -458,9 +468,11 @@ class ProviderPinning(unittest.TestCase):
         from ai_ops.errors import Refuse
         from ai_ops.provider import resolve_provider
 
-        path = "/home/user/.grok/downloads/grok-linux-x86_64"
-        if not os.path.exists(path):
-            self.skipTest("grok not installed")
+        from ai_ops.compat import PINNED_PROVIDERS
+
+        path = (PINNED_PROVIDERS.get("grok") or {}).get("path")
+        if not path or not os.path.exists(path):
+            self.skipTest("no discovered grok install on this machine")
         old = os.environ.pop("AI_OPS_ALLOW_LIVE_PROVIDER", None)
         try:
             with self.assertRaises(Refuse) as cm:

@@ -113,10 +113,17 @@ def check_providers() -> list[dict[str, Any]]:
         installed = installed_version(binary)
         accepted = accepted_versions(name)
         if not installed:
+            from .compat import DISCOVERY, PROVIDERS_FILE
+
+            where = binary or "nowhere it was looked for"
+            looked = (DISCOVERY.get(name) or {}).get("path_globs") or []
             out.append(_check(
-                f"provider.{name}", WARN, f"not installed at {binary}",
+                f"provider.{name}", WARN, f"not installed ({where})",
                 f"install the {name} CLI, or ignore this if you do not use it — "
-                "an absent provider only blocks jobs that ask for it.",
+                "an absent provider only blocks jobs that ask for it. Searched: "
+                + (", ".join(str(g) for g in looked) or "no discovery rule") +
+                f". If it lives somewhere else, name the path in {PROVIDERS_FILE} "
+                'as {"' + name + '": {"path": "/abs/path", "version": "x.y.z"}}.',
             ))
         elif version_token(installed) in accepted:
             out.append(_check(f"provider.{name}", PASS, f"{installed} (accepted)"))

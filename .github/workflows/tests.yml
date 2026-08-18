@@ -1,0 +1,48 @@
+name: tests
+
+# The suite was run by hand until now, which for a tool whose product IS its
+# guarantees is the same class of defect as the ones it exists to catch. Runs on
+# every push and PR, on a machine that is by definition not the author's.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  hermetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bubblewrap
+        # The containment backend. There is no unsandboxed fallback, so without
+        # this the suite cannot run at all -- which is the correct behaviour.
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Show environment
+        run: |
+          /usr/bin/python3 --version
+          /usr/bin/bwrap --version
+
+      - name: Run the hermetic + adversarial suite
+        # No provider binaries are installed here, and none are needed: the
+        # suite runs against a committed mock. Live-provider tests skip
+        # themselves by discovery rather than by a hardcoded path.
+        env:
+          # Point the operator-owned files at paths that cannot exist, so a
+          # runner's own state can never influence a result.
+          AI_OPS_PROVIDERS_FILE: /nonexistent/providers.json
+          AI_OPS_VERIFIED_FILE: /nonexistent/verified.json
+        run: bash tests/run.sh
+
+  portability:
+    # The suite passing on the author's machine says nothing about the package
+    # working anywhere else -- absolute paths under one home directory are
+    # exactly how that breaks, and how it broke here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No machine-specific paths in the package or its tests
+        run: bash tests/policy/test_no_machine_paths.sh

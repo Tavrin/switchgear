@@ -9,8 +9,14 @@ unset OPENCODE_PERMISSION || true
 echo "== schema =="
 /usr/bin/python3 "$ROOT/tests/schema/test_schemas.py"
 
+echo "== machine-path gate =="
+bash "$ROOT/tests/policy/test_no_machine_paths.sh"
+
 echo "== noun gate =="
 bash "$ROOT/tests/policy/test_no_project_nouns.sh"
+
+echo "== provider discovery (no hardcoded installs) =="
+/usr/bin/python3 "$ROOT/tests/test_discovery.py"
 
 echo "== adversarial (absolute mock) =="
 /usr/bin/python3 "$ROOT/tests/test_adversarial.py"

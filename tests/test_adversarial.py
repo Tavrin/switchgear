@@ -129,9 +129,14 @@ class RailTests(unittest.TestCase):
         self.assertIn("missing", p.stderr)
 
     def test_live_provider_refused_without_allow(self):
-        live = "/home/user/.opencode/bin/opencode"
-        if not os.path.isfile(live):
-            self.skipTest("live opencode absent")
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.compat import PINNED_PROVIDERS
+
+        # Discovered, never hardcoded: this suite has to pass on a machine that
+        # is not the author's, which is the whole point of CI.
+        live = (PINNED_PROVIDERS.get("opencode") or {}).get("path")
+        if not live or not os.path.isfile(live):
+            self.skipTest("no discovered opencode install on this machine")
         p = run_cli(
             [
                 "--profile",

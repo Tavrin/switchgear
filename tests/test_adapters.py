@@ -427,10 +427,11 @@ class CodexRealStream(unittest.TestCase):
         while reporting "the workspace execution tool is unavailable"."""
         import os as _os
 
-        real = ("/home/user/.nvm/versions/node/v22.22.0/lib/node_modules/@openai/codex/"
-                "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex")
-        if not _os.path.exists(real):
-            self.skipTest("codex not installed")
+        from ai_ops.compat import PINNED_PROVIDERS
+
+        real = (PINNED_PROVIDERS.get("codex") or {}).get("path")
+        if not real or not _os.path.exists(real):
+            self.skipTest("no discovered codex install on this machine")
         binds = self.adapter.extra_binds([real])
         self.assertTrue(binds)
         self.assertTrue(_os.path.isdir(_os.path.join(binds[0], "bin")))

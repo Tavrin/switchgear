@@ -133,9 +133,33 @@ A complete minimal adapter is about 25 lines; there is a working one in
 
 ### 3. `python/ai_ops/compat.py` — the pin
 
-A `PINNED_PROVIDERS[name] = {"path": <abs interpreter-free binary>, "version":
-<tested string>}`. Never the PATH entry if it is a shim: the `codex` on PATH is
-`#!/usr/bin/env node` and dies in the sandbox; pin the vendored static binary.
+A `DISCOVERY[name]` entry: `path_globs` (where the interpreter-free binary lives,
+as globs expanded against the user's home), optional `launcher_globs`, and the
+tested `version`.
+
+**Globs, never absolute paths.** This table held six paths under one home
+directory and the package therefore worked on exactly one machine — fatal for
+distribution and for CI. These CLIs also version their install directories
+(`~/.local/share/claude/versions/<v>`, `~/.nvm/versions/node/<v>/...`), so a
+fixed path is a pin on today.
+
+Never the PATH entry if it is a shim: the `codex` on PATH is `#!/usr/bin/env
+node` and dies in the sandbox; pin the vendored static binary.
+
+**Every match is registered, not just the newest.** `pinned_for_path` decides
+whether an executable is a live provider, and an unrecognised real binary is
+classified as a committed mock — fail-closed for credentials, but it would run a
+real agent without the live gate. Two installed versions is the normal state of a
+self-updating CLI.
+
+An operator whose install is somewhere else names it in
+`~/.config/ai-ops/providers.json` (`AI_OPS_PROVIDERS_FILE` overrides), which wins
+over discovery:
+
+```json
+{"claude": {"path": "/opt/claude/bin/claude", "version": "2.1.240"}}
+```
+
 An absent pin refuses to run live — "no pin" never means "no constraint".
 
 ## Before writing any of it: two free probes

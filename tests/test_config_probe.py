@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ConfigProbe(unittest.TestCase):
     def test_pinned_version_or_skip(self):
-        if not os.path.isfile(PINNED_BINARY):
-            self.skipTest("live OpenCode not installed")
+        if not PINNED_BINARY or not os.path.isfile(PINNED_BINARY):
+            self.skipTest("no discovered OpenCode install on this machine")
         proc = subprocess.run([PINNED_BINARY, "--version"], capture_output=True, text=True)
         ver = (proc.stdout or "").strip().splitlines()[-1].strip()
         self.assertEqual(ver, PINNED_OPENCODE)
@@ -40,8 +40,8 @@ class ConfigProbe(unittest.TestCase):
             self.assertTrue(env["OPENCODE_CONFIG"].startswith(td))
 
     def test_opencode_models_under_isolation_no_host_permission(self):
-        if not os.path.isfile(PINNED_BINARY):
-            self.skipTest("live OpenCode not installed")
+        if not PINNED_BINARY or not os.path.isfile(PINNED_BINARY):
+            self.skipTest("no discovered OpenCode install on this machine")
         require_bwrap()
         with tempfile.TemporaryDirectory() as td:
             runtime = {"tools": {"bash": False}, "permission": {"bash": "deny"}}
