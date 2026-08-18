@@ -227,5 +227,71 @@ class BrokerUsesTheCredential(unittest.TestCase):
             self.assertEqual(get(bk, "/v1/account"), 403)
 
 
+class ProviderPinning(unittest.TestCase):
+    """A second real binary must not be mistaken for a committed mock."""
+
+    def test_every_pinned_binary_is_recognised_as_live(self):
+        from ai_ops.compat import PINNED_PROVIDERS, pinned_for_path
+
+        for name, rec in PINNED_PROVIDERS.items():
+            path = rec["path"]
+            if not os.path.exists(path):
+                continue  # not installed on this machine; nothing to assert
+            match = pinned_for_path(path)
+            self.assertIsNotNone(match, f"{name} not recognised at {path}")
+            self.assertEqual(match[0], name)
+
+    def test_a_symlinked_launcher_resolves_to_the_same_identity(self):
+        """~/.grok/bin/grok is a symlink into ~/.grok/downloads. Comparing raw
+        paths would classify the launcher as an unpinned binary, i.e. a mock."""
+        from ai_ops.compat import pinned_for_path
+
+        link = os.path.expanduser("~/.grok/bin/grok")
+        if not os.path.exists(link):
+            self.skipTest("grok not installed")
+        self.assertEqual(pinned_for_path(link)[0], "grok")
+
+    def test_a_pinned_binary_still_needs_the_live_gate(self):
+        """The wart this replaced: resolve_provider compared against the ONE
+        OpenCode pin, so any other real agent CLI classified as a mock and ran
+        with neither the live gate nor a broker."""
+        from ai_ops.errors import Refuse
+        from ai_ops.provider import resolve_provider
+
+        path = "/home/user/.grok/downloads/grok-linux-x86_64"
+        if not os.path.exists(path):
+            self.skipTest("grok not installed")
+        old = os.environ.pop("AI_OPS_ALLOW_LIVE_PROVIDER", None)
+        try:
+            with self.assertRaises(Refuse) as cm:
+                resolve_provider(path)
+            self.assertIn("grok", str(cm.exception))
+        finally:
+            if old is not None:
+                os.environ["AI_OPS_ALLOW_LIVE_PROVIDER"] = old
+
+    def test_version_pins_are_per_provider_and_substring_matched(self):
+        """OpenCode prints a bare `1.18.18`; Grok prints
+        `grok 1.0.4 (d846eb93d9) [stable]`. Equality would reject Grok outright."""
+        from ai_ops.errors import Refuse
+        from ai_ops.provider import assert_pinned_version
+
+        self.assertTrue(assert_pinned_version(0, b"1.18.18", False, "opencode"))
+        self.assertTrue(
+            assert_pinned_version(0, b"grok 1.0.4 (d846eb93d9) [stable]", False, "grok")
+        )
+        with self.assertRaises(Refuse):
+            assert_pinned_version(0, b"grok 9.9.9", False, "grok")
+
+    def test_an_unpinned_provider_refuses_rather_than_passing(self):
+        """An absent pin must not read as 'no constraint'."""
+        from ai_ops.errors import Refuse
+        from ai_ops.provider import assert_pinned_version
+
+        with self.assertRaises(Refuse) as cm:
+            assert_pinned_version(0, b"anything", False, "codex")
+        self.assertIn("no pinned version", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

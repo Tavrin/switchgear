@@ -284,7 +284,9 @@ def run_job(
                 env=env,
                 timeout_s=30,
             )
-            provider.assert_pinned_version(probe.returncode, probe.stdout, probe.timed_out)
+            provider.assert_pinned_version(
+                probe.returncode, probe.stdout, probe.timed_out, adapter.name
+            )
         bwrap_argv = sandbox.build_bwrap_argv(
             ident=ident,
             policy=policy,

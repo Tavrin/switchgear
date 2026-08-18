@@ -10,7 +10,13 @@ from .paths import reject_symlinks
 
 
 def resolve_provider(explicit: str | None) -> tuple[list[str], bool]:
-    """Return (argv, is_live). Never PATH-lookup."""
+    """Return (argv, is_live). Never PATH-lookup.
+
+    "Live" means: this executable IS one of the pinned provider binaries. It used
+    to mean "is it the pinned OpenCode binary", which classified every other real
+    agent CLI as a committed mock -- fail-closed for credentials, but it would
+    have run a real agent without the live gate and without a broker.
+    """
     allow_live = os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1"
     path = explicit or os.environ.get("AI_OPS_PROVIDER")
     if not path:
@@ -20,10 +26,16 @@ def resolve_provider(explicit: str | None) -> tuple[list[str], bool]:
     path = reject_symlinks(path, "provider") if os.path.exists(path) else path
     if not os.path.isfile(path) or not os.access(path, os.X_OK):
         raise Refuse(f"provider is missing or not executable: {path}")
-    is_live = os.path.realpath(path) == os.path.realpath(PINNED_BINARY)
+    from .compat import pinned_for_path
+
+    match = pinned_for_path(path)
+    is_live = match is not None
     if is_live:
+        name, _rec = match
         if not allow_live:
-            raise Refuse("refusing live OpenCode without AI_OPS_ALLOW_LIVE_PROVIDER=1")
+            raise Refuse(
+                f"refusing live provider {name} without AI_OPS_ALLOW_LIVE_PROVIDER=1"
+            )
         # The version check deliberately does NOT run here: executing the
         # provider on the host to ask its version hands a hostile binary
         # controller-side execution with the full inherited environment, before
@@ -35,9 +47,17 @@ def resolve_provider(explicit: str | None) -> tuple[list[str], bool]:
     return [path], False
 
 
-def assert_pinned_version(returncode: int, stdout: bytes, timed_out: bool) -> str:
-    """Validate `--version` output captured from inside the sandbox."""
-    from .compat import PINNED_OPENCODE
+def assert_pinned_version(
+    returncode: int, stdout: bytes, timed_out: bool, provider: str = "opencode"
+) -> str:
+    """Validate `--version` output captured from inside the sandbox.
+
+    Each provider prints its version its own way: OpenCode emits a bare
+    `1.18.18`, Grok emits `grok 1.0.4 (d846eb93d9) [stable]`. So the pinned
+    version must be FOUND in the output rather than equal to it -- while still
+    being a real check, which is why an absent pin refuses instead of passing.
+    """
+    from .compat import PINNED_PROVIDERS
 
     if timed_out:
         raise Refuse("provider version probe timed out")
@@ -46,8 +66,13 @@ def assert_pinned_version(returncode: int, stdout: bytes, timed_out: bool) -> st
     text = stdout.decode("utf-8", "replace").strip()
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     ver = lines[-1] if lines else ""
-    if ver != PINNED_OPENCODE:
-        raise Refuse(f"OpenCode version {ver!r} is outside the tested contract {PINNED_OPENCODE}")
+    want = (PINNED_PROVIDERS.get(provider) or {}).get("version")
+    if not want:
+        raise Refuse(f"no pinned version for provider {provider!r}; refusing to run it live")
+    if want not in ver:
+        raise Refuse(
+            f"{provider} version {ver!r} is outside the tested contract {want}"
+        )
     return ver
 
 
