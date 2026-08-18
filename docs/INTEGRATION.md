@@ -161,11 +161,18 @@ a resume finds nothing and the CLI answers "No conversation found with session
 ID". Only the paths an adapter names are persisted, never the whole provider
 config directory, which is where credentials live.
 
-Resume is refused, rather than faked, for a provider whose conversation-store
-location has not been measured — resuming without it would start a fresh
-conversation wearing the previous session's id. Measured today: Claude Code and
-Codex. Not yet: Grok and OpenCode. Note also that Grok emits its session id only
-in its terminal event, so a Grok job that dies mid-run has nothing to resume.
+All four providers are measured and resume live: Claude
+(`~/.claude/projects`), Codex (`~/.codex/sessions`), Grok (`~/.grok/sessions`),
+OpenCode (`~/.local/share/opencode`). A provider whose store is undeclared is
+REFUSED rather than faked — resuming without it would start a fresh conversation
+wearing the previous session's id.
+
+Two constraints worth knowing. Grok emits its session id only in its terminal
+event, so a Grok job that dies mid-run has nothing to resume from — a stream
+property, not a storage one. And some stores are credential-ADJACENT on the host
+(OpenCode keeps `auth.json` in the same data directory as its session database),
+so the rail refuses to bind a session store containing anything
+credential-shaped.
 
 ### Background jobs
 

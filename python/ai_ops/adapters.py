@@ -134,10 +134,16 @@ class OpenCodeAdapter:
         provider; an empty list means resume is refused for it rather than
         silently starting a fresh conversation dressed as a continuation.
 
-        Not yet measured for OpenCode, so resume is refused rather than
-        silently starting a fresh conversation that looks like a continuation.
+        Measured: sessions live in a SQLite db at
+        ~/.local/share/opencode/opencode.db (plus -wal/-shm and snapshot/).
+
+        NOTE this directory is credential-ADJACENT: on the host it also holds
+        auth.json. Our sandbox never has a real OpenCode credential (full tier,
+        placeholder only), and job.py additionally refuses to bind a session
+        store that contains anything credential-shaped -- a guard, because
+        "it cannot happen today" is not a property, it is an observation.
         """
-        return []
+        return [".local/share/opencode"]
 
     def argv(
         self,
@@ -376,10 +382,14 @@ class GrokAdapter:
         provider; an empty list means resume is refused for it rather than
         silently starting a fresh conversation dressed as a continuation.
 
-        Not yet measured for Grok, and its session id only exists in the
-        terminal event anyway, so resume is refused rather than faked.
+        Measured: ~/.grok/sessions/<url-encoded-cwd>/<session-id>/. Narrow on
+        purpose -- ~/.grok also holds auth.json, which must never be persisted.
+
+        Its session id still only appears in the TERMINAL event, so a Grok job
+        that dies mid-run remains unresumable; that is a stream property, not a
+        storage one.
         """
-        return []
+        return [".grok/sessions"]
 
     def argv(
         self,

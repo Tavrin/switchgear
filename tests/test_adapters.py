@@ -666,14 +666,43 @@ class ResumeContract(unittest.TestCase):
             self.assertNotIn("--session", argv, name)
             self.assertNotIn("resume", argv[1:3], name)
 
-    def test_session_stores_are_declared_only_where_measured(self):
-        """An empty list means resume is REFUSED for that provider. Guessing the
-        path would produce a fresh conversation wearing the previous session's
-        id -- a continuation in name only."""
+    def test_session_stores_are_measured_per_provider(self):
+        """Each path was observed in a real sandbox HOME, not guessed. An empty
+        list means resume is REFUSED for that provider, because guessing would
+        produce a fresh conversation wearing the previous session's id -- a
+        continuation in name only."""
         self.assertIn(".claude/projects", get_adapter("claude").session_store_paths())
         self.assertIn(".codex/sessions", get_adapter("codex").session_store_paths())
-        self.assertEqual(get_adapter("grok").session_store_paths(), [])
-        self.assertEqual(get_adapter("opencode").session_store_paths(), [])
+        self.assertIn(".grok/sessions", get_adapter("grok").session_store_paths())
+        self.assertIn(".local/share/opencode", get_adapter("opencode").session_store_paths())
+
+    def test_grok_persists_only_sessions_not_its_whole_config_dir(self):
+        """~/.grok holds auth.json beside sessions/. Persisting the parent would
+        persist the credential -- the fallback tier writes a real access token
+        there."""
+        paths = get_adapter("grok").session_store_paths()
+        self.assertNotIn(".grok", paths)
+        self.assertTrue(all(p.startswith(".grok/") for p in paths))
+
+    def test_a_credential_in_a_session_store_is_refused(self):
+        """Some stores sit beside a credential on the host (OpenCode keeps
+        auth.json in the same data dir as its session db). Nothing can write one
+        there today -- which is an observation about the current configuration,
+        not a property of it."""
+        import tempfile
+
+        from ai_ops.errors import Refuse
+        from ai_ops.job import _assert_no_credentials
+
+        store = Path(tempfile.mkdtemp(prefix="store-"))
+        (store / "sessions").mkdir()
+        (store / "sessions" / "history.jsonl").write_text("{}\n")
+        _assert_no_credentials(str(store))  # clean store: fine
+
+        (store / "sessions" / "auth.json").write_text("{}")
+        with self.assertRaises(Refuse) as cm:
+            _assert_no_credentials(str(store))
+        self.assertIn("looks like a credential", str(cm.exception))
 
     def test_session_stores_never_include_the_credential_directory(self):
         """Persisting conversation state must not persist credentials: only the

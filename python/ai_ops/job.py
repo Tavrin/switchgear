@@ -71,6 +71,32 @@ def _reclaim_sandbox_home(home: str) -> None:
     shutil.rmtree(home, ignore_errors=True)
 
 
+CREDENTIAL_NAMES = ("auth.json", "credentials.json", ".credentials.json", "token.json")
+CREDENTIAL_SUFFIXES = (".key", ".pem")
+
+
+def _assert_no_credentials(store: str) -> None:
+    """Refuse to persist a session store that has collected a credential.
+
+    Session stores are chosen narrowly, but some sit right beside a credential
+    on the host -- OpenCode keeps auth.json in the same data directory as its
+    session database. Today our sandbox never holds a real credential for those
+    providers, so nothing can be written; that is an observation about the
+    current configuration, not a property of it. This turns a silent future leak
+    into a loud refusal.
+    """
+    for base, _dirs, files in os.walk(store):
+        for name in files:
+            low = name.lower()
+            if low in CREDENTIAL_NAMES or low.endswith(CREDENTIAL_SUFFIXES):
+                raise Refuse(
+                    f"refusing to persist session state: {os.path.join(base, name)} "
+                    "looks like a credential. A session store must hold conversation "
+                    "history only; delete it and narrow the adapter's "
+                    "session_store_paths()."
+                )
+
+
 def run_job(
     *,
     profile_path: str,
@@ -349,6 +375,7 @@ def run_job(
                 root.path, "sessions", lease.identity_key(ident), adapter.name, rel
             )
             os.makedirs(src, mode=0o700, exist_ok=True)
+            _assert_no_credentials(src)
             session_binds.append((src, os.path.join(dirs["home"], rel)))
 
         bwrap_argv = sandbox.build_bwrap_argv(
