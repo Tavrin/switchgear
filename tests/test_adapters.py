@@ -274,6 +274,84 @@ class GrokRealStream(unittest.TestCase):
             self.adapter.normalize(evs)
 
 
+CLAUDE_FIXTURE = ROOT / "tests" / "fixtures" / "claude-real-scout.jsonl"
+
+
+class ClaudeRealStream(unittest.TestCase):
+    """Anchored on a stream captured 2026-08-18 from Claude Code 2.1.234 with a
+    CLEAN HOME and the OAuth token in ANTHROPIC_AUTH_TOKEN -- i.e. a recording of
+    the exact full-tier configuration this adapter runs."""
+
+    def setUp(self):
+        self.raw = CLAUDE_FIXTURE.read_text()
+        self.events, _ = parse_lenient(self.raw)
+        self.adapter = get_adapter("claude")
+
+    def test_the_fixture_still_carries_the_real_vocabulary(self):
+        types = {(e.get("type"), e.get("subtype")) for e in self.events}
+        self.assertIn(("system", "init"), types)
+        self.assertIn(("result", "success"), types)
+        self.assertIn(("assistant", None), types)
+        # session_id is snake_case and on EVERY event -- unlike Grok's sessionId
+        # which appears only in its terminal event.
+        self.assertTrue(all("session_id" in e for e in self.events))
+        # Content arrives as whole blocks, not deltas.
+        blocks = [b for e in self.events if e.get("type") == "assistant"
+                  for b in e["message"].get("content", [])]
+        self.assertTrue(any(b.get("type") == "text" for b in blocks))
+        self.assertTrue(any(b.get("type") == "thinking" for b in blocks))
+
+    def test_normalize_reads_blocks_and_result_totals(self):
+        norm = self.adapter.normalize(self.events, run_ended=True)
+        self.assertTrue(
+            [n for n in norm if n["event"] == "status"][0]["sessionId"]
+        )
+        fin = [n for n in norm if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+        self.assertEqual(fin["turns"], 3)
+        self.assertGreater(fin["costUSD"], 0)
+        self.assertGreater(fin["tokens"], 0)
+        tools = [n["name"] for n in norm if n["event"] == "tool"]
+        self.assertIn("Read", tools)
+
+    def test_thinking_blocks_never_reach_the_digest(self):
+        norm = self.adapter.normalize(self.events, run_ended=True)
+        blob = json.dumps(norm)
+        for e in self.events:
+            if e.get("type") != "assistant":
+                continue
+            for b in e["message"].get("content", []):
+                if b.get("type") == "thinking" and len(b.get("thinking") or "") > 8:
+                    self.assertNotIn(b["thinking"], blob)
+
+    def test_is_error_result_is_reported_failed(self):
+        """`is_error` is an explicit flag; it must not be inferred or ignored."""
+        evs = [dict(e) for e in self.events]
+        for e in evs:
+            if e.get("type") == "result":
+                e["is_error"] = True
+                e["result"] = "the model hit an execution error"
+        fin = [n for n in self.adapter.normalize(evs, run_ended=True)
+               if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_FAILED)
+        self.assertIn("execution error", fin["exitSummary"])
+
+    def test_truncated_claude_stream_never_reports_completed(self):
+        cut = [e for e in self.events if e.get("type") != "result"]
+        fin = [n for n in self.adapter.normalize(cut, run_ended=True)
+               if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_FAILED)
+
+    def test_claude_is_full_tier_and_uses_the_oauth_header(self):
+        """ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer. ANTHROPIC_API_KEY would
+        select the BYOK x-api-key path instead (measured)."""
+        self.assertFalse(getattr(self.adapter, "credential_in_sandbox", False))
+        env = self.adapter.isolation_env("/tmp/h", {}, "http://127.0.0.1:8099")
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "broker-placeholder-not-a-credential")
+        self.assertIn("ANTHROPIC_BASE_URL", env)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+
+
 class ExecutionPinning(unittest.TestCase):
     """Content pin, not path pin (atelier ATT-006, owner ruling)."""
 

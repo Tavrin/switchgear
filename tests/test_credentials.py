@@ -258,6 +258,23 @@ class BrokerUsesTheCredential(unittest.TestCase):
         self.assertEqual(seen["x-api-key"], "REAL-ANTHROPIC-TOKEN")
         self.assertIsNone(seen["authorization"])
 
+    def test_path_allowlist_ignores_the_query_string(self):
+        """Measured: Claude Code posts to `/v1/messages?beta=true`.
+
+        An allowlist written the obvious way (endswith "/v1/messages") is False
+        for that, so every request from an otherwise-correct provider would be
+        denied -- fail-closed for a reason nobody could see. The matcher compares
+        the path component only.
+        """
+        from ai_ops.broker import _path_allowed
+
+        self.assertTrue(_path_allowed("/v1/messages?beta=true", ("/v1/messages",)))
+        self.assertTrue(_path_allowed("/v1/messages", ("/v1/messages",)))
+        self.assertTrue(_path_allowed("/v1/chat/completions?x=1", ("/chat/completions",)))
+        # Still a real allowlist: a query string cannot be used to sneak past it.
+        self.assertFalse(_path_allowed("/v1/admin?path=/v1/messages", ("/v1/messages",)))
+        self.assertFalse(_path_allowed("/v1/embeddings", ("/v1/messages",)))
+
     def test_get_is_denied_unless_a_provider_opens_it(self):
         """A GET surface is a read of the account, not inference, so it stays
         shut by default. Grok needs GET /models before it will infer at all."""

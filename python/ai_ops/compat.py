@@ -24,6 +24,13 @@ PINNED_PROVIDERS: dict[str, dict[str, str | None]] = {
         "path": "/home/user/.opencode/bin/opencode",
         "version": "1.18.18",
     },
+    "claude": {
+        # The real ELF, not the ~/.local/bin/claude symlink -- pinned by content
+        # location so a version bump repoints the symlink and is CAUGHT rather
+        # than silently followed.
+        "path": "/home/user/.local/share/claude/versions/2.1.234",
+        "version": "2.1.234",
+    },
     "grok": {
         # The launcher symlinks into ~/.grok/downloads; the real file is pinned
         # so an update that repoints the symlink is caught rather than followed.

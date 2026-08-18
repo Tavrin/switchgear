@@ -73,6 +73,19 @@ def _join_path(upstream: str, path: str) -> str:
     return path
 
 
+def _path_allowed(request_path: str, allowed: tuple[str, ...]) -> bool:
+    """Match the PATH component only, ignoring any query string.
+
+    Measured: Claude Code posts to `/v1/messages?beta=true`. A plain
+    `endswith("/v1/messages")` is False for that, so an allowlist written the
+    obvious way denies every single request from an otherwise-correct provider.
+    Splitting on "?" first is the difference between a working lane and one that
+    fails closed for a reason nobody can see.
+    """
+    path = request_path.split("?", 1)[0]
+    return any(path.endswith(p) for p in allowed)
+
+
 def _forward_headers(incoming, auth_header: str, auth_value: str) -> dict:
     """Relay the client's headers, swapping in the real credential.
 
@@ -122,7 +135,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         b = self.broker
         # Only the chat-completions surface is proxied; anything else the
         # provider tries to reach through the broker is refused.
-        if not any(self.path.endswith(p) for p in b.allowed_paths):
+        if not _path_allowed(self.path, b.allowed_paths):
             self._deny(403, f"path not allowed: {self.path}")
             return
         if b.max_calls is not None and b.attempts >= b.max_calls:
@@ -194,7 +207,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         b = self.broker
-        if not any(self.path.endswith(p) for p in b.allowed_get_paths):
+        if not _path_allowed(self.path, b.allowed_get_paths):
             self._deny(403, f"GET not proxied: {self.path}")
             return
         if b.max_calls is not None and b.attempts >= b.max_calls:

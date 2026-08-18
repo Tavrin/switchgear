@@ -46,7 +46,8 @@
       "allowed_paths": [
         "/v1/messages"
       ],
-      "_note": "Claude subscription (OAuth) path uses Authorization: Bearer, set via ANTHROPIC_AUTH_TOKEN. No adapter/pin yet -> cannot run live."
+      "credential_tier": "full",
+      "_note": "Claude subscription OAuth. Token goes in ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer (measured); ANTHROPIC_API_KEY would select the BYOK x-api-key path instead. Claude posts to /v1/messages?beta=true, so the broker matches the path component and ignores the query."
     }
   },
   "models": {
@@ -124,6 +125,16 @@
       "provider": "grok",
       "model_family": "grok",
       "vendor_family": "xai"
+    },
+    "claude/claude-sonnet-5": {
+      "provider": "claude",
+      "model_family": "claude",
+      "vendor_family": "anthropic"
+    },
+    "claude/claude-opus-5": {
+      "provider": "claude",
+      "model_family": "claude",
+      "vendor_family": "anthropic"
     }
   },
   "deny": [

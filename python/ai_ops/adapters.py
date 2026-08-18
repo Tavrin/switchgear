@@ -476,6 +476,199 @@ def _grok_tool_target(ev: dict[str, Any]) -> str:
     return ""
 
 
+class ClaudeCodeAdapter:
+    """Claude Code 2.1.x, headless (`-p --output-format stream-json --verbose`).
+
+    Read off a real captured stream (tests/fixtures/claude-real-scout.jsonl),
+    captured with a CLEAN HOME and the OAuth access token supplied via
+    ANTHROPIC_AUTH_TOKEN -- i.e. exactly the full-tier shape this adapter uses,
+    so the fixture is a recording of the real configuration, not an approximation.
+
+    Measured shapes:
+      system/init          {session_id, cwd, tools[...]}
+      assistant            {message:{content:[{type:thinking|text|tool_use,...}]}}
+      user                 {message:{content:[{type:tool_result,...}]}}
+      result/success       {session_id,num_turns,total_cost_usd,usage{...},
+                            stop_reason,is_error,result}
+      rate_limit_event     {rate_limit_info{status,resetsAt,rateLimitType,...}}
+
+    Differences from every other adapter, each of which would break a
+    doc-written normalizer:
+
+    - `session_id` is on EVERY event (snake_case), unlike Grok's `sessionId`
+      which appears only in its terminal event.
+    - Text is NOT deltas: an `assistant` event carries whole content blocks. The
+      answer is the last `text` block, and `thinking` blocks sit beside it in the
+      same array -- they must be skipped, not concatenated.
+    - Cost and turns arrive pre-totalled on `result` (`total_cost_usd`,
+      `num_turns`), and `is_error` is an explicit success flag rather than
+      something to infer.
+    """
+
+    name = "claude"
+    # Full tier: token via ANTHROPIC_AUTH_TOKEN, broker holds the real value.
+    # Proven: a clean HOME with no credentials file runs fine on an env token.
+    credential_in_sandbox = False
+
+    def argv(
+        self,
+        *,
+        provider_argv: list[str],
+        worktree: str,
+        model_id: str,
+        agent: str,
+        role: str,
+        job_id: str,
+        prompt: str,
+    ) -> list[str]:
+        # No --dir: build_bwrap_argv --chdir's to the worktree. --verbose is
+        # REQUIRED for stream-json (the CLI rejects the combination without it).
+        wire = model_id.split("/", 1)[1] if "/" in model_id else model_id
+        return list(provider_argv) + [
+            "-p",
+            prompt,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            wire,
+        ]
+
+    def version_argv(self, provider_argv: list[str]) -> list[str]:
+        return list(provider_argv) + ["--version"]
+
+    def agent_name(self, mode: str) -> str:
+        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+
+    def isolation_env(
+        self, synth_home: str, runtime: dict[str, Any], broker_base_url: str | None = None
+    ) -> dict[str, str]:
+        """Synthetic HOME does the isolating; the broker redirect is the only env.
+
+        Measured inside the real sandbox: ~/.claude, ~/.claude.json AND
+        /etc/claude-code (managed policy) are all ENOENT, so no host CLAUDE.md,
+        settings, hooks, MCP servers or plugins can reach the job.
+        """
+        from .env import allowlisted_env, assert_no_host_secrets
+
+        extra: dict[str, str] = {}
+        if broker_base_url:
+            extra["ANTHROPIC_BASE_URL"] = broker_base_url.rstrip("/")
+            # The OAuth path: this becomes `Authorization: Bearer <value>`.
+            # ANTHROPIC_API_KEY would instead select the BYOK path and send
+            # x-api-key -- measured, and the reason the broker has a per-provider
+            # auth header at all.
+            extra["ANTHROPIC_AUTH_TOKEN"] = "broker-placeholder-not-a-credential"
+        env = allowlisted_env(home=synth_home, extra=extra)
+        assert_no_host_secrets(env)
+        return env
+
+    def broker_runtime(self, runtime: dict[str, Any], base_url: str, model_id: str):
+        """Redirected by ENVIRONMENT; the runtime dict is not used."""
+        return runtime
+
+    def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
+        for ev in events:
+            sid = ev.get("session_id")
+            if isinstance(sid, str) and sid:
+                return sid
+        return None
+
+    def normalize(
+        self, events: Iterable[dict[str, Any]], *, run_ended: bool = False
+    ) -> list[dict[str, Any]]:
+        events = list(events)
+        out: list[dict[str, Any]] = []
+        sid = self.session_id(events)
+        if sid:
+            out.append({"event": "status", "sessionId": sid})
+
+        last_text = ""
+        result_ev: dict[str, Any] | None = None
+        errored: str | None = None
+
+        for ev in events:
+            ty = ev.get("type")
+            if ty == "assistant":
+                msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+                for block in msg.get("content") or []:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text" and block.get("text"):
+                        last_text = str(block["text"])
+                        out.append({"event": "text", "content": _clip(last_text)})
+                    elif btype == "tool_use":
+                        out.append(
+                            {
+                                "event": "tool",
+                                "name": str(block.get("name") or "?"),
+                                "target": _claude_tool_target(block),
+                            }
+                        )
+                    # `thinking` blocks are deliberately dropped: reasoning
+                    # belongs to the full stream for a human, not to a digest
+                    # that lands in a parent agent's context.
+            elif ty == "result":
+                result_ev = ev
+            elif ty == "error":
+                errored = _error_message(ev)
+
+        failure = None
+        if result_ev is not None:
+            if result_ev.get("is_error"):
+                failure = str(
+                    result_ev.get("result") or result_ev.get("subtype") or "provider reported error"
+                )
+            usage = result_ev.get("usage") if isinstance(result_ev.get("usage"), dict) else {}
+            counters = {
+                "turns": int(_num(result_ev.get("num_turns"))),
+                "costUSD": round(_num(result_ev.get("total_cost_usd")), 8),
+                "tokens": int(
+                    _num(usage.get("input_tokens"))
+                    + _num(usage.get("output_tokens"))
+                    + _num(usage.get("cache_read_input_tokens"))
+                    + _num(usage.get("cache_creation_input_tokens"))
+                ),
+            }
+        else:
+            counters = {"turns": 0, "costUSD": 0.0, "tokens": 0}
+
+        out.extend(
+            _finish_events(
+                counters,
+                saw_terminal=result_ev is not None,
+                run_ended=run_ended,
+                errored=errored,
+                last_text=last_text,
+                failure=failure,
+            )
+        )
+        return out
+
+    def validate_result(self, raw: bytes, *, require_handoff: bool):
+        if require_handoff:
+            return None, "claude bounded-write is not supported yet (readonly roles only)"
+        parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
+        fin = next(
+            (n for n in self.normalize(parsed, run_ended=True) if n["event"] == "finished"), None
+        )
+        if fin is None:
+            return None, "no terminal provider event"
+        if fin["status"] == TERMINAL_FAILED:
+            return None, fin.get("exitSummary") or "provider run failed"
+        return None, None
+
+
+def _claude_tool_target(block: dict[str, Any]) -> str:
+    args = block.get("input") if isinstance(block.get("input"), dict) else {}
+    for key in ("file_path", "path", "pattern", "command", "query", "url", "prompt"):
+        val = args.get(key)
+        if isinstance(val, str) and val:
+            return _clip(val, 200)
+    return ""
+
+
 def _finish_events(
     counters: dict[str, Any],
     *,
@@ -566,7 +759,11 @@ def _is_input_request(message: str) -> bool:
     return "permission" in low or "needs input" in low or "awaiting input" in low
 
 
-_ADAPTERS = {"opencode": OpenCodeAdapter(), "grok": GrokAdapter()}
+_ADAPTERS = {
+    "opencode": OpenCodeAdapter(),
+    "grok": GrokAdapter(),
+    "claude": ClaudeCodeAdapter(),
+}
 
 
 def get_adapter(provider: str | None):
