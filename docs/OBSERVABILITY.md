@@ -132,8 +132,17 @@ what they had to pin away for codex.
 
 > **Watch out:** `~/.local/bin/ai-opencode` is currently a symlink into the
 > working tree. The *path* is stable but its *content* changes with every edit.
-> That is deliberate for a lab tool and wrong for profile pinning. Before the
-> adapter lands, decide whether atelier pins a released copy instead.
+>
+> Atelier's ruling on this (their words): profile pinning for the agent-ops
+> adapter needs **a content digest of the launcher, not just a resolved path** —
+> "same class as the codex 'latest wins' drift we pinned away, one level
+> deeper." Pinning a path that always resolves is worthless when what it
+> resolves *to* changes underneath you.
+>
+> Two consequences. The adapter must digest the launcher (and arguably the
+> `python/ai_ops/` tree it execs). And for anything beyond lab use, install a
+> **released copy** rather than a symlink into a working tree — the convenience
+> that made today's iteration fast is precisely what breaks reproducibility.
 
 ### Event vocabulary — corrected
 
@@ -181,8 +190,9 @@ currently demand side-effect-free verify commands (`PYTHONDONTWRITEBYTECODE`,
 is an open design item, and atelier has said it would likely adopt whatever
 agent-ops settles on.
 
-Their suggested shape is "digest over tracked content only + an explicit
-side-effect allowlist". **Do not adopt the first half uncritically.** Digesting
+Their suggested shape was "digest over tracked content only + an explicit
+side-effect allowlist". **The first half was withdrawn after pushback** — see the
+ruling below. Do not reintroduce it. Digesting
 non-tracked content was earned by a live finding: a worker cannot stage, so all
 its output is untracked, and `.gitignore` is worker-writable — dropping ignored
 content re-opens hiding a payload behind it. The reconcilable version is: keep
