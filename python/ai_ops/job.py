@@ -190,12 +190,12 @@ def run_job(
 
     def _execute(bk) -> dict[str, Any]:
         runtime = policy.to_opencode_runtime()
-        if bk is not None:
-            runtime = provider.runtime_with_broker(
-                runtime,
-                f"http://127.0.0.1:{sandbox.BROKER_RELAY_PORT}",
-                model["id"],
-            )
+        broker_url = f"http://127.0.0.1:{sandbox.BROKER_RELAY_PORT}" if bk is not None else None
+        if broker_url:
+            # How a provider is redirected at the broker is provider-specific:
+            # OpenCode takes it in its config, Grok takes it in the environment.
+            # Both go through the adapter so neither leaks into the lifecycle.
+            runtime = adapter.broker_runtime(runtime, broker_url, model["id"])
         mock_beh = os.environ.get("AI_OPS_MOCK_BEHAVIOR")
         if mock_beh:
             with open(os.path.join(dirs["home"], ".mock-behavior"), "w", encoding="utf-8") as fh:
@@ -231,7 +231,7 @@ def run_job(
         provider.write_agent_definition(
             dirs["home"], agent_name, policy.agent_definition(role, attach_dir)
         )
-        env = provider.isolation_env(dirs["home"], runtime)
+        env = adapter.isolation_env(dirs["home"], runtime, broker_url)
         prov_argv, _live = provider.resolve_provider(provider_path)
         job_prompt = prompt
         if attach_dir:

@@ -85,3 +85,16 @@ def assert_no_host_secrets(env: Mapping[str, str]) -> None:
             raise Refuse(f"refusing to forward {key}")
         if key == "OPENCODE_PERMISSION":
             raise Refuse("OPENCODE_PERMISSION must never be set")
+        # Same allowlist discipline for the Grok CLI: an env surface the rail
+        # does not set deliberately is one it has not reasoned about.
+        if key.startswith("GROK_") and key not in {
+            "GROK_CLI_BASE_URL",
+            "GROK_MODELS_BASE_URL",
+            "GROK_AUTH_PROVIDER_ACCESS_TOKEN",
+            "GROK_AUTH_PROVIDER_EXPIRES_AT",
+        }:
+            raise Refuse(f"refusing to forward {key}")
+        # Never let a host token reach a sandbox by name-collision.
+        if key in {"XAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+                   "CODEX_ACCESS_TOKEN", "CODEX_API_KEY"}:
+            raise Refuse(f"refusing to forward {key}")

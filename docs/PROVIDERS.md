@@ -196,24 +196,58 @@ any boundary** — not into the sandbox, not into a child env, not into a log. I
 is the whole subscription; an access token expires in about an hour, a refresh
 token does not.
 
-### Measured per-CLI hooks (from the binaries, not docs)
+### Measured per-CLI hooks — and a correction to what I claimed
 
-Both probed CLIs carry exactly the two knobs the design needs — a backend
-redirect (point the CLI at the loopback broker) and an access-token injection
-(so no auth file exists inside at all):
+I originally read env-var NAMES out of the binaries and concluded that both the
+redirect and the token injection were available, so the full containment tier
+would extend to all three OAuth CLIs. **Half of that was wrong, and running it
+is what showed the difference.** Recording it here because inferring behaviour
+from strings in a binary is the same mistake as inferring an event vocabulary
+from documentation.
 
-| CLI | Backend redirect | Token injection |
+| CLI | Backend redirect | Placeholder credential accepted? |
 |---|---|---|
-| Grok | `GROK_CLI_BASE_URL` (also `GROK_MODELS_BASE_URL`) | `GROK_AUTH_PROVIDER_ACCESS_TOKEN` / `_EXPIRES_AT` / `_COMMAND` |
-| Codex | `chatgpt_base_url` (config) | `CODEX_ACCESS_TOKEN` (also `CODEX_API_KEY`) |
-| Claude Code | `ANTHROPIC_BASE_URL` (known surface — verify at build time) | to be probed |
+| Grok | `GROK_CLI_BASE_URL` / `GROK_MODELS_BASE_URL` — **works, measured** | **NO — measured** |
+| Codex | `chatgpt_base_url` (config) | unprobed |
+| Claude Code | `ANTHROPIC_BASE_URL` | unprobed |
 
-So the **full containment tier — credential never inside, no network namespace —
-is available for all three**, not just for API-key providers. Where some future
-CLI has no redirect knob, the recorded fallback tier is: short-lived access
-token only (refresh token stripped) inside the sandbox, network limited to a
-domain-allowlisted tunnel, and the provider marked as the weaker tier in the
-registry so `models` reports it.
+The redirect half is proven for Grok: with `GROK_CLI_BASE_URL` pointed at a
+recording server, every request went to loopback — `GET /models`,
+`POST /chat/completions`, `POST /responses`.
+
+The token half is refuted for Grok. Four separate approaches were probed against
+a signed-out HOME, and every one produced `Error: Not signed in`:
+
+1. `GROK_AUTH_PROVIDER_ACCESS_TOKEN` + `_EXPIRES_AT` — **zero** requests made.
+2. `XAI_API_KEY=<placeholder>` — it does send `Authorization: Bearer <placeholder>`
+   to `GET /models`, but still refuses even when that call is answered `200`.
+3. A synthetic `~/.grok/auth.json` carrying a placeholder — zero requests.
+4. The same with a structurally valid fake JWT (`at+jwt`/ES256 header, all twelve
+   real claim names, far-future `exp`) — zero requests.
+
+The CLI validates its session LOCALLY, before any network call, in a way a
+placeholder cannot satisfy — almost certainly a signature check against the
+issuer's key. So for Grok the full tier is not available: it cannot be handed a
+placeholder while the broker holds the real value.
+
+### What this means per provider
+
+- **API-key providers** (opencode-go, openrouter) keep the full tier: credential
+  never inside, `--unshare-net`, placeholder in the sandbox.
+- **Grok** can only reach the **fallback tier**: its real ACCESS token inside the
+  sandbox (refresh token stripped, so the subscription itself stays behind),
+  `--unshare-net` retained, and egress still limited to the one brokered upstream
+  by `GROK_CLI_BASE_URL`. Weaker than the full tier — a hostile provider could
+  read an access token good for about an hour — and much stronger than running it
+  on the host. **Not implemented: it is a deliberate posture change and needs an
+  explicit decision, not a default.**
+- **Codex and Claude Code** are unprobed on this axis. Do not assume they behave
+  like either OpenCode or Grok; probe each the same way, for free, before
+  designing around them.
+
+Current state: a live Grok job runs the sandbox, resolves the OAuth session
+controller-side, and the provider then refuses with `Not signed in` —
+fail-closed, and exactly what the measurements predict.
 
 ### What changes vs an API key, honestly
 
@@ -227,20 +261,21 @@ registry so `models` reports it.
   the operator's own interactive session. Not a security issue — a quota-
   contention one; the measured-spend ledger applies unchanged.
 
-### Remaining engineering, in order
+### Remaining engineering
 
-1. **Broker: credential classes** + per-provider `allowed_paths`/model-pin +
-   OIDC refresh. Grok first — its auth file carries everything the refresh
-   needs, and its adapter and fixture already exist.
-2. **Per-provider binary pinning.** `compat` pins only OpenCode today; a grok
-   binary handed to `resolve_provider` currently classifies as a *mock* (no
-   `AI_OPS_ALLOW_LIVE_PROVIDER` gate, no broker). Fail-closed in effect — no
-   credential ever reaches it — but the classification is wrong and must become
-   per-provider before any live Grok run.
-3. **`isolation_env` behind the adapter seam** (it writes `OPENCODE_*`
-   unconditionally today; Grok needs `GROK_*`, Codex `CODEX_HOME`).
-4. **A no-model probe through the broker per provider** — a 401 handshake
-   through the loopback proves the redirect works without spending anything.
+Done (2026-08-18): credential classes with per-provider `allowed_paths` and an
+opened-per-provider GET surface; per-provider binary pinning and version
+assertion; `isolation_env` behind the adapter seam; the free redirect probe.
+
+Open:
+
+1. **The Grok tier decision** above — access token inside the sandbox, or leave
+   Grok fail-closed until xAI offers a delegated-auth mode.
+2. **Probe Codex and Claude Code** for placeholder acceptance, the same way and
+   for free, before assuming either tier applies to them.
+3. **Controller-side refresh**, once a token endpoint is measured per provider
+   rather than written from documentation. Until then an expired session refuses
+   with an instruction to re-login, and the refresh token stays unread.
 
 ## What every new adapter must do
 

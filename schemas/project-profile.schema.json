@@ -6,7 +6,8 @@
   "additionalProperties": false,
   "properties": {
     "name": { "type": "string", "minLength": 1 },
-    "provider": { "type": "string", "enum": ["opencode"] },
+    "provider": { "type": "string", "enum": ["opencode", "grok"],
+      "description": "The provider BINARY this profile invokes (not the model pool). Adding one here is not enough: it needs an adapter in adapters.py and a pinned binary in compat.py, both of which refuse an unknown provider." },
     "timeout_s": { "type": "integer", "minimum": 1, "maximum": 1800 },
     "timeout_min": { "type": "integer", "minimum": 1 },
     "timeout_max": { "type": "integer", "maximum": 1800 },

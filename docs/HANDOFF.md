@@ -204,6 +204,15 @@ network" was true of every path anyone had run and false of one nobody had.
 
 Still open:
 
+0. **DECISION NEEDED — the Grok credential tier** (`docs/PROVIDERS.md`). The
+   broker's OAuth half is built and the redirect is proven, but Grok's CLI
+   refuses any placeholder credential: four approaches probed, all
+   `Not signed in`, three of them without making a single request. It validates
+   its session locally before any network call. So Grok can only run at the
+   FALLBACK tier -- real access token inside the sandbox, refresh token stripped,
+   --unshare-net and the brokered upstream retained. That is a deliberate posture
+   change and is NOT implemented; a live Grok job currently fails closed.
+
 1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
    confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex
    (ChatGPT account) and Claude Code (Claude account). All three OAuth CLIs

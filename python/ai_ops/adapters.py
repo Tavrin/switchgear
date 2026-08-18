@@ -134,6 +134,19 @@ class OpenCodeAdapter:
     def agent_name(self, mode: str) -> str:
         return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
 
+    def isolation_env(
+        self, synth_home: str, runtime: dict[str, Any], broker_base_url: str | None = None
+    ) -> dict[str, str]:
+        from .provider import isolation_env as opencode_isolation_env
+
+        return opencode_isolation_env(synth_home, runtime)
+
+    def broker_runtime(self, runtime: dict[str, Any], base_url: str, model_id: str):
+        """OpenCode is redirected through its CONFIG, not its environment."""
+        from .provider import runtime_with_broker
+
+        return runtime_with_broker(runtime, base_url, model_id)
+
     # A step_finish carries the reason the step ended. "stop" ends the run;
     # "tool-calls" only ends a step and more will follow.
     TERMINAL_REASONS = {"stop", "length", "content-filter"}
@@ -280,6 +293,38 @@ class GrokAdapter:
 
     def agent_name(self, mode: str) -> str:
         return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+
+    def isolation_env(
+        self, synth_home: str, runtime: dict[str, Any], broker_base_url: str | None = None
+    ) -> dict[str, str]:
+        """Grok needs no config file: the synthetic HOME alone isolates it.
+
+        Measured by probe -- host CLAUDE.md, 375 permission rules, 46 skills,
+        plugins, MCP and LSP servers all resolve to zero inside. So the only env
+        this adds is the broker redirect, and only when there is a broker.
+
+        Both knobs were confirmed by pointing GROK_CLI_BASE_URL at a recording
+        server: the CLI sent every request there, and sent an Authorization
+        header built from GROK_AUTH_PROVIDER_ACCESS_TOKEN. The token here is the
+        same placeholder every provider gets -- the broker overwrites the header
+        upstream, so the real session never enters the sandbox.
+        """
+        from .env import allowlisted_env, assert_no_host_secrets
+
+        extra: dict[str, str] = {}
+        if broker_base_url:
+            base = broker_base_url.rstrip("/")
+            extra["GROK_CLI_BASE_URL"] = base
+            extra["GROK_MODELS_BASE_URL"] = base
+            extra["GROK_AUTH_PROVIDER_ACCESS_TOKEN"] = "broker-placeholder-not-a-credential"
+        env = allowlisted_env(home=synth_home, extra=extra)
+        assert_no_host_secrets(env)
+        return env
+
+    def broker_runtime(self, runtime: dict[str, Any], base_url: str, model_id: str):
+        """Grok is redirected by ENVIRONMENT, not by config, so the runtime dict
+        is returned untouched and isolation_env does the work."""
+        return runtime
 
     def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
         for ev in events:
