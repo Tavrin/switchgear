@@ -21,6 +21,9 @@ echo "== adapters / normalized vocabulary (real captured stream) =="
 echo "== credential classes (api-key + oauth) =="
 /usr/bin/python3 "$ROOT/tests/test_credentials.py"
 
+echo "== secret scanning of worker output =="
+/usr/bin/python3 "$ROOT/tests/test_secrets.py"
+
 echo "== doctor (broken installs, not just healthy ones) =="
 /usr/bin/python3 "$ROOT/tests/test_doctor.py"
 

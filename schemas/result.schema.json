@@ -190,6 +190,29 @@
         "null"
       ],
       "description": "reasoning-effort value sent to the provider, null if none"
+    },
+    "secrets_suspected": {
+      "type": "array",
+      "description": "advisory findings: worker output matched a secret-shaped pattern. Never contains the matched value. Does not affect status.",
+      "items": {
+        "type": "object",
+        "required": [
+          "pattern",
+          "where",
+          "count"
+        ],
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "where": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      }
     }
   }
 }

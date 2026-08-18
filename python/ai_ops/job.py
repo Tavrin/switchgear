@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from typing import Any, Optional
 
@@ -646,6 +647,30 @@ def run_job(
         except Exception:
             # Accounting must never fail a job that already ran and already cost
             # money: losing the record is bad, losing the work as well is worse.
+            pass
+
+        # Does the worker's own output contain something that looks like a
+        # secret? The rail guards credentials going IN and was indifferent to
+        # what comes OUT -- and that output is read by `logs`, quoted into review
+        # prompts, and kept indefinitely.
+        #
+        # FLAG, never destroy: evidence is audit material and a rail that
+        # silently rewrites the bytes it recorded is worth less than one that
+        # records honestly and points at the problem. Status is untouched.
+        try:
+            from . import secrets as secretscan
+
+            found = secretscan.scan_files({
+                "evidence/events.jsonl": ev_path,
+                "evidence/stderr": os.path.join(dirs["evidence"], "stderr"),
+            })
+            if found:
+                record["secrets_suspected"] = found
+                print(f"ai-opencode: WARNING — {secretscan.summarize(found)}",
+                      file=sys.stderr)
+        except Exception:
+            # Advisory only. A scanner that could fail the job would turn a
+            # completed, already-paid-for run into a loss.
             pass
 
         # strip None error for schema

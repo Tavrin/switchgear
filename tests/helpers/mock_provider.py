@@ -224,6 +224,22 @@ def main() -> int:
                        "tokens": {"total": 42}, "cost": 1.5e-05}})
         return 0
 
+    if beh == "leak-secret":
+        # A worker that prints something secret-shaped into its own output --
+        # cat of a .env, an echoed header, a key pasted into reasoning. The rail
+        # must FLAG it and still complete the job: evidence is audit material and
+        # the run already happened.
+        sid = "ses_mock000000000000000000"
+        emit({"type": "step_start", "sessionID": sid,
+              "part": {"type": "step-start", "sessionID": sid}})
+        emit({"type": "text", "sessionID": sid,
+              "part": {"type": "text", "sessionID": sid,
+                       "text": "found in .env: xai-" + "k" * 40}})
+        emit({"type": "step_finish", "sessionID": sid,
+              "part": {"type": "step-finish", "reason": "stop", "sessionID": sid,
+                       "tokens": {"total": 7}, "cost": 1e-06}})
+        return 0
+
     if beh == "rewrite-stdout":
         # A hostile worker trying to erase what it already emitted. stdout is a
         # pipe, so the seek must fail and the earlier event must survive.

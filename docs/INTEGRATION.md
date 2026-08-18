@@ -199,6 +199,32 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Secrets in worker output
+
+The rail guards credentials going **in** — the broker keeps them out of the
+sandbox entirely for three of four providers. It is now also not indifferent to
+what comes **out**: a worker that cats a `.env`, echoes an `Authorization` header
+while debugging, or pastes a key into its own reasoning writes that straight into
+evidence, which `logs` reads, review prompts quote, and the state root keeps.
+
+Output is scanned after the job's record is built. A finding adds
+`secrets_suspected: [{pattern, where, count}]` to the record and one `WARNING`
+line to stderr. It does **not** change the job's status, and it never contains the
+matched value — a finding that quoted the secret would make `result.json` a
+second, more portable copy of it.
+
+**Flagged, never destroyed.** Evidence is audit material; a rail that silently
+rewrites the bytes it recorded is worth less than one that records honestly and
+points at the problem. The evidence file stays byte-identical, and a test asserts
+it.
+
+Tuned for a low false-positive rate rather than coverage, because a detector that
+fires on ordinary output is one everyone learns to ignore. Only vendor key
+prefixes, JWTs, PEM private-key headers and value-carrying auth headers match;
+bare high-entropy strings, hashes and UUIDs deliberately do not. The rail's own
+broker placeholder is excluded by name, and the committed real provider streams
+are asserted clean.
+
 ### Reasoning effort
 
 Effort is **profile-owned**, set per role, never a caller flag:

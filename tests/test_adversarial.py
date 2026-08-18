@@ -1358,6 +1358,51 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- secret scanning of worker OUTPUT ----------------------------------
+
+    def test_a_leaking_job_is_flagged_but_still_completes(self):
+        """Flag, never destroy. The run already happened and already cost money;
+        failing it would lose the work AND the evidence of the leak."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "leak-secret"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = json.loads(p.stdout)
+        job_id = rec["job_id"]
+        full = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+
+        self.assertEqual(full["status"], "ok", "a leak must not change the status")
+        found = full.get("secrets_suspected")
+        self.assertTrue(found, "leaked key was not flagged")
+        self.assertEqual(found[0]["pattern"], "xai-key")
+        self.assertIn("evidence/events.jsonl", found[0]["where"])
+        self.assertIn("WARNING", p.stderr)
+
+    def test_the_leaked_value_is_not_copied_into_the_record(self):
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "leak-secret"})
+        job_id = json.loads(p.stdout)["job_id"]
+        raw = (self.state / "jobs" / job_id / "result.json").read_text()
+        self.assertNotIn("k" * 20, raw,
+                         "result.json must not become a second copy of the secret")
+        self.assertNotIn("k" * 20, p.stderr, "the warning must not print the value")
+
+    def test_evidence_is_left_byte_intact(self):
+        """The rail records honestly and points at the problem; it never edits
+        what it recorded."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "leak-secret"})
+        job_id = json.loads(p.stdout)["job_id"]
+        ev = (self.state / "jobs" / job_id / "evidence" / "events.jsonl").read_text()
+        self.assertIn("xai-" + "k" * 40, ev,
+                      "evidence was altered; it must stay byte-intact")
+
+    def test_a_clean_job_carries_no_finding(self):
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "ok"})
+        job_id = json.loads(p.stdout)["job_id"]
+        full = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+        self.assertNotIn("secrets_suspected", full)
+
     # --- effort ------------------------------------------------------------
 
     def test_effort_from_the_profile_lands_on_the_record(self):
