@@ -279,6 +279,7 @@ def run_job(
             role=role,
             job_id=job_id,
             prompt=job_prompt,
+            attach_dir=attach_dir,
         )
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]

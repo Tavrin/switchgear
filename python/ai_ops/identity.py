@@ -473,6 +473,51 @@ def worktree_diff(ident: WorktreeIdentity, max_bytes: int | None = None) -> str:
     return text
 
 
+def untracked_diff(
+    ident: WorktreeIdentity, paths: list[str], max_bytes: int | None = None
+) -> str:
+    """Added-file diffs for NEW files, which `git diff HEAD` cannot show.
+
+    `git diff HEAD` covers tracked content only, so a file the worker CREATED
+    appears in the changed-file list with no content behind it. A live reviewer
+    caught this on a real repo: it reported that it could not verify a new
+    security-sensitive config file because no diff hunk was provided. For a
+    bounded-write job -- where a worker cannot stage, so everything it creates is
+    untracked -- that means reviewing the most important changes blind.
+
+    Rendered with `git diff --no-index /dev/null <path>`, which produces a normal
+    added-file hunk and handles binary detection itself.
+    """
+    max_bytes = MAX_DIFF_BYTES if max_bytes is None else max_bytes
+    out: list[str] = []
+    used = 0
+    for rel in paths:
+        abs_path = os.path.join(ident.realpath, rel)
+        if not os.path.isfile(abs_path) or os.path.islink(abs_path):
+            continue
+        try:
+            # Exit status 1 just means "there are differences", which is the
+            # whole point; only a real failure should be swallowed.
+            raw = _git_pinned(
+                ident, "diff", "--no-ext-diff", "--no-textconv", "--no-index",
+                "--", "/dev/null", abs_path, text=False,
+            )
+        except Refuse:
+            proc = subprocess.run(
+                [GIT, "--no-pager", "diff", "--no-ext-diff", "--no-textconv",
+                 "--no-index", "--", "/dev/null", abs_path],
+                check=False, capture_output=True, env=git_clean_env(), cwd=ident.realpath,
+            )
+            raw = proc.stdout
+        text = raw.decode("utf-8", "replace")
+        if used + len(text) > max_bytes:
+            out.append(f"\n[new-file diffs truncated at {max_bytes} bytes]\n")
+            break
+        out.append(text)
+        used += len(text)
+    return "".join(out)
+
+
 def dirty_fingerprints(ident: WorktreeIdentity) -> dict[str, str]:
     """path -> content fingerprint, for every path that differs from HEAD.
 

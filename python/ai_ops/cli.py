@@ -290,6 +290,17 @@ def cmd_scout(ns: argparse.Namespace) -> int:
     return cmd_run_like(ns, "readonly", "scout", ns.dir, ns.prompt, None)
 
 
+def _tracked_paths(ident) -> list[str]:
+    """Paths git already tracks, so new files can be told apart from edits."""
+    from .identity import _git_pinned
+
+    try:
+        out = _git_pinned(ident, "ls-files")
+    except Exception:
+        return []
+    return [ln for ln in out.splitlines() if ln]
+
+
 def cmd_review(ns: argparse.Namespace) -> int:
     if getattr(ns, "background", False):
         return launch_background(ns)
@@ -307,6 +318,17 @@ def cmd_review(ns: argparse.Namespace) -> int:
         ident = identity.inspect_worktree(review_dir)
         diff = identity.worktree_diff(ident)
         changed, ignored = identity.review_manifest(ident)
+        # `git diff HEAD` is tracked-only, so a NEW file shows up in the changed
+        # list with no content behind it. A live reviewer caught exactly that on
+        # a real repo -- and for bounded-write it is the common case, since a
+        # worker cannot stage and everything it creates is untracked. Append
+        # added-file hunks so the reviewer can actually see what was written.
+        tracked = set(_tracked_paths(ident))
+        new_files = [p for p in changed if p not in tracked]
+        if new_files:
+            extra = identity.untracked_diff(ident, new_files)
+            if extra.strip():
+                diff = (diff + "\n" if diff else "") + extra
     except Refuse:
         diff, changed, ignored = "", [], []
     attachments = None
@@ -334,6 +356,19 @@ def cmd_review(ns: argparse.Namespace) -> int:
             )
         header = "\n".join(header_lines) + "\n#\n# Uncommitted diff (git diff HEAD) follows.\n\n"
         attachments = {"review-diff.patch": header + diff}
+
+        # Inline a BOUNDED slice of the diff in the prompt as well as attaching
+        # the whole thing. Two failures make this the right shape:
+        #   - unbounded inlining blew the kernel's 128KiB single-argument limit
+        #     and killed every review of a real repo (E2BIG);
+        #   - attachment-only depends on the provider being able to READ a file
+        #     outside its working directory, and a live Claude review answered
+        #     "I don't have permission to read the attached diff file".
+        # So the common case travels in the prompt, where no permission applies,
+        # and the attachment carries the remainder for providers that can read it.
+        INLINE_CAP = 60_000
+        inline = diff[:INLINE_CAP]
+        overflow = len(diff) > INLINE_CAP
         note = ""
         if "[diff truncated]" in diff:
             note = (
@@ -341,12 +376,20 @@ def cmd_review(ns: argparse.Namespace) -> int:
                 "seeing part of the change. Say so in your findings and do not return\n"
                 "'promote' on the strength of a partial diff."
             )
-        shown = ", ".join(changed[:40]) or "(no tracked change; see attachment)"
+        shown = ", ".join(changed[:40]) or "(no tracked change)"
         more = len(changed) - min(len(changed), 40)
+        tail = ""
+        if overflow:
+            tail = (
+                f"\n\nNOTE: this is the first {INLINE_CAP} bytes of a {len(diff)}-byte diff."
+                " The COMPLETE diff is in the attached file named below; read it before"
+                " judging, and if you cannot, say so and do not return 'promote'."
+            )
         prompt = (
             f"{prompt or 'Review this change.'}\n\n"
             f"Changed files ({len(changed)}): {shown}"
             + (f"  [+{more} more]" if more > 0 else "") + note
+            + f"\n\nThe uncommitted diff follows.{tail}\n\n```diff\n{inline}\n```"
         )
     rec = job.run_job(
         profile_path=_profile_path(ns),
@@ -360,7 +403,6 @@ def cmd_review(ns: argparse.Namespace) -> int:
         job_id=os.environ.get("AI_OPS_JOB_ID") or None,
         attachments=attachments,
     )
-    _print_job(rec, getattr(ns, "json", False))
     parent = (env or {}).get("parent_job")
     if rec["status"] == "ok":
         # Persist the reviewer's OWN verdict onto its OWN record, ALWAYS -- not
@@ -369,11 +411,17 @@ def cmd_review(ns: argparse.Namespace) -> int:
         # the human-readable outcome was lost once the sandbox home was reclaimed
         # (the workaround was AI_OPS_KEEP_SANDBOX_HOME). The verdict belongs on
         # the record so `status <job> --full` shows it.
-        from . import events as evmod
+        from .adapters import get_adapter
 
         ev = open(rec["artifacts"]["events"], "rb").read()
         try:
-            verdict, findings, reviewed_files = evmod.extract_review_verdict(ev)
+            # Through the adapter: only OpenCode emits structured review objects.
+            # The strict OpenCode parser reported "no terminal provider event" for
+            # a perfectly good Claude review -- the same provider-blindness that
+            # was fixed for job results, in two places it had been missed.
+            verdict, findings, reviewed_files = get_adapter(
+                load_profile(_profile_path(ns)).get("provider")
+            ).extract_review(ev)
         except Exception as exc:
             # A review that produced no parseable verdict is a real failure, but
             # the record must SAY so rather than silently reading null.
@@ -381,10 +429,9 @@ def cmd_review(ns: argparse.Namespace) -> int:
             _persist_review_report(_state_path(ns), rec["job_id"], report)
             print(f"ai-opencode: reviewer produced no verdict: {exc}", file=sys.stderr)
             return 1
-        _persist_review_report(
-            _state_path(ns), rec["job_id"],
-            {"verdict": verdict, "findings": findings, "reviewed_files": reviewed_files},
-        )
+        report = {"verdict": verdict, "findings": findings, "reviewed_files": reviewed_files}
+        _persist_review_report(_state_path(ns), rec["job_id"], report)
+        rec["review"] = report
         if parent:
             job.attach_review(
                 state_path=_state_path(ns),
@@ -394,6 +441,10 @@ def cmd_review(ns: argparse.Namespace) -> int:
                 findings=findings,
                 reviewed_files=reviewed_files,
             )
+    # Printed AFTER the verdict is attached: printing first reported
+    # "review": null for a review that had in fact produced one, so the caller's
+    # JSON disagreed with the record on disk.
+    _print_job(rec, getattr(ns, "json", False))
     if rec["status"] == "dirty":
         return 2
     return 0 if rec["status"] == "ok" else 1
@@ -755,7 +806,11 @@ def cmd_promote(ns: argparse.Namespace) -> int:
     ev = open(rev["artifacts"]["events"], "rb").read()
     from . import events as evmod
 
-    verdict, findings, reviewed_files = evmod.extract_review_verdict(ev)
+    from .adapters import get_adapter
+
+    verdict, findings, reviewed_files = get_adapter(
+        load_profile(_profile_path(ns)).get("provider")
+    ).extract_review(ev)
     rec = job.attach_review(
         state_path=_state_path(ns),
         subject_job=ns.subject,

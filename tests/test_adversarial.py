@@ -786,6 +786,37 @@ class RailTests(unittest.TestCase):
         finally:
             os.chmod(secret, 0o644)
 
+    def test_a_new_file_is_visible_to_the_reviewer(self):
+        """`git diff HEAD` is tracked-only, so a NEW file appears in the changed
+        list with no content behind it. Found by a live reviewer on a real repo:
+        it reported it could not verify a security-sensitive new config file
+        because no hunk was provided. For bounded-write this is the COMMON case
+        -- a worker cannot stage, so everything it creates is untracked, and the
+        most important changes would be reviewed blind."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        (self.primary / "brand_new.py").write_text("PAYLOAD = 'must be reviewable'\n")
+        ident = identity.inspect_worktree(str(self.primary))
+        tracked_only = identity.worktree_diff(ident)
+        self.assertNotIn("PAYLOAD", tracked_only, "fixture assumption: not in git diff HEAD")
+
+        changed, _ = identity.review_manifest(ident)
+        self.assertIn("brand_new.py", changed)
+        extra = identity.untracked_diff(ident, ["brand_new.py"])
+        self.assertIn("PAYLOAD", extra)
+        self.assertIn("new file", extra)
+
+    def test_new_file_diffs_are_bounded(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        (self.primary / "big_new.txt").write_text("A" * 50_000)
+        ident = identity.inspect_worktree(str(self.primary))
+        out = identity.untracked_diff(ident, ["big_new.txt"], max_bytes=5_000)
+        self.assertLessEqual(len(out), 6_000)
+        self.assertIn("truncated", out)
+
     def test_review_manifest_separates_change_from_ambient_ignored(self):
         """Bug #4: a populated .venv put 42,205 paths (3.7MB) in the review
         attachment and a reviewer burned its timeout on ambient noise. The

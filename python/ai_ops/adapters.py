@@ -33,6 +33,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
+from .errors import ProviderError
+
 # Atelier truncates emitted lines at 400 chars (dispatch.mjs:4711). Match it, and
 # bound at WRITE time rather than summarising after: a bound applied later has
 # already let the full text through whatever was in between.
@@ -123,6 +125,7 @@ class OpenCodeAdapter:
         role: str,
         job_id: str,
         prompt: str,
+        attach_dir: str | None = None,
     ) -> list[str]:
         return list(provider_argv) + [
             "run",
@@ -174,6 +177,11 @@ class OpenCodeAdapter:
     def compose_prompt(self, prompt: str, instructions: str) -> str:
         """Unchanged: OpenCode reads the instructions from its agent file."""
         return prompt
+
+    def extract_review(self, raw: bytes):
+        from .events import extract_review_verdict
+
+        return extract_review_verdict(raw)
 
     # A step_finish carries the reason the step ended. "stop" ends the run;
     # "tool-calls" only ends a step and more will follow.
@@ -332,6 +340,7 @@ class GrokAdapter:
         role: str,
         job_id: str,
         prompt: str,
+        attach_dir: str | None = None,
     ) -> list[str]:
         # No --dir: grok works from cwd, and build_bwrap_argv --chdir's to the
         # worktree. No permission flags either -- deliberately. Grok has
@@ -407,6 +416,11 @@ class GrokAdapter:
         if not instructions:
             return prompt
         return f"{instructions.strip()}\n\n---\n\n{prompt}"
+
+
+    def extract_review(self, raw: bytes):
+        parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
+        return _extract_review(self.full_text(parsed))
 
     def full_text(self, events: Iterable[dict[str, Any]]) -> str:
         """Unclipped text, coalesced from the per-token deltas."""
@@ -579,6 +593,7 @@ class ClaudeCodeAdapter:
         role: str,
         job_id: str,
         prompt: str,
+        attach_dir: str | None = None,
     ) -> list[str]:
         # No --dir: build_bwrap_argv --chdir's to the worktree. --verbose is
         # REQUIRED for stream-json (the CLI rejects the combination without it).
@@ -592,6 +607,13 @@ class ClaudeCodeAdapter:
             "--model",
             wire,
         ]
+        if attach_dir:
+            # Controller-written material (the frozen review diff) lives outside
+            # the worktree, and Claude's tools refuse paths outside the working
+            # directory -- measured: a review that answered "I don't have
+            # permission to read the attached diff file". One extra directory,
+            # written only by the controller.
+            argv += ["--add-dir", attach_dir]
         if agent.endswith("bounded-write"):
             # Claude's own permission prompts cannot be answered in headless
             # mode. The OS boundary is the real control here -- the worktree is
@@ -742,6 +764,11 @@ class ClaudeCodeAdapter:
     def refresh_argv(self, provider_argv: list[str]) -> list[str] | None:
         return list(provider_argv) + ["doctor"]
 
+
+    def extract_review(self, raw: bytes):
+        parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
+        return _extract_review(self.full_text(parsed))
+
     def full_text(self, events: Iterable[dict[str, Any]]) -> str:
         """Unclipped assistant text, for contract extraction."""
         out = []
@@ -840,6 +867,7 @@ class CodexAdapter:
         role: str,
         job_id: str,
         prompt: str,
+        attach_dir: str | None = None,
     ) -> list[str]:
         # --skip-git-repo-check: the sandbox mounts the git dir read-only and
         # Codex's own check is redundant with the rail's worktree identity work.
@@ -850,10 +878,13 @@ class CodexAdapter:
         # readonly job the worktree is a read-only mount, so even a wrong value
         # here cannot grant writes.
         sandbox_mode = "workspace-write" if agent.endswith("bounded-write") else "read-only"
-        return list(provider_argv) + [
+        argv = list(provider_argv) + [
             "exec", "--skip-git-repo-check", "--json",
-            "--sandbox", sandbox_mode, "--model", wire, prompt,
+            "--sandbox", sandbox_mode, "--model", wire,
         ]
+        if attach_dir:
+            argv += ["--add-dir", attach_dir]
+        return argv + [prompt]
 
     def version_argv(self, provider_argv: list[str]) -> list[str]:
         return list(provider_argv) + ["--version"]
@@ -954,6 +985,11 @@ class CodexAdapter:
         if not instructions:
             return prompt
         return f"{instructions.strip()}\n\n---\n\n{prompt}"
+
+
+    def extract_review(self, raw: bytes):
+        parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
+        return _extract_review(self.full_text(parsed))
 
     def full_text(self, events: Iterable[dict[str, Any]]) -> str:
         """Unclipped agent_message text, for contract extraction."""
@@ -1059,6 +1095,30 @@ class CodexAdapter:
         if require_handoff:
             return _extract_handoff(self.full_text(parsed))
         return None, None
+
+
+def _extract_review(text: str):
+    """Pull the reviewer's verdict object out of its final text.
+
+    The mirror of _extract_handoff, and it exists for the same reason: only
+    OpenCode emits structured objects of its own, so for every other provider the
+    verdict has to be recovered from the model's own words.
+    """
+    from .events import extract_object
+
+    payload = extract_object(text or "", "review")
+    if not isinstance(payload, dict):
+        raise ProviderError("reviewer produced no review object")
+    verdict = payload.get("verdict")
+    if verdict not in {"promote", "reject", "needs_changes"}:
+        raise ProviderError("reviewer produced no explicit verdict")
+    findings = payload.get("findings") or []
+    if not isinstance(findings, list):
+        raise ProviderError("findings must be a list")
+    files = payload.get("reviewed_files") or []
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        raise ProviderError("reviewed_files must be a list of strings")
+    return verdict, findings, files
 
 
 def _extract_handoff(text: str) -> tuple[dict[str, Any] | None, str | None]:
