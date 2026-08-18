@@ -78,11 +78,29 @@ def new_job_id() -> str:
 
 
 def atomic_write_json(path: str, obj: Any) -> None:
+    """Write JSON so a reader never sees a half-written file.
+
+    The temp name is UNIQUE PER WRITER. It used to be a fixed `<path>.tmp` that
+    was unlinked first if present, which made this atomic only for one writer at
+    a time and actively destructive for two: writer B would unlink A's in-flight
+    temp, A would go on writing to an unlinked inode, and whichever reached
+    `os.replace` second either clobbered the other's file or died with ENOENT
+    because its own temp had been renamed away.
+
+    That is not theoretical. A soak run at 40 concurrent jobs killed one outright
+    on exactly this path: two jobs sharing a worktree both wrote its session
+    marker, and one died with
+    `FileNotFoundError: ... worktree.json.tmp -> worktree.json`. Only concurrency
+    surfaces it, which is why the soak test exists.
+
+    `os.replace` is atomic, so concurrent writers now resolve to last-writer-wins
+    on the rename -- the correct semantics -- instead of corrupting each other.
+    """
+    import uuid
+
     directory = os.path.dirname(path)
     reject_symlinks(directory, "write parent")
-    tmp = path + ".tmp"
-    if os.path.lexists(tmp):
-        os.unlink(tmp)
+    tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     fd = open_nofollow(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         data = json.dumps(obj, indent=2, sort_keys=True).encode("utf-8") + b"\n"
@@ -90,7 +108,16 @@ def atomic_write_json(path: str, obj: Any) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        # Never leave the temp behind for a later reader or a gc sweep to puzzle
+        # over.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def read_json(path: str) -> Any:

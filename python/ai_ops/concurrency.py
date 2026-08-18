@@ -63,7 +63,7 @@ def running(state_path: str) -> list[dict[str, Any]]:
     if not os.path.isdir(d):
         return out
     for name in sorted(os.listdir(d)):
-        if not name.endswith(".json"):
+        if not name.endswith(".json") or name.startswith("."):
             continue
         path = os.path.join(d, name)
         try:
@@ -81,6 +81,41 @@ def running(state_path: str) -> list[dict[str, Any]]:
             except OSError:
                 pass
     return out
+
+
+def _claim_slot(d: str, cap: int, state_path: str, job_id: str) -> bool:
+    """Count and claim under an exclusive lock. True if a slot was taken.
+
+    The count and the write MUST be one atomic step. They were not, and a soak
+    run at 40 jobs against a cap of 3 caught it: several processes each saw a
+    free slot, each wrote a marker, and the marker count reached 5. The
+    after-the-fact re-count made them all yield, so no extra job actually
+    executed -- but for that window `jobs` reported more running than the cap
+    allows, which is an instrument reporting something untrue, and the yielding
+    was a thundering herd that wasted the free slot entirely.
+
+    flock on a dedicated file rather than on a marker: the markers come and go,
+    and a lock you have to create before you can take it is a race of its own.
+    """
+    import fcntl
+
+    lock_path = os.path.join(d, ".lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if len(running(state_path)) >= cap:
+            return False
+        _write_marker(d, job_id)
+        return True
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def acquire(state_path: str, job_id: str, *, wait: bool) -> float:
@@ -102,25 +137,21 @@ def acquire(state_path: str, job_id: str, *, wait: bool) -> float:
     deadline = started + (WAIT_S if wait else 0)
 
     while True:
-        current = running(state_path)
-        if len(current) < cap:
-            _write_marker(d, job_id)
-            # Re-count after claiming: two callers can pass the check at the same
-            # moment, and the marker is what makes the race visible. Whoever ends
-            # up over the line yields rather than both proceeding.
-            if len(running(state_path)) <= cap:
-                return round(time.time() - started, 2)
-            release(state_path, job_id)
+        if _claim_slot(d, cap, state_path, job_id):
+            return round(time.time() - started, 2)
 
         if time.time() >= deadline:
+            in_use = len(running(state_path))
             waited = "" if not wait else f" after waiting {int(time.time() - started)}s"
             raise Refuse(
-                f"concurrency limit reached: {len(current)} of {cap} slots in use"
+                f"concurrency limit reached: {in_use} of {cap} slots in use"
                 f"{waited}. Wait for a job to finish, raise max_concurrent_jobs in "
                 "the budget file, or run with --background to queue "
                 f"(up to {WAIT_S}s; AI_OPS_CONCURRENCY_WAIT_S overrides)."
             )
-        time.sleep(_POLL_S)
+        # Jittered so a fan-out that all arrives together does not keep colliding
+        # on the same tick.
+        time.sleep(_POLL_S * (0.5 + (os.getpid() % 100) / 100.0))
 
 
 def _write_marker(d: str, job_id: str) -> None:

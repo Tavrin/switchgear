@@ -1363,6 +1363,55 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- atomic writes under concurrency --------------------------------------
+
+    def test_concurrent_writers_to_one_path_do_not_corrupt_each_other(self):
+        """`atomic_write_json` was atomic for ONE writer and destructive for two:
+        a fixed `<path>.tmp` that was unlinked if present, so writer B destroyed
+        A's in-flight temp, A kept writing to an unlinked inode, and whichever
+        reached os.replace second either clobbered the other or died with ENOENT.
+
+        A soak run at 40 concurrent jobs killed one outright on exactly this —
+        two jobs sharing a worktree both wrote its session marker. Only
+        concurrency surfaces it."""
+        import multiprocessing
+
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.state import atomic_write_json, read_json
+
+        target = str(self.tmp / "contended.json")
+
+        def writer(i):
+            import sys as _sys
+
+            _sys.path.insert(0, str(ROOT / "python"))
+            from ai_ops.state import atomic_write_json as _w
+
+            for _ in range(25):
+                _w(target, {"writer": i})
+
+        procs = [multiprocessing.Process(target=writer, args=(i,)) for i in range(6)]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=60)
+        self.assertTrue(all(p.exitcode == 0 for p in procs),
+                        f"a writer died: {[p.exitcode for p in procs]}")
+
+        # The file must be valid JSON from exactly one writer, never a mixture.
+        rec = read_json(target)
+        self.assertIn(rec["writer"], list(range(6)))
+        # And no temp files may survive for a reader or a gc sweep to puzzle over.
+        strays = [f for f in os.listdir(self.tmp) if ".tmp" in f]
+        self.assertEqual(strays, [], f"stray temp files: {strays}")
+
+    def test_the_temp_name_is_unique_per_writer(self):
+        """Structural: a fixed temp name is what made concurrent writes unsafe."""
+        src = (ROOT / "python" / "ai_ops" / "state.py").read_text()
+        body = src[src.index("def atomic_write_json"):src.index("def read_json")]
+        self.assertNotIn('tmp = path + ".tmp"', body)
+        self.assertIn("uuid", body)
+
     # --- wait: one call instead of a polling loop -----------------------------
 
     def test_wait_blocks_and_answers_like_a_foreground_run(self):
@@ -1921,9 +1970,17 @@ class RailTests(unittest.TestCase):
         for _ in range(3):
             p = run_cli(self.args("--json", "scout", str(self.primary), "look"), env=env)
             self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(
-            [f for f in os.listdir(self.state / "running")] if (self.state / "running").is_dir() else [],
-            [], "a finished job kept its slot")
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import concurrency
+
+        os.environ["AI_OPS_BUDGET_FILE"] = env["AI_OPS_BUDGET_FILE"]
+        try:
+            # Via the real API, not by listing files: the directory also holds
+            # the claim lock, which is not a slot.
+            self.assertEqual(concurrency.running(str(self.state)), [],
+                             "a finished job kept its slot")
+        finally:
+            os.environ.pop("AI_OPS_BUDGET_FILE", None)
 
     def test_queue_time_is_recorded_not_hidden_in_elapsed(self):
         env = self._budget(max_concurrent_jobs=2)

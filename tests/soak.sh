@@ -27,7 +27,20 @@ MOCK="$ROOT/tests/helpers/mock_provider.py"
 WORK=$(mktemp -d -t aiops-soak-XXXXXX)
 STATE="$WORK/state"
 BUDGET="$WORK/budget.json"
-trap 'rm -rf "$WORK"' EXIT
+# Keep the work dir when something fails: a soak run you cannot inspect
+# afterwards tells you only that it broke, which is the least useful half.
+cleanup() {
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -rf "$WORK"
+  else
+    echo >&2
+    echo "kept for diagnosis: $WORK" >&2
+    echo "  ai-opencode --state $WORK/state jobs --all" >&2
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 
 echo "== soak: $JOBS jobs across $WORKTREES worktrees, concurrency cap $CAP =="
 echo "   work dir: $WORK"
@@ -84,7 +97,7 @@ rows=json.load(sys.stdin)["jobs"]
 print(sum(1 for r in rows if r["state"]=="running"), sum(1 for r in rows if r["state"]=="queued"))')
   running=${counts%% *}
   queued=${counts##* }
-  markers=$(ls "$STATE/running" 2>/dev/null | wc -l)
+  markers=$(ls "$STATE/running" 2>/dev/null | grep -c '\.json$' || true)
   (( running > peak )) && peak=$running
   if (( markers > CAP )); then
     echo "FAIL: $markers concurrency markers held, cap is $CAP" >&2
@@ -101,7 +114,7 @@ print(sum(1 for r in rows if r["state"]=="running"), sum(1 for r in rows if r["s
     echo "FAIL: jobs still running after 10 minutes" >&2
     exit 1
   fi
-  sleep 1
+  sleep 0.3
 done
 echo "   peak concurrent: $peak (cap $CAP)"
 
@@ -143,7 +156,9 @@ for r in ok:
         fail.append(f"{r['job_id'][:8]} has no evidence stream"); break
 
 # No concurrency markers may survive.
-markers = os.listdir(os.path.join(state, "running")) if os.path.isdir(os.path.join(state, "running")) else []
+rundir = os.path.join(state, "running")
+markers = [m for m in (os.listdir(rundir) if os.path.isdir(rundir) else [])
+           if m.endswith(".json") and not m.startswith(".")]
 if markers:
     fail.append(f"{len(markers)} concurrency marker(s) left behind: {markers[:3]}")
 
