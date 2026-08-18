@@ -96,6 +96,9 @@ class OpenCodeAdapter:
     """
 
     name = "opencode"
+    # Full tier: the credential stays in the broker; the sandbox gets a
+    # placeholder. Never write a real token into an OpenCode sandbox.
+    credential_in_sandbox = False
 
     # The invocation. Kept here rather than in job.py so that the OpenCode-shaped
     # argv, the OPENCODE_* environment and the generated agent definition all sit
@@ -140,6 +143,18 @@ class OpenCodeAdapter:
         from .provider import isolation_env as opencode_isolation_env
 
         return opencode_isolation_env(synth_home, runtime)
+
+    def validate_result(self, raw: bytes, *, require_handoff: bool):
+        """(handoff, error). OpenCode's strict parser also checks the handoff
+        schema for bounded-write, so it stays the authority for this provider."""
+        from . import events as _events
+        from .errors import ProviderError, Refuse
+
+        try:
+            term = _events.parse_event_stream(raw, require_handoff=require_handoff)
+            return term.get("_handoff"), None
+        except (ProviderError, Refuse) as exc:
+            return None, str(exc)
 
     def broker_runtime(self, runtime: dict[str, Any], base_url: str, model_id: str):
         """OpenCode is redirected through its CONFIG, not its environment."""
@@ -259,6 +274,31 @@ class GrokAdapter:
     """
 
     name = "grok"
+    # FALLBACK tier: Grok validates its session locally and rejects any
+    # placeholder (measured, four ways), so its access token must be in the
+    # sandbox. The refresh token is stripped before it is written; --unshare-net
+    # and the broker's path/model/ceiling still bound what the job can do with
+    # the token, so it can be USED for the job but has no channel out except the
+    # one brokered upstream.
+    credential_in_sandbox = True
+
+    def write_sandbox_credential(self, synth_home: str, provider_id: str, prec: dict) -> str:
+        import json as _json
+        import os as _os
+
+        from .credentials import load_sandbox_session
+
+        session = load_sandbox_session(provider_id, prec)
+        d = _os.path.join(synth_home, ".grok")
+        _os.makedirs(d, exist_ok=True)
+        dest = _os.path.join(d, "auth.json")
+        # Write private, then confirm the refresh token really is gone -- a
+        # belt-and-braces check on the anti-leak invariant at the point the file
+        # actually lands in the sandbox.
+        with open(dest, "w", encoding="utf-8") as fh:
+            _json.dump(session, fh)
+        _os.chmod(dest, 0o600)
+        return dest
 
     def argv(
         self,
@@ -311,12 +351,15 @@ class GrokAdapter:
         """
         from .env import allowlisted_env, assert_no_host_secrets
 
+        # No GROK_AUTH_PROVIDER_ACCESS_TOKEN: auth comes from the session file
+        # written by write_sandbox_credential (fallback tier). Setting a
+        # placeholder token here would override the file and fail Grok's local
+        # validation -- measured. Only the broker redirect belongs in the env.
         extra: dict[str, str] = {}
         if broker_base_url:
             base = broker_base_url.rstrip("/")
             extra["GROK_CLI_BASE_URL"] = base
             extra["GROK_MODELS_BASE_URL"] = base
-            extra["GROK_AUTH_PROVIDER_ACCESS_TOKEN"] = "broker-placeholder-not-a-credential"
         env = allowlisted_env(home=synth_home, extra=extra)
         assert_no_host_secrets(env)
         return env
@@ -331,6 +374,19 @@ class GrokAdapter:
             if ev.get("type") == "end" and isinstance(ev.get("sessionId"), str):
                 return ev["sessionId"]
         return None
+
+    def validate_result(self, raw: bytes, *, require_handoff: bool):
+        if require_handoff:
+            return None, "grok bounded-write is not supported yet (readonly roles only)"
+        text = raw.decode("utf-8", "replace")
+        parsed, _ = parse_lenient(text)
+        norm = self.normalize(parsed, run_ended=True)
+        fin = next((n for n in norm if n["event"] == "finished"), None)
+        if fin is None:
+            return None, "no terminal provider event"
+        if fin["status"] == TERMINAL_FAILED:
+            return None, fin.get("exitSummary") or "provider run failed"
+        return None, None
 
     def normalize(
         self, events: Iterable[dict[str, Any]], *, run_ended: bool = False

@@ -106,11 +106,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _deny(self, code: int, msg: str) -> None:
         self.broker.denials.append(msg)
         body = json.dumps({"error": {"message": f"broker: {msg}"}}).encode()
-        self.send_response(code)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The provider gave up on this request before we answered it. The
+            # denial still counts (it is in self.broker.denials); writing to a
+            # dead socket must not crash the handler thread with a traceback.
+            pass
 
     def do_POST(self) -> None:  # noqa: N802
         b = self.broker
@@ -139,32 +145,52 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._deny(403, f"model not allowed: {requested!r}")
                 return
         b.attempts += 1
+        self._forward("POST", payload)
+
+    def _forward(self, method: str, payload: bytes | None) -> None:
+        """Proxy one request upstream, distinguishing three outcomes.
+
+        - upstream answered (any status, including a model 4xx/5xx): counts as
+          FORWARDED, because a model was reached -- which is exactly what
+          live.sh's retry rule keys on.
+        - upstream unreachable: a TRANSPORT error, recorded separately from
+          policy denials.
+        - the client hung up while we wrote the answer back: harmless, and NOT
+          an upstream failure -- the request already reached a model, so
+          forwarded stays counted and the broken pipe is swallowed.
+        """
+        b = self.broker
         req = urllib.request.Request(
             b.upstream + _join_path(b.upstream, self.path),
             data=payload,
-            method="POST",
+            method=method,
             headers=_forward_headers(self.headers, b.auth_header, b.auth_value()),
         )
         try:
             with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
-                data = resp.read()
-                self.send_response(resp.status)
-                if resp.headers.get("content-type"):
-                    self.send_header("content-type", resp.headers["content-type"])
-                self.send_header("content-length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                b.forwarded += 1
+                status, data = resp.status, resp.read()
+                ctype = resp.headers.get("content-type") or "application/json"
         except urllib.error.HTTPError as exc:
-            data = exc.read()
-            self.send_response(exc.code)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            b.forwarded += 1
+            status, data, ctype = exc.code, exc.read(), "application/json"
         except Exception as exc:
-            self._deny(502, f"upstream error: {type(exc).__name__}")
+            b.transport_errors.append(f"{method} {self.path}: {type(exc).__name__}")
+            self._safe_send(502, b'{"error":{"message":"broker: upstream unreachable"}}',
+                            "application/json")
+            return
+        b.forwarded += 1
+        self._safe_send(status, data, ctype)
+
+    def _safe_send(self, code: int, body: bytes, content_type: str) -> None:
+        try:
+            self.send_response(code)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The provider gave up on this request before we finished answering.
+            # It already reached a model; nothing to do but not crash.
+            pass
 
     def do_GET(self) -> None:  # noqa: N802
         b = self.broker
@@ -175,31 +201,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._deny(429, f"provider call ceiling reached ({b.max_calls} per job)")
             return
         b.attempts += 1
-        req = urllib.request.Request(
-            b.upstream + _join_path(b.upstream, self.path),
-            method="GET",
-            headers=_forward_headers(self.headers, b.auth_header, b.auth_value()),
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
-                data = resp.read()
-                self.send_response(resp.status)
-                if resp.headers.get("content-type"):
-                    self.send_header("content-type", resp.headers["content-type"])
-                self.send_header("content-length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                b.forwarded += 1
-        except urllib.error.HTTPError as exc:
-            data = exc.read()
-            self.send_response(exc.code)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            b.forwarded += 1
-        except Exception as exc:
-            self._deny(502, f"upstream error: {type(exc).__name__}")
+        self._forward("GET", None)
 
     def log_message(self, *args) -> None:
         # Never log request lines: they can carry prompt content.
@@ -263,6 +265,12 @@ class CredentialBroker:
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
         self.forwarded = 0
+        # Kept separate from denials on purpose. A DENIAL is the broker's policy
+        # refusing a request (path/model/ceiling) -- a security-meaningful event.
+        # A TRANSPORT error is the upstream being unreachable. Conflating them
+        # (the old code counted an upstream BrokenPipe as a "denial") hides a real
+        # policy denial behind a network blip.
+        self.transport_errors: list[str] = []
         # A hard ceiling on brokered calls for ONE job. Earned by a reviewer that
         # looped 35 times looking for a diff it could not reach: the job timeout
         # was the only bound, and every one of those calls was billed. None means

@@ -25,6 +25,14 @@ to re-login rather than silently refreshing. Controller-side refresh is a real
 improvement and the structure is here for it, but it must be built against a
 measured token endpoint per provider -- writing three refresh flows from
 documentation is exactly the mistake this project keeps paying for.
+
+THE ONE EXCEPTION, and it is scoped and named: a provider whose CLI validates
+its own session LOCALLY (measured: Grok) cannot be handed a placeholder, so its
+ACCESS token must be inside the sandbox -- the fallback tier. There,
+load_sandbox_session reads the whole session file and strips the refresh token
+in the controller before writing it into the sandbox. So even in the fallback
+tier the refresh token never enters the sandbox and the rail never persists it;
+what changes is that the ~1h access token does. Egress containment is unchanged.
 """
 
 from __future__ import annotations
@@ -219,6 +227,49 @@ def load_oauth_credential(provider_id: str, prec: dict[str, Any]) -> Credential:
             "refresh: it never reads the refresh token"
         )
     return cred
+
+
+def strip_refresh_tokens(obj: Any) -> Any:
+    """Deep copy of a session document with every refresh-token field removed.
+
+    Recursive and name-based: any key whose lowercased name contains "refresh"
+    is dropped, at any depth. Used only for the in-sandbox fallback tier, where
+    the provider's CLI validates its session locally and therefore the access
+    token must be inside the sandbox. The refresh token must NOT be: it is the
+    whole subscription, and this is what guarantees it is never written there.
+    """
+    if isinstance(obj, dict):
+        return {k: strip_refresh_tokens(v) for k, v in obj.items() if "refresh" not in k.lower()}
+    if isinstance(obj, list):
+        return [strip_refresh_tokens(x) for x in obj]
+    return obj
+
+
+def load_sandbox_session(provider_id: str, prec: dict[str, Any]) -> dict[str, Any]:
+    """The provider's own session file, refresh token stripped, for a fallback
+    tier that must place the access token inside the sandbox.
+
+    This is a DELIBERATE weakening relative to the brokered tiers, used only for
+    a provider whose CLI validates its session locally (measured: Grok). The
+    access token -- good for about an hour -- ends up on disk in the sandbox
+    home. The refresh token is stripped here in the controller and never written.
+    Egress containment is unchanged: --unshare-net and the broker's path
+    allowlist still mean the token can be USED for the job but has no channel out
+    except the one brokered upstream.
+    """
+    path = os.path.expanduser(prec.get("auth_file") or "")
+    if not path or not os.path.isfile(path):
+        raise Refuse(
+            f"provider '{provider_id}' has no session at {path or '(unset auth_file)'}; "
+            "log in with its own CLI first"
+        )
+    _require_private(path)
+    # Reuse load_oauth_credential purely to run the same expiry/skew refusal the
+    # brokered path enforces, so a fallback job cannot start on a dead session.
+    load_oauth_credential(provider_id, prec)
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    return strip_refresh_tokens(doc)
 
 
 def load_credential(provider_id: str, prec: dict[str, Any]) -> Credential | None:

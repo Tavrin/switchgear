@@ -20,7 +20,9 @@
       ],
       "allowed_get_paths": [
         "/models"
-      ]
+      ],
+      "credential_tier": "in-sandbox-fallback",
+      "_note": "Grok validates its OIDC session locally and rejects any placeholder (measured). Fallback tier: the access token is written into the sandbox (refresh stripped), --unshare-net and the broker's path/model/ceiling retained. Proven live 2026-08-18."
     },
     "codex": {
       "upstream": "https://chatgpt.com/backend-api/codex",

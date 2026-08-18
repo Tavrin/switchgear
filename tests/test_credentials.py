@@ -284,6 +284,77 @@ class BrokerUsesTheCredential(unittest.TestCase):
             self.assertEqual(get(bk, "/v1/account"), 403)
 
 
+class FallbackTierSandboxCredential(unittest.TestCase):
+    """Grok validates its session locally, so its ACCESS token goes in the
+    sandbox -- but the refresh token must not, and OpenCode must never get one."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="aiops-fb-"))
+
+    def test_strip_refresh_tokens_removes_them_at_any_depth(self):
+        doc = {"a": {"key": "K", "refresh_token": REFRESH},
+               "b": [{"refreshToken": REFRESH, "x": 1}],
+               "nested": {"deep": {"my_refresh_thing": REFRESH, "keep": "ok"}}}
+        out = creds.strip_refresh_tokens(doc)
+        self.assertNotIn(REFRESH, json.dumps(out))
+        self.assertEqual(out["a"]["key"], "K")
+        self.assertEqual(out["b"][0]["x"], 1)
+        self.assertEqual(out["nested"]["deep"]["keep"], "ok")
+
+    def test_load_sandbox_session_strips_refresh_and_keeps_the_rest(self):
+        path = _write(self.tmp / "grok.json", {
+            "https://auth.x.ai::abc": {
+                "key": "ACCESS", "auth_mode": "oidc", "refresh_token": REFRESH,
+                "oidc_issuer": "https://auth.x.ai",
+                "expires_at": "2099-01-01T00:00:00.000000000Z"}})
+        session = creds.load_sandbox_session(
+            "grok", {"auth_file": path, "auth_format": "grok-oidc"})
+        blob = json.dumps(session)
+        self.assertNotIn(REFRESH, blob)          # refresh gone
+        self.assertIn("ACCESS", blob)            # access token kept
+        self.assertIn("oidc_issuer", blob)       # structure Grok validates kept
+
+    def test_an_expired_session_refuses_before_it_is_written(self):
+        path = _write(self.tmp / "old.json", {"s::1": {
+            "key": "OLD", "refresh_token": REFRESH,
+            "expires_at": "2020-01-01T00:00:00.000000000Z"}})
+        with self.assertRaises(Refuse):
+            creds.load_sandbox_session("grok", {"auth_file": path, "auth_format": "grok-oidc"})
+
+    def test_grok_adapter_writes_a_private_refresh_free_session(self):
+        from ai_ops.adapters import get_adapter
+
+        src = _write(self.tmp / "grok.json", {
+            "https://auth.x.ai::abc": {
+                "key": "ACCESS", "refresh_token": REFRESH,
+                "oidc_issuer": "https://auth.x.ai",
+                "expires_at": "2099-01-01T00:00:00.000000000Z"}})
+        home = str(self.tmp / "home")
+        os.makedirs(home)
+        dest = get_adapter("grok").write_sandbox_credential(
+            home, "grok", {"auth_file": src, "auth_format": "grok-oidc"})
+        self.assertEqual(os.stat(dest).st_mode & 0o777, 0o600)
+        written = Path(dest).read_text()
+        self.assertNotIn(REFRESH, written)
+        self.assertIn("ACCESS", written)
+
+    def test_grok_is_fallback_tier_and_opencode_is_not(self):
+        from ai_ops.adapters import get_adapter
+
+        self.assertTrue(getattr(get_adapter("grok"), "credential_in_sandbox", False))
+        self.assertFalse(getattr(get_adapter("opencode"), "credential_in_sandbox", False))
+
+    def test_grok_env_does_not_set_a_placeholder_token(self):
+        """The session file provides auth; a placeholder token env would override
+        it and fail Grok's local validation (measured)."""
+        from ai_ops.adapters import get_adapter
+
+        env = get_adapter("grok").isolation_env(
+            str(self.tmp / "h2"), {}, "http://127.0.0.1:8099")
+        self.assertIn("GROK_CLI_BASE_URL", env)
+        self.assertNotIn("GROK_AUTH_PROVIDER_ACCESS_TOKEN", env)
+
+
 class ProviderPinning(unittest.TestCase):
     """A second real binary must not be mistaken for a committed mock."""
 

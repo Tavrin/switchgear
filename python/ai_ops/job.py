@@ -173,7 +173,7 @@ def run_job(
                     "(refusing: an unbrokered live job would run on the host network)"
                 )
         if not cred:
-            return _execute(None)
+            return _execute(None, None, {}, provider_id)
         sock = os.path.join(dirs["job"], "broker.sock")
         from . import quota as quotamod
 
@@ -188,9 +188,9 @@ def run_job(
             auth_header=prec.get("auth_header") or "authorization",
             auth_scheme=prec.get("auth_scheme", "Bearer"),
         ) as bk:
-            return _execute(bk)
+            return _execute(bk, cred, prec, provider_id)
 
-    def _execute(bk) -> dict[str, Any]:
+    def _execute(bk, cred=None, prec=None, provider_id=None) -> dict[str, Any]:
         runtime = policy.to_opencode_runtime()
         broker_url = f"http://127.0.0.1:{sandbox.BROKER_RELAY_PORT}" if bk is not None else None
         if broker_url:
@@ -233,6 +233,12 @@ def run_job(
         provider.write_agent_definition(
             dirs["home"], agent_name, policy.agent_definition(role, attach_dir)
         )
+        # Fallback tier: a provider whose CLI validates its session locally
+        # (Grok) needs its access token inside the sandbox. Only for such an
+        # adapter, and only with a live credential and a broker in play, so the
+        # token still has no egress except the one brokered upstream.
+        if getattr(adapter, "credential_in_sandbox", False) and cred is not None and bk is not None:
+            adapter.write_sandbox_credential(dirs["home"], provider_id, prec or {})
         env = adapter.isolation_env(dirs["home"], runtime, broker_url)
         prov_argv, _live = provider.resolve_provider(provider_path)
         job_prompt = prompt
@@ -346,12 +352,16 @@ def run_job(
             status = "dirty"
             err = "git identity changed"
         else:
-            try:
-                term = events.parse_event_stream(result.stdout, require_handoff=(mode == "bounded-write"))
-                handoff = term.get("_handoff")
-            except (ProviderError, Refuse) as exc:
+            # The RESULT path goes through the adapter, not a hardcoded event
+            # vocabulary: OpenCode's terminal event is step_finish, Grok's is
+            # `end`. A live Grok scout produced a complete, correct stream that
+            # the OpenCode parser called "no terminal provider event".
+            handoff, verr = adapter.validate_result(
+                result.stdout, require_handoff=(mode == "bounded-write")
+            )
+            if verr:
                 status = "provider_error"
-                err = str(exc)
+                err = verr
             if status == "ok" and result.returncode not in (0, None):
                 # A well-formed handoff object is a claim by the provider, not
                 # evidence of success. A crashed write is never promotable.
@@ -432,7 +442,12 @@ def run_job(
             # left provider_calls null on disk.
             record["provider_calls"] = {
                 "forwarded": bk.forwarded,
+                # `denied` is POLICY only (path/model/ceiling) -- the security
+                # number. `transport` is upstream-unreachable, kept apart so a
+                # network blip cannot masquerade as, or hide, a real denial.
                 "denied": len(bk.denials),
+                "denied_detail": sorted(set(bk.denials))[:10],
+                "transport": len(bk.transport_errors),
             }
         if status == "awaiting_review":
             record["freeze"] = {
