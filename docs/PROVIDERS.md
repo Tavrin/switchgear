@@ -88,7 +88,7 @@ a broker the network namespace applies and that call would not leave the sandbox
 
 ---
 
-## Grok — the handoff was wrong about this one; isolation now proven
+## Grok — isolation proven, vocabulary captured, adapter shipped
 
 `HANDOFF.md` states Grok has "**no** agent/permission model at all, so it would
 rely purely on the OS boundary." That is not what the binary reports.
@@ -137,16 +137,110 @@ all, it still defaults to trusted. Grok's own trust gate is therefore not a
 control we can lean on — the OS boundary is, which is the standing posture
 anyway.
 
-**Still not established** (do not write the adapter until it is):
+### Vocabulary: CAPTURED, adapter shipped
 
-- the real event vocabulary — capture a `-p --output-format streaming-json`
-  stream and commit it as a fixture. This is the remaining blocker and it needs
-  a small credit spend.
-- whether its credential can go through the broker, i.e. whether `~/.grok/auth.json`
-  is an API key against an OpenAI- or Anthropic-shaped endpoint, or an OAuth
-  session like Codex's.
+`tests/fixtures/grok-real-scout.jsonl` — 77 events from a live
+`-p --output-format streaming-json` run (grok 1.0.4, grok-4.6-build, $0.0067).
+Three ways the real dialect differs from anything a doc would have predicted:
+
+- **`text` and `thought` arrive as deltas**, often one token per event. The
+  adapter coalesces; a per-event normalizer would emit hundreds of fragments.
+- **`sessionId` exists only in the terminal `end` event.** Mid-run the stream
+  carries no session identifier at all, so resume-after-crash has nothing to key
+  on until the run closes. Reported honestly as `None` until then.
+- Cost and turns arrive **pre-totalled** on `end` (`total_cost_usd`,
+  `num_turns`, `usage.total_tokens`), unlike OpenCode's per-step summation.
+
+`thought` content never reaches the digest — reasoning belongs to the full
+stream for a human, not to a projection that lands in a parent agent's context.
+Only `end_turn` was observed as a normal close; any other `stopReason` is
+reported as `failed` with the provider's own word for it, because guessing which
+unobserved reasons are benign would be the invented-vocabulary mistake again.
+
+Its credential is an **OAuth/OIDC session**, not an API key — see the next
+section, which is what stands between the shipped adapter and a live lane.
 
 ---
+
+## The OAuth problem, and the plan of record (2026-08-18)
+
+The stated target is one rail invoking **OpenCode, Grok, Codex (ChatGPT
+account), and Claude Code (Claude account)**. Only the first uses an API key.
+The other three are OAuth-session CLIs — and measured on this machine, their
+credentials are **structurally identical** (key names inspected, values never
+read):
+
+| Provider | File | Contents |
+|---|---|---|
+| Grok | `~/.grok/auth.json` | access token (`key`), `refresh_token`, `expires_at`, **`oidc_issuer` + `oidc_client_id`** |
+| Codex | `~/.codex/auth.json` | `tokens.access_token`, `tokens.refresh_token`, `account_id`; `OPENAI_API_KEY: null` |
+| Claude Code | `~/.claude/.credentials.json` | `claudeAiOauth.accessToken`, `.refreshToken`, `.expiresAt` |
+
+Every one is a short-lived access token plus a long-lived refresh token in a
+file the controller can read. That uniformity is the answer to "isn't there a
+good solution": **the broker generalizes from "holds an API key" to "holds a
+credential of some class"**, and OAuth is just the second class.
+
+### The design: credential classes in the broker
+
+- **class `api-key`** (opencode-go, openrouter): today's path, unchanged.
+- **class `oauth`**: the controller reads the session file, performs the token
+  refresh **controller-side** (Grok's file literally carries its OIDC issuer and
+  client id — refresh is a plain POST; the other two have known refresh flows),
+  holds the access token in memory, and the broker injects
+  `Authorization: Bearer <access-token>` upstream. The sandbox keeps exactly
+  what it has today: `--unshare-net`, a unix socket, a placeholder credential.
+
+The invariant that must survive, stated once: **the refresh token never crosses
+any boundary** — not into the sandbox, not into a child env, not into a log. It
+is the whole subscription; an access token expires in about an hour, a refresh
+token does not.
+
+### Measured per-CLI hooks (from the binaries, not docs)
+
+Both probed CLIs carry exactly the two knobs the design needs — a backend
+redirect (point the CLI at the loopback broker) and an access-token injection
+(so no auth file exists inside at all):
+
+| CLI | Backend redirect | Token injection |
+|---|---|---|
+| Grok | `GROK_CLI_BASE_URL` (also `GROK_MODELS_BASE_URL`) | `GROK_AUTH_PROVIDER_ACCESS_TOKEN` / `_EXPIRES_AT` / `_COMMAND` |
+| Codex | `chatgpt_base_url` (config) | `CODEX_ACCESS_TOKEN` (also `CODEX_API_KEY`) |
+| Claude Code | `ANTHROPIC_BASE_URL` (known surface — verify at build time) | to be probed |
+
+So the **full containment tier — credential never inside, no network namespace —
+is available for all three**, not just for API-key providers. Where some future
+CLI has no redirect knob, the recorded fallback tier is: short-lived access
+token only (refresh token stripped) inside the sandbox, network limited to a
+domain-allowlisted tunnel, and the provider marked as the weaker tier in the
+registry so `models` reports it.
+
+### What changes vs an API key, honestly
+
+- An OAuth access token is **account-scoped**, not a separately-budgeted key.
+  While brokered, the path allowlist and model pin still bound what it is spent
+  on; but revocation means the account session, not one key. The per-provider
+  `allowed_paths` and the model-pin extractor therefore move into the provider
+  record — chatgpt.com, api.x.ai and api.anthropic.com do not share
+  `/chat/completions`.
+- Invoking Claude Code from agent-ops spends the same subscription that runs
+  the operator's own interactive session. Not a security issue — a quota-
+  contention one; the measured-spend ledger applies unchanged.
+
+### Remaining engineering, in order
+
+1. **Broker: credential classes** + per-provider `allowed_paths`/model-pin +
+   OIDC refresh. Grok first — its auth file carries everything the refresh
+   needs, and its adapter and fixture already exist.
+2. **Per-provider binary pinning.** `compat` pins only OpenCode today; a grok
+   binary handed to `resolve_provider` currently classifies as a *mock* (no
+   `AI_OPS_ALLOW_LIVE_PROVIDER` gate, no broker). Fail-closed in effect — no
+   credential ever reaches it — but the classification is wrong and must become
+   per-provider before any live Grok run.
+3. **`isolation_env` behind the adapter seam** (it writes `OPENCODE_*`
+   unconditionally today; Grok needs `GROK_*`, Codex `CODEX_HOME`).
+4. **A no-model probe through the broker per provider** — a 401 handshake
+   through the loopback proves the redirect works without spending anything.
 
 ## What every new adapter must do
 

@@ -205,44 +205,226 @@ class OpenCodeAdapter:
             "costUSD": round(cost, 8),
             "tokens": tokens,
         }
-
-        if not (saw_terminal or run_ended):
-            # Still working. Emit counters WITHOUT a terminal event: an adapter
-            # tailing the stream for `finished` must not see one while the job is
-            # merely mid-flight, or it transitions the record early.
-            out.append({"event": "progress", **counters})
-            return out
-
-        if errored is not None:
-            status = TERMINAL_NEEDS_INPUT if _is_input_request(errored) else TERMINAL_FAILED
-            summary = errored
-        elif not saw_terminal:
-            # The run is over and the provider never closed its stream. Claiming
-            # completed here is precisely the shape atelier tripwires on.
-            status = TERMINAL_FAILED
-            summary = (
-                "stream truncated: the run ended without a terminal provider event, "
-                "so this result is not evidence of completion"
+        out.extend(
+            _finish_events(
+                counters,
+                saw_terminal=saw_terminal,
+                run_ended=run_ended,
+                errored=errored,
+                last_text=last_text,
             )
-        elif not last_text.strip():
-            # Produced no assistant text. Not a success to report as one -- it is
-            # the shape atelier calls completed_empty.
-            status = TERMINAL_EMPTY
-            summary = ""
-        else:
-            status = TERMINAL_COMPLETED
-            summary = _clip(last_text)
-
-        out.append(
-            {
-                "event": "finished",
-                "status": status,
-                **counters,
-                "exitSummary": summary,
-                "sawTerminal": saw_terminal,
-            }
         )
         return out
+
+
+class GrokAdapter:
+    """Grok CLI 1.0.x, headless (`-p --output-format streaming-json`).
+
+    Every shape below was read off a real captured stream
+    (tests/fixtures/grok-real-scout.jsonl, 2026-08-18, grok-4.6-build) -- never
+    from documentation. Three ways this dialect differs from OpenCode's, each of
+    which would have broken a doc-written normalizer:
+
+    - `text` and `thought` arrive as DELTAS, often one token per event. They
+      must be coalesced; emitting one normalized event per fragment would turn a
+      one-sentence answer into hundreds of events.
+    - `sessionId` exists ONLY in the terminal `end` event. Mid-run there is no
+      session identifier in the stream at all, so resume-after-crash has nothing
+      to key on until the run closes. Reported honestly as None until then.
+    - Cost and turns arrive pre-totalled on `end` (`total_cost_usd`,
+      `num_turns`); mid-run the only counters are the per-model-call `usage`
+      events, whose count matches num_turns in the capture.
+
+    Measured event types: available_commands (session preamble, ignored),
+    thought{data} / text{data} deltas, usage{usage{...},signature},
+    tool_call{toolCallId,toolName,rawInput,...}, tool_call_update, and
+    end{stopReason,sessionId,requestId,usage,num_turns,total_cost_usd,modelUsage}.
+
+    `thought` content is deliberately NOT emitted into the digest: reasoning
+    deltas belong to the full stream for a human, not in a projection that lands
+    in a parent agent's context. Its volume is visible via reasoning tokens.
+    """
+
+    name = "grok"
+
+    def argv(
+        self,
+        *,
+        provider_argv: list[str],
+        worktree: str,
+        model_id: str,
+        agent: str,
+        role: str,
+        job_id: str,
+        prompt: str,
+    ) -> list[str]:
+        # No --dir: grok works from cwd, and build_bwrap_argv --chdir's to the
+        # worktree. No permission flags either -- deliberately. Grok has
+        # --allow/--deny, but their rule syntax has not been probed, and its own
+        # trust gate is fail-open (measured: "Project trusted: yes" with no
+        # config at all), so the OS boundary is the control here, as the posture
+        # already demands. Provider-side rules can be added as defense in depth
+        # once their syntax is captured rather than guessed.
+        wire = model_id.split("/", 1)[1] if "/" in model_id else model_id
+        return list(provider_argv) + [
+            "-p",
+            prompt,
+            "--output-format",
+            "streaming-json",
+            "--model",
+            wire,
+        ]
+
+    def version_argv(self, provider_argv: list[str]) -> list[str]:
+        return list(provider_argv) + ["--version"]
+
+    def agent_name(self, mode: str) -> str:
+        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+
+    def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
+        for ev in events:
+            if ev.get("type") == "end" and isinstance(ev.get("sessionId"), str):
+                return ev["sessionId"]
+        return None
+
+    def normalize(
+        self, events: Iterable[dict[str, Any]], *, run_ended: bool = False
+    ) -> list[dict[str, Any]]:
+        events = list(events)
+        out: list[dict[str, Any]] = []
+        sid = self.session_id(events)
+        if sid:
+            out.append({"event": "status", "sessionId": sid})
+
+        text_parts: list[str] = []
+        model_calls = 0
+        tokens_running = 0
+        end_ev: dict[str, Any] | None = None
+        errored: str | None = None
+
+        for ev in events:
+            ty = ev.get("type")
+            if ty == "text":
+                delta = ev.get("data")
+                if isinstance(delta, str):
+                    text_parts.append(delta)
+            elif ty == "tool_call":
+                out.append(
+                    {
+                        "event": "tool",
+                        "name": str(ev.get("toolName") or ev.get("title") or "?"),
+                        "target": _grok_tool_target(ev),
+                    }
+                )
+            elif ty == "usage":
+                model_calls += 1
+                u = ev.get("usage") if isinstance(ev.get("usage"), dict) else {}
+                tokens_running += int(
+                    _num(u.get("input_tokens"))
+                    + _num(u.get("output_tokens"))
+                    + _num(u.get("reasoning_tokens"))
+                )
+            elif ty == "end":
+                end_ev = ev
+            elif ty == "error":
+                # Not observed in the capture; handled defensively so a future
+                # error event degrades to `failed` rather than to silence.
+                errored = _error_message(ev)
+
+        last_text = "".join(text_parts)
+        if last_text.strip():
+            out.append({"event": "text", "content": _clip(last_text)})
+
+        failure = None
+        if end_ev is not None:
+            stop = end_ev.get("stopReason")
+            if stop != "end_turn":
+                # Only end_turn was observed as a normal close. Anything else is
+                # reported as a failure with the provider's own word for it --
+                # guessing which unobserved reasons are benign would be the
+                # invented-vocabulary mistake again.
+                failure = f"provider stopped abnormally: {stop!r}"
+            end_usage = end_ev.get("usage") if isinstance(end_ev.get("usage"), dict) else {}
+            counters = {
+                "turns": int(_num(end_ev.get("num_turns")) or model_calls),
+                "costUSD": round(_num(end_ev.get("total_cost_usd")), 8),
+                "tokens": int(_num(end_usage.get("total_tokens")) or tokens_running),
+            }
+        else:
+            counters = {"turns": model_calls, "costUSD": 0.0, "tokens": tokens_running}
+
+        out.extend(
+            _finish_events(
+                counters,
+                saw_terminal=end_ev is not None,
+                run_ended=run_ended,
+                errored=errored,
+                last_text=last_text,
+                failure=failure,
+            )
+        )
+        return out
+
+
+def _grok_tool_target(ev: dict[str, Any]) -> str:
+    args = ev.get("rawInput") if isinstance(ev.get("rawInput"), dict) else {}
+    for key in ("target_file", "path", "file", "command", "pattern", "query", "url"):
+        val = args.get(key)
+        if isinstance(val, str) and val:
+            return _clip(val, 200)
+    return ""
+
+
+def _finish_events(
+    counters: dict[str, Any],
+    *,
+    saw_terminal: bool,
+    run_ended: bool,
+    errored: str | None,
+    last_text: str,
+    failure: str | None = None,
+) -> list[dict[str, Any]]:
+    """The one honesty policy for closing a normalized stream, shared by every
+    adapter so a new provider cannot quietly relax it.
+
+    While the job runs: `progress` with counters and NO terminal event, so an
+    adapter tailing for `finished` never transitions early. Once it is over:
+    errors first; then truncation (`sawTerminal` false is never `completed` --
+    "claims done, evidence truncated" is the case atelier tripwires on); then a
+    provider-declared abnormal stop (`failure`); then empty-vs-completed by
+    whether the model actually said anything.
+    """
+    if not (saw_terminal or run_ended):
+        return [{"event": "progress", **counters}]
+
+    if errored is not None:
+        status = TERMINAL_NEEDS_INPUT if _is_input_request(errored) else TERMINAL_FAILED
+        summary = errored
+    elif not saw_terminal:
+        status = TERMINAL_FAILED
+        summary = (
+            "stream truncated: the run ended without a terminal provider event, "
+            "so this result is not evidence of completion"
+        )
+    elif failure:
+        status = TERMINAL_FAILED
+        summary = failure
+    elif not last_text.strip():
+        status = TERMINAL_EMPTY
+        summary = ""
+    else:
+        status = TERMINAL_COMPLETED
+        summary = _clip(last_text)
+
+    return [
+        {
+            "event": "finished",
+            "status": status,
+            **counters,
+            "exitSummary": summary,
+            "sawTerminal": saw_terminal,
+        }
+    ]
 
 
 def _tool_target(part: dict[str, Any]) -> str:
@@ -283,7 +465,7 @@ def _is_input_request(message: str) -> bool:
     return "permission" in low or "needs input" in low or "awaiting input" in low
 
 
-_ADAPTERS = {"opencode": OpenCodeAdapter()}
+_ADAPTERS = {"opencode": OpenCodeAdapter(), "grok": GrokAdapter()}
 
 
 def get_adapter(provider: str | None):

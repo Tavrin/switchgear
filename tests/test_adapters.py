@@ -166,7 +166,7 @@ class Vocabulary(unittest.TestCase):
 
     def test_unknown_provider_refuses_rather_than_guessing(self):
         with self.assertRaises(Refuse):
-            get_adapter("grok")
+            get_adapter("gemini")
 
     def test_adapter_keys_off_the_binary_not_the_model_pool(self):
         """`opencode-go` and `openrouter` are model POOLS reached through the
@@ -174,6 +174,104 @@ class Vocabulary(unittest.TestCase):
         second pool appears behind one CLI, which is already the case."""
         with self.assertRaises(Refuse):
             get_adapter("opencode-go")
+
+
+GROK_FIXTURE = ROOT / "tests" / "fixtures" / "grok-real-scout.jsonl"
+
+
+class GrokRealStream(unittest.TestCase):
+    """Anchored on tests/fixtures/grok-real-scout.jsonl, captured live
+    2026-08-18 from grok 1.0.4 / grok-4.6-build. Same rule as the OpenCode
+    fixture: the capture is the authority, documentation is not."""
+
+    def setUp(self):
+        self.raw = GROK_FIXTURE.read_text()
+        self.events, self.used = parse_lenient(self.raw)
+        self.adapter = get_adapter("grok")
+
+    def test_the_fixture_still_carries_the_real_vocabulary(self):
+        """Tripwire against the fixture being 'corrected' toward a fiction.
+
+        The real dialect: text/thought as DELTAS, sessionId ONLY in `end`,
+        cost pre-totalled. None of that matches what the design docs would have
+        predicted, which is the whole reason the fixture exists.
+        """
+        types = {e.get("type") for e in self.events}
+        self.assertEqual(
+            types,
+            {"available_commands", "thought", "text", "usage",
+             "tool_call", "tool_call_update", "end"},
+        )
+        with_sid = [e["type"] for e in self.events if "sessionId" in e]
+        self.assertEqual(with_sid, ["end"], "sessionId must live only in `end`")
+        # Deltas, not whole messages: many tiny text events, not one big one.
+        text_evs = [e for e in self.events if e["type"] == "text"]
+        self.assertGreater(len(text_evs), 5)
+        self.assertLess(max(len(e.get("data") or "") for e in text_evs), 40)
+
+    def test_normalize_coalesces_deltas_and_reads_the_end_totals(self):
+        norm = self.adapter.normalize(self.events, run_ended=True)
+        texts = [n for n in norm if n["event"] == "text"]
+        self.assertEqual(len(texts), 1, "deltas must coalesce into ONE text event")
+        self.assertIn("zero divisor", texts[0]["content"])
+
+        fin = [n for n in norm if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+        self.assertEqual(fin["turns"], 2)
+        self.assertAlmostEqual(fin["costUSD"], 0.0066878)
+        self.assertEqual(fin["tokens"], 37798)
+        self.assertTrue(fin["sawTerminal"])
+
+        sid = [n for n in norm if n["event"] == "status"][0]["sessionId"]
+        self.assertEqual(sid, self.adapter.session_id(self.events))
+
+        tools = [n for n in norm if n["event"] == "tool"]
+        self.assertEqual([t["name"] for t in tools], ["read_file"])
+
+    def test_thought_deltas_never_reach_the_digest(self):
+        """Reasoning belongs to the full stream for a human, not to a projection
+        that lands in a parent agent's context."""
+        norm = self.adapter.normalize(self.events, run_ended=True)
+        blob = json.dumps(norm)
+        for ev in self.events:
+            if ev["type"] == "thought" and len(ev.get("data") or "") > 8:
+                self.assertNotIn(ev["data"], blob)
+
+    def test_truncated_grok_stream_never_reports_completed(self):
+        """Cut the stream before `end`: text exists, evidence of completion
+        does not. Same honesty rule as OpenCode, via the shared policy."""
+        cut = [e for e in self.events if e["type"] != "end"]
+        fin = [
+            n for n in self.adapter.normalize(cut, run_ended=True)
+            if n["event"] == "finished"
+        ][0]
+        self.assertEqual(fin["status"], TERMINAL_FAILED)
+        self.assertIn("truncated", fin["exitSummary"])
+
+    def test_a_running_grok_job_emits_progress_not_finished(self):
+        cut = [e for e in self.events if e["type"] != "end"]
+        kinds = {n["event"] for n in self.adapter.normalize(cut, run_ended=False)}
+        self.assertNotIn("finished", kinds)
+        self.assertIn("progress", kinds)
+
+    def test_an_abnormal_stop_reason_is_failed_not_guessed_benign(self):
+        """Only end_turn was observed as a normal close. Anything else must be
+        reported with the provider's own word, not assumed fine."""
+        evs = [dict(e) for e in self.events]
+        for e in evs:
+            if e["type"] == "end":
+                e["stopReason"] = "refusal"
+        fin = [
+            n for n in self.adapter.normalize(evs, run_ended=True)
+            if n["event"] == "finished"
+        ][0]
+        self.assertEqual(fin["status"], TERMINAL_FAILED)
+        self.assertIn("refusal", fin["exitSummary"])
+
+    def test_every_prefix_parses_without_raising(self):
+        for cut in range(0, len(self.raw), 211):
+            evs, _ = parse_lenient(self.raw[:cut])
+            self.adapter.normalize(evs)
 
 
 class ExecutionPinning(unittest.TestCase):

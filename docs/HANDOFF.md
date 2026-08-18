@@ -204,15 +204,18 @@ network" was true of every path anyone had run and false of one nobody had.
 
 Still open:
 
-1. **A second provider.** Isolation is now PROVEN for both Codex and Grok by
-   no-model probe (`docs/PROVIDERS.md`), and the adapter seam is real rather than
-   nominal. What remains is not design:
-   - **Grok** needs only a captured event stream (`-p --output-format
-     streaming-json`) committed as a fixture. Small credit spend. It is the
-     better target: headless mode, structured NDJSON, allow/deny rules.
-   - **Codex** is blocked on a decision, not on work: its auth is ChatGPT OAuth,
-     not an API key, and does not fit the broker. Three options with costs are
-     written up in `PROVIDERS.md`.
+1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
+   confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex
+   (ChatGPT account) and Claude Code (Claude account). All three OAuth CLIs
+   measured structurally identical (access + refresh token in a readable file)
+   and all carry backend-redirect + token-injection knobs, so the FULL
+   containment tier extends to them: broker holds the tokens, refreshes
+   controller-side, refresh token never crosses any boundary. Grok is first —
+   its vocabulary is captured (`tests/fixtures/grok-real-scout.jsonl`), its
+   adapter is shipped, and its auth file carries its own OIDC issuer/client id.
+   The ordered engineering list is at the end of that section — note item 2:
+   `resolve_provider` currently classifies any non-OpenCode binary as a *mock*,
+   which is fail-closed but wrong, and must become per-provider pinning first.
 2. **The atelier adapter lane.** atelier will spec it against their real
    capabilities/executionEnv test contracts once Etienne confirms in their own
    session — they correctly declined a green-light relayed through a peer.

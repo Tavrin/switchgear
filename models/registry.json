@@ -7,6 +7,10 @@
     "openrouter": {
       "upstream": "https://openrouter.ai/api/v1",
       "credential": "openrouter"
+    },
+    "grok": {
+      "upstream": "https://api.x.ai",
+      "credential": "grok"
     }
   },
   "models": {
@@ -40,7 +44,6 @@
       "model_family": "deepseek",
       "vendor_family": "deepseek"
     },
-
     "openrouter/anthropic/claude-sonnet-4.5": {
       "provider": "openrouter",
       "model_family": "claude",
@@ -80,6 +83,11 @@
       "provider": "openrouter",
       "model_family": "qwen",
       "vendor_family": "alibaba"
+    },
+    "grok/grok-4.6-build": {
+      "provider": "grok",
+      "model_family": "grok",
+      "vendor_family": "xai"
     }
   },
   "deny": [
@@ -105,6 +113,11 @@
     "deepseek-v4-pro ok, kimi-k3 ok, qwen3.8-max flaky, glm-5.3 fails upstream.",
     "",
     "vendor_family is what makes cross-vendor review independence meaningful.",
-    "Two openrouter models from the same vendor are NOT independent reviewers."
+    "Two openrouter models from the same vendor are NOT independent reviewers.",
+    "",
+    "grok/* reaches the native Grok CLI (~/.grok/bin/grok). Its stream",
+    "vocabulary is captured (tests/fixtures/grok-real-scout.jsonl) and its",
+    "sandbox isolation proven, but its credential is an OAuth session, so it",
+    "stays UNREACHABLE until the OAuth-aware broker lands (PROVIDERS.md)."
   ]
 }
