@@ -24,6 +24,8 @@ ai-opencode --json [--profile P] [--state S] [--provider ABS] <command>
 | `run --envelope F [--token T]` | dispatch by envelope `mode`/`role`/`cwd` | as above |
 | `promote --subject J --review R` | atomic promotion under the worktree lock | `ok` or refusal |
 | `lease acquire\|release\|show --dir D` | worktree lease lifecycle | — |
+| `<job cmd> --background` | launch detached; prints `job_id` at once and returns | — |
+| `cancel <job-id>` | stop a backgrounded job (pid + starttime + boot_id checked) | — |
 | `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | — |
 | `status <job-id> --full` | the whole persisted record (exists only once finished) | — |
 | `logs <job-id> [--format digest\|full]` | projections over `evidence/events.jsonl`; **digest is the default and is byte-capped in code** | — |
@@ -32,6 +34,31 @@ ai-opencode --json [--profile P] [--state S] [--provider ABS] <command>
 error, artifacts{events,stderr,handoff}, freeze, review, provider_calls`.
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
+
+### Background jobs
+
+Adding `--background` to `scout`, `review`, `write` or `run` launches the job in
+its own session and returns immediately with:
+
+```json
+{"job_id": "...", "state": "launched", "pid": 1234,
+ "events": "<state>/jobs/<id>/evidence/events.jsonl",
+ "launch_stderr": "<state>/launch/<id>.err"}
+```
+
+The intended loop is: **launch → poll `status` → read `logs` only if something
+looks wrong**. The job outlives the caller, so a delegating agent does not have
+to hold a process open for the duration.
+
+`status` reports `running` / `cancelled` / `died` for a job that has not written
+a record yet, and the persisted status once it has. `died` matters: a job killed
+before writing `result.json` has no record of its own, and reporting it as
+`running` forever is the worst answer a poll can give an orchestrator, so the
+launch record's liveness (pid **and** starttime **and** boot_id — pids are
+recycled) is the fallback authority.
+
+`cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
+records the cancellation so a later poll says `cancelled` rather than `died`.
 
 ### Observing a running job without flooding your context
 

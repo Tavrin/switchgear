@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 from typing import Any
@@ -13,7 +15,7 @@ from .profile import load_profile
 from .provider import resolve_provider
 from .registry import model_record
 from .schema import validate
-from .state import StateRoot, read_json
+from .state import StateRoot, atomic_write_json, read_json
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -144,7 +146,106 @@ def cmd_lease(ns: argparse.Namespace) -> int:
     return 1
 
 
+# --- background jobs ----------------------------------------------------------
+#
+# agent-ops blocked for the whole job, so every long run had to be hand-
+# backgrounded by its caller. A launch returns a job id immediately; the caller
+# then polls `status` and reads `logs --format digest` only if something looks
+# wrong. That is the same detached-job shape atelier's codex lane already
+# expects, and unlike a stdout pipe it survives the caller going away.
+
+
+def _launch_dir(state_path: str) -> str:
+    d = os.path.join(state_path, "launch")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def launch_background(ns: argparse.Namespace) -> int:
+    """Re-exec this CLI detached, and hand back the job id at once."""
+    from .state import new_job_id
+
+    state_path = _state_path(ns)
+    job_id = new_job_id()
+    ldir = _launch_dir(state_path)
+    out_path = os.path.join(ldir, f"{job_id}.out")
+    err_path = os.path.join(ldir, f"{job_id}.err")
+
+    # Drop --background from the child's argv or it would launch forever.
+    argv = [a for a in sys.argv[1:] if a != "--background"]
+    child_env = dict(os.environ)
+    child_env["AI_OPS_JOB_ID"] = job_id
+
+    with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
+        proc = subprocess.Popen(
+            [sys.executable, "-s", os.path.join(os.path.dirname(__file__), "__main__.py"), *argv],
+            stdout=out_fh,
+            stderr=err_fh,
+            env=child_env,
+            # Its own session: the job outlives this process, which is the whole
+            # point, and it also keeps the worker's process group separate so a
+            # cancel kills the job and not the caller.
+            start_new_session=True,
+            close_fds=True,
+        )
+    from .lease import _boot_id, _starttime
+
+    meta = {
+        "job_id": job_id,
+        "pid": proc.pid,
+        "starttime": _starttime(proc.pid),
+        "boot_id": _boot_id(),
+    }
+    atomic_write_json(os.path.join(ldir, f"{job_id}.json"), meta)
+
+    info = {
+        "job_id": job_id,
+        "state": "launched",
+        "pid": proc.pid,
+        "events": os.path.join(state_path, "jobs", job_id, "evidence", "events.jsonl"),
+        "launch_stderr": err_path,
+    }
+    print(json.dumps(info, indent=2) if getattr(ns, "json", False)
+          else "\n".join(f"{k}={v}" for k, v in info.items()))
+    return 0
+
+
+def cmd_cancel(ns: argparse.Namespace) -> int:
+    state_path = _state_path(ns)
+    meta_path = os.path.join(_launch_dir(state_path), f"{ns.job}.json")
+    if not os.path.isfile(meta_path):
+        _die(f"no background launch record for {ns.job}")
+    meta = read_json(meta_path)
+    from .lease import _alive
+
+    pid = int(meta["pid"])
+    # pid + starttime + boot_id, not pid alone: pids are recycled, and killing
+    # whatever now holds a recorded pid is how a cancel becomes an outage.
+    if not _alive(pid, meta.get("starttime", ""), meta.get("boot_id", "")):
+        print(json.dumps({"job": ns.job, "state": "not_running"}, indent=2))
+        return 0
+
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError as exc:
+        _die(f"cancel failed: {exc}")
+    deadline = time.time() + 5
+    while time.time() < deadline and _alive(pid, meta.get("starttime", ""), meta.get("boot_id", "")):
+        time.sleep(0.1)
+    if _alive(pid, meta.get("starttime", ""), meta.get("boot_id", "")):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    meta["cancelled"] = True
+    atomic_write_json(meta_path, meta)
+    print(json.dumps({"job": ns.job, "state": "cancelled", "pid": pid}, indent=2))
+    return 0
+
+
 def cmd_run_like(ns: argparse.Namespace, mode: str, role: str, directory: str, prompt: str, envelope: dict[str, Any] | None) -> int:
+    if getattr(ns, "background", False):
+        return launch_background(ns)
     rec = job.run_job(
         profile_path=_profile_path(ns),
         state_path=_state_path(ns),
@@ -155,6 +256,7 @@ def cmd_run_like(ns: argparse.Namespace, mode: str, role: str, directory: str, p
         provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
         envelope=envelope,
         lease_token=getattr(ns, "token", None),
+        job_id=os.environ.get("AI_OPS_JOB_ID") or None,
     )
     _print_job(rec, getattr(ns, "json", False))
     if rec["status"] == "dirty":
@@ -171,6 +273,8 @@ def cmd_scout(ns: argparse.Namespace) -> int:
 
 
 def cmd_review(ns: argparse.Namespace) -> int:
+    if getattr(ns, "background", False):
+        return launch_background(ns)
     env = None
     prompt = ns.prompt
     if ns.envelope:
@@ -204,6 +308,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
         prompt=prompt or "review",
         provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
         envelope=env,
+        job_id=os.environ.get("AI_OPS_JOB_ID") or None,
     )
     _print_job(rec, getattr(ns, "json", False))
     parent = (env or {}).get("parent_job")
@@ -291,6 +396,32 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return rec, adapter.normalize(parsed)
 
 
+def _live_state(ns, rec: dict, jd: str) -> str:
+    """What is this job doing right now?
+
+    result.json only exists once a job is over, so its absence cannot mean
+    "running" -- a job killed before it wrote one would poll as running forever,
+    which is the worst answer this command can give an orchestrator. The launch
+    record is the authority for a backgrounded job, and it is consulted even when
+    the job directory does not exist: a job killed early may never have created
+    one, and reporting "unknown" there loses the launch we know happened.
+    """
+    if rec:
+        return str(rec.get("status"))
+    meta_path = os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")
+    if os.path.isfile(meta_path):
+        from .lease import _alive
+
+        try:
+            meta = read_json(meta_path)
+            if _alive(int(meta["pid"]), meta.get("starttime", ""), meta.get("boot_id", "")):
+                return "running"
+            return "cancelled" if meta.get("cancelled") else "died"
+        except Exception:
+            return "unknown"
+    return "running" if os.path.isdir(jd) else "unknown"
+
+
 def cmd_status(ns: argparse.Namespace) -> int:
     """The polling answer: ~30 tokens, and valid while the job is still running.
 
@@ -309,12 +440,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
     tools = [n for n in norm if n["event"] == "tool"]
     sid = next((n["sessionId"] for n in norm if n["event"] == "status"), None)
 
-    if rec:
-        state = rec.get("status")
-    elif os.path.isdir(jd):
-        state = "running"
-    else:
-        state = "unknown"
+    state = _live_state(ns, rec, jd)
 
     started = None
     marker = os.path.join(jd, "started_at")
@@ -421,6 +547,11 @@ def build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("scout")
     sc.add_argument("dir")
     sc.add_argument("prompt")
+    sc.add_argument(
+        "--background",
+        action="store_true",
+        help="launch detached; print the job id at once and poll with `status`",
+    )
     sc.set_defaults(func=cmd_scout)
 
     rv = sub.add_parser("review")
@@ -428,6 +559,11 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("role")
     rv.add_argument("prompt", nargs="?")
     rv.add_argument("--envelope")
+    rv.add_argument(
+        "--background",
+        action="store_true",
+        help="launch detached; print the job id at once and poll with `status`",
+    )
     rv.set_defaults(func=cmd_review)
 
     wr = sub.add_parser("write")
@@ -435,11 +571,21 @@ def build_parser() -> argparse.ArgumentParser:
     wr.add_argument("role")
     wr.add_argument("--envelope", required=True)
     wr.add_argument("--token")
+    wr.add_argument(
+        "--background",
+        action="store_true",
+        help="launch detached; print the job id at once and poll with `status`",
+    )
     wr.set_defaults(func=cmd_write)
 
     rn = sub.add_parser("run")
     rn.add_argument("--envelope", required=True)
     rn.add_argument("--token")
+    rn.add_argument(
+        "--background",
+        action="store_true",
+        help="launch detached; print the job id at once and poll with `status`",
+    )
     rn.set_defaults(func=cmd_run)
 
     ls = sub.add_parser("lease")
@@ -450,6 +596,10 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--token")
     ls.add_argument("--mode")
     ls.set_defaults(func=cmd_lease)
+
+    cx = sub.add_parser("cancel")
+    cx.add_argument("job")
+    cx.set_defaults(func=cmd_cancel)
 
     lg = sub.add_parser("logs")
     lg.add_argument("job")

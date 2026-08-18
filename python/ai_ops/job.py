@@ -82,6 +82,7 @@ def run_job(
     provider_path: str,
     envelope: Optional[dict[str, Any]] = None,
     lease_token: Optional[str] = None,
+    job_id: Optional[str] = None,
 ) -> dict[str, Any]:
     profile = load_profile(profile_path)
     profile_digest = sha256_json(profile)
@@ -108,7 +109,10 @@ def run_job(
     # inside the --ro-bind and defeat readonly containment on the host.
     require_disjoint(root.path, ident.realpath, "state root", "worktree")
     require_disjoint(root.path, ident.common_git_dir, "state root", "git dir")
-    job_id = new_job_id()
+    # A background launch picks the id in the PARENT so it can hand the caller a
+    # job id and a log path immediately, before any work starts. create_job_dirs
+    # still creates the directory exclusively, so a collision is still a failure.
+    job_id = job_id or new_job_id()
     dirs = state.create_job_dirs(root, job_id)
     lock_cm = None
     token_uuid = None

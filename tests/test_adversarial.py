@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -731,6 +732,57 @@ class RailTests(unittest.TestCase):
             self.assertEqual(load_provider_credential(), "secret")
         finally:
             os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
+
+    def _launch(self, extra="6"):
+        p = run_cli(
+            self.args("--json", "scout", str(self.primary), "look", "--background"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "slow-stream", "AI_OPS_MOCK_EXTRA": extra},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def _state_of(self, job_id):
+        p = run_cli(self.args("--json", "status", job_id))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)["state"]
+
+    def test_background_launch_returns_a_job_id_without_waiting(self):
+        """The rail used to block for the whole job, so every long run had to be
+        hand-backgrounded by its caller."""
+        t0 = time.time()
+        info = self._launch("6")
+        self.assertLess(time.time() - t0, 3.0, "launch blocked on the job")
+        self.assertTrue(info["job_id"])
+        self.assertEqual(info["state"], "launched")
+        try:
+            self.assertEqual(self._state_of(info["job_id"]), "running")
+            deadline = time.time() + 40
+            while time.time() < deadline and self._state_of(info["job_id"]) == "running":
+                time.sleep(0.25)
+            self.assertEqual(self._state_of(info["job_id"]), "ok")
+        finally:
+            run_cli(self.args("cancel", info["job_id"]))
+
+    def test_cancel_stops_a_background_job_and_status_says_so(self):
+        info = self._launch("30")
+        p = run_cli(self.args("cancel", info["job_id"]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout)["state"], "cancelled")
+        self.assertEqual(self._state_of(info["job_id"]), "cancelled")
+
+    def test_a_background_job_that_dies_is_not_reported_as_running(self):
+        """The worst answer a poll can give is 'running' about a dead process.
+
+        A job killed without writing result.json has no record of its own, so
+        status must fall back to the launch record's liveness rather than
+        assuming that a missing result means work in progress.
+        """
+        info = self._launch("30")
+        os.kill(info["pid"], signal.SIGKILL)
+        deadline = time.time() + 10
+        while time.time() < deadline and self._state_of(info["job_id"]) == "running":
+            time.sleep(0.1)
+        self.assertEqual(self._state_of(info["job_id"]), "died")
 
     def test_status_answers_while_the_job_is_still_running(self):
         """status is the POLLING answer, so it must work before result.json exists.
