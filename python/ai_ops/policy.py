@@ -84,6 +84,54 @@ class CompiledPolicy:
         ]
         return "\n".join(head + self.role_instructions(role).splitlines()) + "\n"
 
+    def environment_notice(self) -> list[str]:
+        """The sandbox's limits, stated to the worker by the RAIL.
+
+        A worker cannot discover these except by hitting them, and hitting them
+        is expensive: another project lost two lanes dead-stopped on `.git` being
+        read-only before anyone wrote it down, and its GPU-less sandbox produced
+        false "wedged GPU" defect reports until every brief was made to say so.
+        Their conclusion, which this follows: the launcher INJECTS the facts, so
+        a spec author cannot forget them and a worker cannot mistake the boundary
+        for a bug in the thing it is inspecting.
+
+        Derived from the policy actually compiled for this job rather than
+        written as fixed prose, so it cannot describe a sandbox we no longer
+        build. The last line is the load-bearing one: it converts a whole class
+        of wasted run — worker fights the boundary, or reports it as a defect —
+        into an early, accurate report.
+        """
+        lines = ["Your environment, stated so you do not have to discover it:"]
+        if self.mode == "bounded-write":
+            lines += [
+                "- The worktree is the only writable location. Edit files there directly.",
+                "- The git directory is mounted READ-ONLY. Any git command that writes",
+                "  (commit, add, rebase, merge, stash) fails with 'index.lock:",
+                "  Read-only file system'. This is deliberate — the controller commits",
+                "  your work. Do not attempt it and do not work around it.",
+            ]
+        else:
+            lines += [
+                "- The worktree is mounted READ-ONLY. Every write fails, by design.",
+                "- There is no git write access of any kind.",
+            ]
+        lines += [
+            "- No network except the model endpoint, which is brokered. You cannot",
+            "  install packages, fetch documentation, clone anything, or reach any",
+            "  other host.",
+            "- No GPU, no display, no audio device. Never attempt a capture, a render",
+            "  or a benchmark that needs one; state the command a human should run.",
+            "- HOME is empty and exists only for this job. Nothing you write outside",
+            "  the worktree survives.",
+            "- There is no stdin. Nothing will answer a prompt you print.",
+            "",
+            "If you hit one of these limits, that is the sandbox and not a defect in",
+            "what you are working on. Say which limit you hit and stop; do not report",
+            "it as a finding and do not try to route around it.",
+            "",
+        ]
+        return lines
+
     def role_instructions(self, role: str) -> str:
         """What the worker is told to do, independent of HOW it is delivered.
 
@@ -98,7 +146,7 @@ class CompiledPolicy:
             "You cannot reach anything outside it, and you must not try.",
             "Be concise. Do not narrate what you are about to do.",
             "",
-        ]
+        ] + self.environment_notice()
         if self.mode == "bounded-write":
             body = common + [
                 "Make the smallest change that satisfies the task. Edit files directly.",

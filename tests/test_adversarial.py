@@ -1358,6 +1358,139 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- projections must use the JOB's provider, not the caller's profile ---
+
+    def test_a_job_records_which_adapter_ran_it(self):
+        """model.provider is the POOL (`opencode-go`), which does not identify
+        the code that can read the stream back (`opencode`). Without a separate
+        stamp every projection fell through to the ambient profile."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"))
+        job_id = json.loads(p.stdout)["job_id"]
+        rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+        self.assertEqual(rec["provider"], "opencode")
+
+    def test_the_runner_record_carries_it_too(self):
+        """A running job has no result.json, and that is exactly when logs and
+        status are used most."""
+        info = self._launch()
+        runner = self.state / "jobs" / info["job_id"] / "runner.json"
+        deadline = time.time() + 15
+        while time.time() < deadline and not runner.exists():
+            time.sleep(0.2)
+        self.assertTrue(runner.exists())
+        self.assertEqual(json.loads(runner.read_text())["provider"], "opencode")
+        run_cli(self.args("cancel", info["job_id"]))
+
+    def test_logs_work_with_no_profile_at_all(self):
+        """The job knows what produced it; the caller should not have to."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"))
+        job_id = json.loads(p.stdout)["job_id"]
+        p2 = run_cli(["--state", str(self.state), "logs", job_id])
+        self.assertEqual(p2.returncode, 0, p2.stderr)
+        self.assertIn("finished", p2.stdout)
+
+    def test_an_unidentifiable_job_refuses_rather_than_guessing(self):
+        """The bug this fixes, in its worst form: reading a Claude job's logs
+        under the default profile normalized the stream with the OpenCode
+        adapter, recognised nothing, and reported `status: failed, turns: 0,
+        'stream truncated ... not evidence of completion'` — for a job that had
+        completed fine. A false failure report, produced confidently. Guessing is
+        worse than refusing here."""
+        job_id = "00000000-0000-4000-8000-0000000000fe"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time()))
+        (jd / "evidence" / "events.jsonl").write_text('{"type":"whatever"}\n')
+        (jd / "result.json").write_text(json.dumps(
+            {"status": "ok", "role": "scout", "mode": "readonly"}))
+        p = run_cli(["--state", str(self.state), "logs", job_id])
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("cannot tell which provider", p.stderr)
+        self.assertIn("--profile", p.stderr, "the refusal must name the remedy")
+
+    def test_a_stream_the_adapter_cannot_read_is_called_out(self):
+        """A non-empty stream yielding nothing recognisable is the signature of
+        the wrong adapter, not of a truncated run."""
+        job_id = "00000000-0000-4000-8000-0000000000fd"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time()))
+        (jd / "evidence" / "events.jsonl").write_text(
+            '{"type":"not_a_shape_this_adapter_knows","x":1}\n' * 5)
+        (jd / "result.json").write_text(json.dumps(
+            {"status": "ok", "role": "scout", "mode": "readonly",
+             "provider": "opencode"}))
+        p = run_cli(["--state", str(self.state), "logs", job_id])
+        self.assertIn("recognised nothing", p.stderr)
+        self.assertIn("different provider", p.stderr)
+
+    # --- the worker is told its limits ---------------------------------------
+
+    def _instructions(self, mode, role):
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.policy import compile_policy
+        from ai_ops.profile import load_profile
+
+        return compile_policy(load_profile(str(self.profile)), mode).role_instructions(role)
+
+    def test_the_rail_states_the_sandbox_limits_not_the_spec_author(self):
+        """Another project lost two lanes dead-stopped on `.git` being read-only
+        before anyone wrote it down, and its GPU-less sandbox produced false
+        'wedged GPU' defect reports until every brief was made to say so. The
+        launcher injecting the facts is what fixed it there; a spec author cannot
+        forget what they never had to write."""
+        text = self._instructions("bounded-write", "implement")
+        self.assertIn("READ-ONLY", text)
+        self.assertIn("index.lock", text, "the actual error the worker will see")
+        self.assertIn("No GPU", text)
+        self.assertIn("no stdin", text.lower())
+        self.assertIn("brokered", text)
+
+    def test_a_limit_is_named_as_the_boundary_not_as_a_defect(self):
+        """The expensive failure is not the worker being blocked — it is the
+        worker reporting the boundary as a bug in what it is inspecting, or
+        burning the job routing around it."""
+        text = self._instructions("readonly", "scout")
+        self.assertIn("not a defect", text)
+        self.assertIn("stop", text.lower())
+
+    def test_the_notice_matches_the_mode(self):
+        """A readonly job told 'the worktree is writable' would waste itself
+        discovering otherwise."""
+        ro = self._instructions("readonly", "scout")
+        rw = self._instructions("bounded-write", "implement")
+        self.assertIn("worktree is mounted READ-ONLY", ro)
+        self.assertNotIn("only writable location", ro)
+        self.assertIn("only writable location", rw)
+
+    def test_every_provider_delivers_the_notice(self):
+        """OpenCode gets it in a generated agent file, everyone else in the
+        prompt. A provider that silently dropped it would run a worker blind."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.adapters import _ADAPTERS
+
+        text = self._instructions("readonly", "scout")
+        for name, adapter in _ADAPTERS.items():
+            composed = adapter.compose_prompt("DO THE TASK", text)
+            if name == "opencode":
+                # Delivered out-of-band in the agent file, so the prompt is
+                # unchanged — but the notice must genuinely be in that file, or
+                # this provider would run its workers blind while the test looked
+                # satisfied.
+                sys.path.insert(0, str(ROOT / "python"))
+                from ai_ops.policy import compile_policy
+                from ai_ops.profile import load_profile
+
+                definition = compile_policy(
+                    load_profile(str(self.profile)), "readonly"
+                ).agent_definition("scout")
+                self.assertEqual(composed, "DO THE TASK")
+                self.assertIn("No GPU", definition)
+                self.assertIn("not a defect", definition)
+                continue
+            self.assertIn("No GPU", composed, name)
+            self.assertIn("DO THE TASK", composed, name)
+
     # --- process containment ------------------------------------------------
 
     def test_a_providers_orphaned_children_die_with_the_job(self):

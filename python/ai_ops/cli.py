@@ -735,12 +735,48 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if os.path.isfile(ev_path):
         with open(ev_path, encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
-    profile = load_profile(_profile_path(ns)) if getattr(ns, "profile", None) else {}
-    adapter = get_adapter((rec.get("provider") or profile.get("provider") or "opencode"))
+    # Resolve the adapter from what the JOB recorded, never from the ambient
+    # profile if the job knows better.
+    #
+    # This was a real, silent wrong answer: reading a Claude job's logs with the
+    # default profile normalized the stream with the OpenCode adapter, recognised
+    # nothing, and reported `status: failed, turns: 0, "stream truncated ... not
+    # evidence of completion"` for a job that had completed fine. A false failure
+    # report, produced confidently. The job's own provider is a fact; the
+    # caller's profile is a guess about it.
+    provider = rec.get("provider")
+    if not provider:
+        # A running job has no result.json yet, which is exactly when logs and
+        # status are used most -- so the runner record carries it too.
+        try:
+            provider = read_json(os.path.join(jd, "runner.json")).get("provider")
+        except Exception:
+            provider = None
+    if not provider and getattr(ns, "profile", None):
+        provider = (load_profile(_profile_path(ns)) or {}).get("provider")
+    if not provider:
+        _die(
+            f"cannot tell which provider produced job {getattr(ns, 'job', '?')}: "
+            "its record predates provider stamping and no --profile was given. "
+            "Pass --profile with the profile the job ran under. Guessing would "
+            "silently misread the stream and report a completed job as failed."
+        )
+
+    adapter = get_adapter(provider)
     parsed, _ = parse_lenient(raw)
-    # The record exists only once the job is over, so its presence IS the
-    # "run_ended" fact the normalizer cannot get from the stream itself.
-    return rec, adapter.normalize(parsed, run_ended=bool(rec))
+    normalized = adapter.normalize(parsed, run_ended=bool(rec))
+
+    # A non-empty stream that yields nothing recognisable is the signature of the
+    # wrong adapter, not of a truncated run. Say so rather than reporting a
+    # confident falsehood.
+    if raw.strip() and not [n for n in normalized if n["event"] != "finished"]:
+        print(
+            f"ai-opencode: WARNING — the {provider!r} adapter recognised nothing in "
+            f"{len(raw)} bytes of evidence. That usually means the stream was "
+            "produced by a different provider; check --profile.",
+            file=sys.stderr,
+        )
+    return rec, normalized
 
 
 def cmd_providers(ns: argparse.Namespace) -> int:

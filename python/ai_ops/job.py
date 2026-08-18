@@ -238,6 +238,9 @@ def run_job(
                 "pid": os.getpid(),
                 "starttime": lease._starttime(os.getpid()),
                 "boot_id": lease._boot_id(),
+                # Written at START so a projection over a RUNNING job resolves
+                # the right adapter -- which is when logs/status are used most.
+                "provider": adapter.name,
             },
         )
     except Exception:
@@ -596,6 +599,12 @@ def run_job(
             "status": status,
             "mode": mode,
             "role": role,
+            # The ADAPTER that ran this job, which is not derivable from the
+            # model: `opencode-go/glm-5.3` is served by the `opencode` binary, so
+            # model.provider names the pool and this names the code that can read
+            # the stream back. Without it every projection fell back to the
+            # ambient profile and, failing that, silently to "opencode".
+            "provider": adapter.name,
             "model": model,
             # What the provider was actually TOLD to use, not what the profile
             # asked for -- null means no effort was sent, which is the honest
