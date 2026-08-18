@@ -51,9 +51,31 @@ never reach a parent agent's context by accident.
 
 ### One stream
 
-`evidence/events.jsonl`, append-only, written **as events arrive**. It lives in
-the job directory, which is *not* bind-mounted into the sandbox, so a worker
-still cannot tamper with its own record. `RLIMIT_FSIZE` still bounds it.
+`evidence/events.jsonl`, append-only, written **as events arrive**.
+
+> **CORRECTION.** An earlier version of this note justified the design with "the
+> job directory is not bind-mounted into the sandbox, so a worker cannot tamper
+> with its own record." **That reasoning is wrong and the obvious implementation
+> it suggests is unsafe.** Bind-mounting is not the only route to a file:
+> **stdout is an inherited file descriptor.** Hand the child the evidence file as
+> its stdout and it inherits fd 1 against that open file description — it can
+> `lseek(1, 0)` + `ftruncate` and erase everything it has already emitted, with
+> no path access whatsoever. Moving the sink from a controller-private temp file
+> into the job directory would have quietly re-opened precisely what
+> "persist evidence before the integrity asserts" exists to prevent.
+> Caught by `agent-ops-opus-2` while implementing it.
+
+The safe shape, as implemented: the child gets **pipes**; controller threads
+drain them and stream to disk. The worker can append and nothing else — it never
+holds a descriptor on the evidence file.
+
+Two consequences to keep in mind:
+
+- The drains must keep draining even after the cap is hit. A reader that stops
+  reading deadlocks the worker on a full pipe.
+- **`RLIMIT_FSIZE` no longer bounds the stdout spool**, because a pipe is not a
+  file. The drain cap does. `RLIMIT_FSIZE` still bounds files the worker writes
+  into its worktree, which is its actual job.
 
 This replaces the temp-file buffering in `process.run_sandboxed`. It is the
 enabling change: nothing else here is possible without it.
