@@ -57,7 +57,7 @@ def assert_pinned_version(
     version must be FOUND in the output rather than equal to it -- while still
     being a real check, which is why an absent pin refuses instead of passing.
     """
-    from .compat import PINNED_PROVIDERS
+    from .compat import accepted_versions, version_token
 
     if timed_out:
         raise Refuse("provider version probe timed out")
@@ -66,12 +66,19 @@ def assert_pinned_version(
     text = stdout.decode("utf-8", "replace").strip()
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     ver = lines[-1] if lines else ""
-    want = (PINNED_PROVIDERS.get(provider) or {}).get("version")
-    if not want:
+    accepted = accepted_versions(provider)
+    if not accepted:
         raise Refuse(f"no pinned version for provider {provider!r}; refusing to run it live")
-    if want not in ver:
+    seen = version_token(ver)
+    if not seen or seen not in accepted:
+        # Codex, Claude Code and Grok self-update often, so this fires as routine
+        # maintenance rather than as an alarm. Say how to clear it: a refusal
+        # whose only remedy is editing source is one that gets switched off.
         raise Refuse(
-            f"{provider} version {ver!r} is outside the tested contract {want}"
+            f"{provider} version {ver!r} has not been verified on this machine "
+            f"(verified: {', '.join(accepted)}). Run "
+            f"`ai-opencode providers verify --provider {provider}` to check this "
+            "build against the adapter's contract and record it."
         )
     return ver
 

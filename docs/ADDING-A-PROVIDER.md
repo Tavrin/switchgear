@@ -121,6 +121,43 @@ add a tripwire test asserting the fixture still carries the real event types AND
 the absence of any invented ones. That is what keeps a later "tidy-up" from
 quietly substituting a fiction.
 
+## Keeping up with self-updating CLIs
+
+Codex, Claude Code and Grok update often -- Grok went 1.0.4 -> 1.0.5 *during* a
+single working session and repointed its launcher. Two consequences shape the
+design:
+
+- **Pins match the launcher as well as the tested file.** Matching only the
+  tested path meant a self-updated binary stopped being recognised at all, and an
+  unrecognised real binary falls through to the committed-mock branch -- running
+  with neither the live gate nor a broker. Recognise first, then judge.
+- **The version record is operator-owned, not source.** A refusal whose only
+  remedy is editing source is a refusal that gets switched off. Verified builds
+  live in `~/.config/ai-ops/verified-providers.json`.
+
+```
+ai-opencode providers                          # what is installed vs verified
+ai-opencode providers --provider grok --verify # check a new build, record it
+```
+
+`--verify` is a real check, not a rubber stamp: it asserts the new build still
+offers the CLI surface the adapter's argv depends on (`required_flags()`), and
+refuses with the missing flags if not. It is free, so it can run on every
+self-update.
+
+**What it does NOT check: the event vocabulary.** That needs a captured stream.
+If jobs start failing to parse after an update, re-capture the fixture for that
+provider. The tripwire tests will tell you the shape moved.
+
+Compare version TOKENS, never whole lines: Grok prints
+`grok 1.0.5 (5115b46bc9) [stable]` on the host and `grok 1.0.5 (5115b46bc9)`
+inside the sandbox, and whole-line matching fails a build verified minutes
+earlier.
+
+Note `--provider` needs the RESOLVED binary path, not the launcher: symlink
+components are rejected because a symlink can be repointed underneath you.
+`ai-opencode providers` prints the path to pass.
+
 ## Fail-closed guarantees (why half-adding is safe)
 
 Verified: with a provider named but each piece missing in turn —

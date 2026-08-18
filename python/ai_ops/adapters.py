@@ -104,6 +104,15 @@ class OpenCodeAdapter:
     # argv, the OPENCODE_* environment and the generated agent definition all sit
     # behind the same seam as parse() -- otherwise the seam is nominal and the
     # next provider still has to edit the job lifecycle.
+    def required_flags(self) -> list[str]:
+        """CLI surface this adapter's argv depends on.
+
+        `providers verify` checks a NEW build still offers these, which is a
+        real contract check rather than trust in a version number -- and it
+        costs nothing, so it can run on every self-update.
+        """
+        return ["run", "--pure", "--dir", "--model", "--agent", "--format"]
+
     def argv(
         self,
         *,
@@ -303,6 +312,15 @@ class GrokAdapter:
             _json.dump(session, fh)
         _os.chmod(dest, 0o600)
         return dest
+
+    def required_flags(self) -> list[str]:
+        """CLI surface this adapter's argv depends on.
+
+        `providers verify` checks a NEW build still offers these, which is a
+        real contract check rather than trust in a version number -- and it
+        costs nothing, so it can run on every self-update.
+        """
+        return ["--output-format", "--model", "--always-approve"]
 
     def argv(
         self,
@@ -541,6 +559,15 @@ class ClaudeCodeAdapter:
     # Full tier: token via ANTHROPIC_AUTH_TOKEN, broker holds the real value.
     # Proven: a clean HOME with no credentials file runs fine on an env token.
     credential_in_sandbox = False
+
+    def required_flags(self) -> list[str]:
+        """CLI surface this adapter's argv depends on.
+
+        `providers verify` checks a NEW build still offers these, which is a
+        real contract check rather than trust in a version number -- and it
+        costs nothing, so it can run on every self-update.
+        """
+        return ["--print", "--output-format", "--verbose", "--model", "--permission-mode"]
 
     def argv(
         self,
@@ -793,6 +820,15 @@ class CodexAdapter:
             }),
             "YnJva2VyLXBsYWNlaG9sZGVy",
         ])
+
+    def required_flags(self) -> list[str]:
+        """CLI surface this adapter's argv depends on.
+
+        `providers verify` checks a NEW build still offers these, which is a
+        real contract check rather than trust in a version number -- and it
+        costs nothing, so it can run on every self-update.
+        """
+        return ["exec", "--json", "--sandbox", "--model", "--skip-git-repo-check"]
 
     def argv(
         self,

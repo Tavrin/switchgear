@@ -421,6 +421,48 @@ class ProviderPinning(unittest.TestCase):
             if old is not None:
                 os.environ["AI_OPS_ALLOW_LIVE_PROVIDER"] = old
 
+    def test_version_tokens_survive_formatting_differences(self):
+        """Measured: Grok prints `grok 1.0.5 (5115b46bc9) [stable]` on the host
+        and `grok 1.0.5 (5115b46bc9)` inside the sandbox. Whole-line matching
+        fails a build verified minutes earlier, which reads as a broken pin
+        rather than a formatting difference."""
+        from ai_ops.compat import version_token
+
+        self.assertEqual(version_token("grok 1.0.5 (5115b46bc9) [stable]"), "1.0.5")
+        self.assertEqual(version_token("grok 1.0.5 (5115b46bc9)"), "1.0.5")
+        self.assertEqual(version_token("1.18.18"), "1.18.18")
+        self.assertEqual(version_token("codex-cli 0.147.0"), "0.147.0")
+        self.assertEqual(version_token("2.1.234 (Claude Code)"), "2.1.234")
+        self.assertIsNone(version_token("no version here"))
+
+    def test_an_operator_verified_build_is_accepted(self):
+        """These CLIs self-update weekly. A pin that can only be changed by
+        editing source is a pin that gets switched off, so verified builds live
+        in an operator-owned file and are accepted alongside the built-in one."""
+        import tempfile
+
+        from ai_ops import compat
+        from ai_ops.provider import assert_pinned_version
+
+        old_file = compat.VERIFIED_FILE
+        compat.VERIFIED_FILE = os.path.join(tempfile.mkdtemp(prefix="ver-"), "v.json")
+        try:
+            with self.assertRaises(Refuse):
+                assert_pinned_version(0, b"grok 9.9.9 [stable]", False, "grok")
+            compat.record_verified("grok", "grok 9.9.9 [stable]")
+            self.assertIn("9.9.9", compat.accepted_versions("grok"))
+            # And it is accepted even though the sandbox prints it differently.
+            self.assertTrue(assert_pinned_version(0, b"grok 9.9.9", False, "grok"))
+        finally:
+            compat.VERIFIED_FILE = old_file
+
+    def test_the_refusal_names_the_command_that_clears_it(self):
+        from ai_ops.provider import assert_pinned_version
+
+        with self.assertRaises(Refuse) as cm:
+            assert_pinned_version(0, b"grok 42.0.0", False, "grok")
+        self.assertIn("providers verify", str(cm.exception))
+
     def test_version_pins_are_per_provider_and_substring_matched(self):
         """OpenCode prints a bare `1.18.18`; Grok prints
         `grok 1.0.4 (d846eb93d9) [stable]`. Equality would reject Grok outright."""
@@ -432,7 +474,7 @@ class ProviderPinning(unittest.TestCase):
             assert_pinned_version(0, b"grok 1.0.4 (d846eb93d9) [stable]", False, "grok")
         )
         with self.assertRaises(Refuse):
-            assert_pinned_version(0, b"grok 9.9.9", False, "grok")
+            assert_pinned_version(0, b"grok 42.0.0", False, "grok")
 
     def test_an_unpinned_provider_refuses_rather_than_passing(self):
         """An absent pin must not read as 'no constraint'."""

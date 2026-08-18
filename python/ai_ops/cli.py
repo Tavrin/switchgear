@@ -463,6 +463,98 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return rec, adapter.normalize(parsed, run_ended=bool(rec))
 
 
+def cmd_providers(ns: argparse.Namespace) -> int:
+    """List provider binaries, or verify a new build against its adapter.
+
+    Codex, Claude Code and Grok self-update, often weekly. The rail refuses a
+    build it has not seen, which is correct and would be intolerable if clearing
+    it meant editing source -- so verification is one command, it runs real
+    checks, and it records the result in an operator-owned file.
+    """
+    import subprocess
+
+    from .adapters import get_adapter
+    from .compat import PINNED_PROVIDERS, accepted_versions, record_verified, version_token
+
+    only = getattr(ns, "provider", None)
+    rows = []
+    for name, rec in sorted(PINNED_PROVIDERS.items()):
+        if only and name != only:
+            continue
+        binary = rec.get("launcher") or rec.get("path")
+        installed = None
+        if binary and os.path.exists(binary):
+            try:
+                out = subprocess.run(
+                    [os.path.realpath(binary), "--version"],
+                    capture_output=True, text=True, timeout=30,
+                    stdin=subprocess.DEVNULL,
+                )
+                lines = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+                installed = lines[-1] if lines else None
+            except Exception as exc:
+                installed = f"(unreadable: {type(exc).__name__})"
+        accepted = accepted_versions(name)
+        ok = bool(installed) and (version_token(installed) in accepted)
+        row = {"provider": name, "installed": installed, "verified": accepted,
+               # The path a caller must pass to --provider. NOT the launcher:
+               # resolve_provider rejects symlink components (a symlink can be
+               # repointed under you), so the resolved file is what works.
+               "provider_path": os.path.realpath(binary) if binary and os.path.exists(binary) else None,
+               "status": "ok" if ok else ("not installed" if not installed else "UNVERIFIED")}
+
+        if getattr(ns, "verify", False) and installed and not ok:
+            # The real check: does this build still offer the CLI surface the
+            # adapter's argv depends on? A version number proves nothing; a
+            # missing flag breaks every job for that provider.
+            adapter = get_adapter(name)
+            needed = adapter.required_flags() if hasattr(adapter, "required_flags") else []
+            try:
+                helptext = subprocess.run(
+                    [os.path.realpath(binary), "--help"],
+                    capture_output=True, text=True, timeout=30,
+                    stdin=subprocess.DEVNULL,
+                ).stdout or ""
+                sub = ""
+                for word in needed:
+                    if not word.startswith("-"):
+                        sub += subprocess.run(
+                            [os.path.realpath(binary), word, "--help"],
+                            capture_output=True, text=True, timeout=30,
+                            stdin=subprocess.DEVNULL,
+                        ).stdout or ""
+                surface = helptext + sub
+            except Exception as exc:
+                row["status"] = f"verify failed: {type(exc).__name__}"
+                rows.append(row)
+                continue
+            missing = [f for f in needed if f not in surface]
+            if missing:
+                row["status"] = "CONTRACT BROKEN"
+                row["missing_flags"] = missing
+            else:
+                record_verified(name, installed)
+                row["status"] = "verified"
+                row["verified"] = accepted_versions(name)
+                row["note"] = (
+                    "CLI surface checked. The event VOCABULARY is not re-checked here "
+                    "-- that needs a captured stream. If jobs start failing to parse, "
+                    "re-capture the fixture for this provider."
+                )
+        rows.append(row)
+
+    if ns.json:
+        print(json.dumps(rows, indent=2))
+    else:
+        for r in rows:
+            print(f"{r['provider']:10} {str(r['installed']):28} {r['status']}")
+            if r.get("provider_path"):
+                print(f"           --provider {r['provider_path']}")
+            if r.get("missing_flags"):
+                print(f"           missing: {', '.join(r['missing_flags'])}")
+    return 0 if all(r["status"] in ("ok", "verified", "not installed") for r in rows) else 1
+
+
 def cmd_execution_profile(ns: argparse.Namespace) -> int:
     """The content pin an orchestrator records at first spawn.
 
@@ -744,6 +836,12 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--token")
     ls.add_argument("--mode")
     ls.set_defaults(func=cmd_lease)
+
+    pv = sub.add_parser("providers")
+    pv.add_argument("--provider")
+    pv.add_argument("--verify", action="store_true",
+                    help="check an unverified build against its adapter's CLI surface and record it")
+    pv.set_defaults(func=cmd_providers)
 
     ep = sub.add_parser("execution-profile")
     ep.set_defaults(func=cmd_execution_profile)
