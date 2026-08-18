@@ -204,14 +204,17 @@ network" was true of every path anyone had run and false of one nobody had.
 
 Still open:
 
-0. **OAuth providers — where each stands.** Grok is LIVE at the fallback tier
-   (chosen by Etienne 2026-08-18): access token in the sandbox, refresh stripped,
-   egress broker-locked. Proven with real scouts. Codex and Claude Code are
-   full-tier candidates (they send a placeholder to their redirected endpoint,
-   measured) with the broker plumbing built and the registry scaffolded to the
-   researched-correct upstreams/headers; each still needs its adapter, a captured
-   fixture, and one ~$0.01 run to confirm the backend honours its OAuth access
-   token. `docs/ADDING-A-PROVIDER.md` has the full fleet table and procedure.
+0. **All four target providers are LIVE.** OpenCode, Claude Code and Codex run
+   at the FULL tier (credential never enters the sandbox: placeholder in, real
+   token swapped by the broker). Grok runs at the FALLBACK tier (access token in
+   the sandbox, refresh stripped) because its CLI validates its session locally.
+   Every one proven end to end with a real scout. `docs/ADDING-A-PROVIDER.md`
+   carries the fleet table and the per-CLI gotchas (Codex is websocket-first and
+   needs supports_websockets=false; Claude's OAuth header is Authorization not
+   x-api-key; Codex's ChatGPT-Account-ID is broker-injected).
+   Remaining per-provider work: bounded-WRITE is still OpenCode-only -- Grok,
+   Claude and Codex adapters return a clear refusal for write roles, because a
+   write lane needs its own handoff contract and a captured write-mode stream.
 
 1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
    confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex
