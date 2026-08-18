@@ -61,6 +61,9 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             # deciding whether to keep delegating needs the real number, and it
             # is already in the persisted record.
             "cost_usd": record.get("cost_usd"),
+            # Provenance for a continued session: a caller reading only this
+            # record would otherwise not know the model already had context.
+            "resumed": record.get("resumed"),
         }, indent=2))
         return
     print(f"model={record['model']['id']}")
@@ -315,6 +318,72 @@ def launch_background(ns: argparse.Namespace) -> int:
     print(json.dumps(info, indent=2) if getattr(ns, "json", False)
           else "\n".join(f"{k}={v}" for k, v in info.items()))
     return 0
+
+
+def cmd_resume(ns: argparse.Namespace) -> int:
+    """Continue a finished job's provider session with a new message.
+
+    This is the steering primitive, and every provider implements it natively
+    (codex `exec resume`, claude `--resume`, grok `--resume`, opencode
+    `run --session`). It is deliberately NOT a live channel into a running
+    sandbox: the resumed turn is a NEW bounded job with its own boundary,
+    evidence and cost, which keeps the freeze/review chain reasoning about a
+    complete record instead of one shaped by inputs it never saw.
+
+    The message is delivered as the job's prompt, so the role instructions --
+    and therefore the rail's authority over what the worker may do -- are
+    reapplied exactly as on a first run.
+    """
+    if getattr(ns, "background", False):
+        return launch_background(ns)
+    from .adapters import get_adapter, parse_lenient
+
+    root = StateRoot(_state_path(ns))
+    prior = read_json(os.path.join(root.job_dir(ns.job), "result.json"))
+    profile = load_profile(_profile_path(ns))
+    adapter = get_adapter(profile.get("provider"))
+
+    events_path = (prior.get("artifacts") or {}).get("events")
+    session = None
+    if events_path and os.path.isfile(events_path):
+        with open(events_path, encoding="utf-8", errors="replace") as fh:
+            parsed, _ = parse_lenient(fh.read())
+        session = adapter.session_id(parsed)
+    if not getattr(adapter, "session_store_paths", lambda: [])():
+        _die(
+            f"resume is not supported for provider {adapter.name!r}: its "
+            "conversation-store location has not been measured, and resuming "
+            "without it would start a FRESH conversation wearing the previous "
+            "session's id -- a continuation in name only."
+        )
+    if not session:
+        # Honest and specific: for Grok the id exists only in the terminal event,
+        # so a job that died mid-run genuinely has nothing to resume from.
+        _die(
+            f"job {ns.job} has no resumable session id in its evidence "
+            f"(provider {adapter.name}). A job that failed before its session id "
+            "was emitted cannot be resumed; start a new job instead."
+        )
+
+    rec = job.run_job(
+        profile_path=_profile_path(ns),
+        state_path=_state_path(ns),
+        mode=prior["mode"],
+        role=prior["role"],
+        worktree=prior["dir"],
+        prompt=ns.message,
+        provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
+        lease_token=getattr(ns, "token", None),
+        job_id=os.environ.get("AI_OPS_JOB_ID") or None,
+        resume_session=session,
+        resumed_from=ns.job,
+    )
+    _print_job(rec, getattr(ns, "json", False))
+    if rec["status"] == "dirty":
+        return 2
+    if rec["status"] in {"timeout"}:
+        return 124
+    return 0 if rec["status"] in {"ok", "awaiting_review"} else 1
 
 
 def cmd_cancel(ns: argparse.Namespace) -> int:
@@ -994,6 +1063,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     qt = sub.add_parser("quota")
     qt.set_defaults(func=cmd_quota)
+
+    rs = sub.add_parser("resume")
+    rs.add_argument("job", help="the job whose provider session to continue")
+    rs.add_argument("message", help="what to say to it")
+    rs.add_argument("--token", help="lease token, required to resume a bounded-write job")
+    rs.add_argument(
+        "--background", action="store_true",
+        help="launch detached; print the job id at once and poll with `status`",
+    )
+    rs.set_defaults(func=cmd_resume)
 
     cx = sub.add_parser("cancel")
     cx.add_argument("job")

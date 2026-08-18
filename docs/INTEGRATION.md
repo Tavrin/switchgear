@@ -25,6 +25,7 @@ ai-opencode --json [--profile P] [--state S] [--provider ABS] <command>
 | `promote --subject J --review R` | atomic promotion under the worktree lock | `ok` or refusal |
 | `lease acquire\|release\|show --dir D` | worktree lease lifecycle | — |
 | `<job cmd> --background` | launch detached; prints `job_id` at once and returns | — |
+| `resume <job-id> "<msg>"` | continue that job's provider session with a new message | as for the original mode |
 | `cancel <job-id>` | stop a backgrounded job (pid + starttime + boot_id checked) | — |
 | `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | — |
 | `status <job-id> --full` | the whole persisted record (exists only once finished) | — |
@@ -137,6 +138,34 @@ not have a ceiling.
 
 Absent budget file means unlimited, and `quota` says so rather than implying a
 limit exists.
+
+### Steering a job: resume
+
+`resume <job-id> "<message>"` continues that job's provider session. Every
+provider supports it natively (codex `exec resume`, claude `--resume`, grok
+`--resume`, opencode `run --session`), keyed on the session id the rail already
+captures.
+
+It is deliberately **not** a live channel into a running sandbox. The resumed
+turn is a **new bounded job** with its own boundary, evidence and cost, and the
+record carries `resumed: {session, from_job}` so a reader knows the model already
+held context. That keeps the freeze/review chain reasoning about a complete
+record rather than one shaped by inputs it never saw. The message is delivered as
+the prompt, so the role instructions — and the rail's authority over what the
+worker may do — are reapplied exactly as on a first run.
+
+**Conversation state is persisted per worktree per provider**, under
+`<state>/sessions/`. It has to be: providers keep history inside their HOME, and
+each job gets a fresh synthetic HOME that is reclaimed afterwards — without this
+a resume finds nothing and the CLI answers "No conversation found with session
+ID". Only the paths an adapter names are persisted, never the whole provider
+config directory, which is where credentials live.
+
+Resume is refused, rather than faked, for a provider whose conversation-store
+location has not been measured — resuming without it would start a fresh
+conversation wearing the previous session's id. Measured today: Claude Code and
+Codex. Not yet: Grok and OpenCode. Note also that Grok emits its session id only
+in its terminal event, so a Grok job that dies mid-run has nothing to resume.
 
 ### Background jobs
 

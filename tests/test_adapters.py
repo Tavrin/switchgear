@@ -577,8 +577,12 @@ class ModelIdentityDerivation(unittest.TestCase):
             ("opencode-go/kimi-k2.7-code", "kimi", "moonshot"),
             ("opencode-go/qwen3.7-max", "qwen", "alibaba"),
             ("opencode-go/minimax-m3", "minimax", "minimax"),
-            ("grok/grok-5.0", "grok", "xai"),
-            ("codex/gpt-6", "gpt", "openai"),
+            # Deliberately FICTIONAL ids: the case that matters is a model
+            # released after this code was written, which cannot be tested with
+            # a present-day name. Named so nobody mistakes the suite for a
+            # catalogue of models you can actually call.
+            ("grok/grok-does-not-exist-9", "grok", "xai"),
+            ("codex/gpt-vnext-fictional", "gpt", "openai"),
             ("claude/claude-haiku-4-5", "claude", "anthropic"),
         ]:
             rec = model_record(mid)
@@ -623,6 +627,63 @@ class ModelIdentityDerivation(unittest.TestCase):
 
         with self.assertRaises(Refuse):
             model_record("openai/gpt-4")
+
+
+class ResumeContract(unittest.TestCase):
+    """Steering is turn-based: every provider resumes natively, keyed on the
+    session id the rail already captures."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def _argv(self, name, **over):
+        base = dict(provider_argv=["/BIN"], worktree="/w", model_id="p/m",
+                    agent="ai-ops-readonly", role="scout", job_id="j", prompt="MSG")
+        base.update(over)
+        return get_adapter(name).argv(**base)
+
+    def test_every_provider_builds_its_own_resume_form(self):
+        """The forms genuinely differ: codex resumes via a SUBCOMMAND, the rest
+        via a flag, and opencode's flag is --session rather than --resume."""
+        oc = self._argv("opencode", resume_session="SID")
+        self.assertIn("--session", oc)
+        self.assertIn("SID", oc)
+
+        cl = self._argv("claude", resume_session="SID")
+        self.assertIn("--resume", cl)
+
+        gk = self._argv("grok", resume_session="SID")
+        self.assertIn("--resume", gk)
+
+        cx = self._argv("codex", resume_session="SID")
+        self.assertEqual(cx[1:3], ["exec", "resume"])
+        self.assertEqual(cx[3], "SID")
+
+    def test_no_resume_session_leaves_argv_untouched(self):
+        for name in ("opencode", "claude", "grok", "codex"):
+            argv = self._argv(name)
+            self.assertNotIn("--resume", argv, name)
+            self.assertNotIn("--session", argv, name)
+            self.assertNotIn("resume", argv[1:3], name)
+
+    def test_session_stores_are_declared_only_where_measured(self):
+        """An empty list means resume is REFUSED for that provider. Guessing the
+        path would produce a fresh conversation wearing the previous session's
+        id -- a continuation in name only."""
+        self.assertIn(".claude/projects", get_adapter("claude").session_store_paths())
+        self.assertIn(".codex/sessions", get_adapter("codex").session_store_paths())
+        self.assertEqual(get_adapter("grok").session_store_paths(), [])
+        self.assertEqual(get_adapter("opencode").session_store_paths(), [])
+
+    def test_session_stores_never_include_the_credential_directory(self):
+        """Persisting conversation state must not persist credentials: only the
+        named subpaths are bound, never the whole provider config directory."""
+        for name in ("claude", "codex", "grok", "opencode"):
+            for path in get_adapter(name).session_store_paths():
+                self.assertNotIn("auth", path.lower(), f"{name}: {path}")
+                self.assertNotIn("credential", path.lower(), f"{name}: {path}")
+                self.assertNotEqual(path.rstrip("/"), ".claude", name)
+                self.assertNotEqual(path.rstrip("/"), ".codex", name)
 
 
 class ExecutionPinning(unittest.TestCase):

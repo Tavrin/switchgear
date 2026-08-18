@@ -124,6 +124,21 @@ class OpenCodeAdapter:
         """
         return list(provider_argv) + ["models"]
 
+    def session_store_paths(self) -> list[str]:
+        """HOME-relative paths holding CONVERSATION state, not credentials.
+
+        Provider session history lives inside the provider's HOME, and every
+        job gets a fresh synthetic HOME that is reclaimed afterwards -- so
+        without persisting these, a resumed job finds nothing and the CLI
+        answers "No conversation found with session ID". Measured per
+        provider; an empty list means resume is refused for it rather than
+        silently starting a fresh conversation dressed as a continuation.
+
+        Not yet measured for OpenCode, so resume is refused rather than
+        silently starting a fresh conversation that looks like a continuation.
+        """
+        return []
+
     def argv(
         self,
         *,
@@ -135,9 +150,12 @@ class OpenCodeAdapter:
         job_id: str,
         prompt: str,
         attach_dir: str | None = None,
+        resume_session: str | None = None,
     ) -> list[str]:
+        resume = ["--session", resume_session] if resume_session else []
         return list(provider_argv) + [
             "run",
+            *resume,
             "--pure",
             "--dir",
             worktree,
@@ -348,6 +366,21 @@ class GrokAdapter:
         """
         return list(provider_argv) + ["models"]
 
+    def session_store_paths(self) -> list[str]:
+        """HOME-relative paths holding CONVERSATION state, not credentials.
+
+        Provider session history lives inside the provider's HOME, and every
+        job gets a fresh synthetic HOME that is reclaimed afterwards -- so
+        without persisting these, a resumed job finds nothing and the CLI
+        answers "No conversation found with session ID". Measured per
+        provider; an empty list means resume is refused for it rather than
+        silently starting a fresh conversation dressed as a continuation.
+
+        Not yet measured for Grok, and its session id only exists in the
+        terminal event anyway, so resume is refused rather than faked.
+        """
+        return []
+
     def argv(
         self,
         *,
@@ -359,6 +392,7 @@ class GrokAdapter:
         job_id: str,
         prompt: str,
         attach_dir: str | None = None,
+        resume_session: str | None = None,
     ) -> list[str]:
         # No --dir: grok works from cwd, and build_bwrap_argv --chdir's to the
         # worktree. No permission flags either -- deliberately. Grok has
@@ -376,6 +410,8 @@ class GrokAdapter:
             "--model",
             wire,
         ]
+        if resume_session:
+            argv += ["--resume", resume_session]
         if agent.endswith("bounded-write"):
             # Headless has no one to answer an approval prompt. The OS boundary
             # is the control: only the leased worktree is writable, the git dir
@@ -610,6 +646,21 @@ class ClaudeCodeAdapter:
         """
         return None
 
+    def session_store_paths(self) -> list[str]:
+        """HOME-relative paths holding CONVERSATION state, not credentials.
+
+        Provider session history lives inside the provider's HOME, and every
+        job gets a fresh synthetic HOME that is reclaimed afterwards -- so
+        without persisting these, a resumed job finds nothing and the CLI
+        answers "No conversation found with session ID". Measured per
+        provider; an empty list means resume is refused for it rather than
+        silently starting a fresh conversation dressed as a continuation.
+
+        Measured: a run writes
+        ~/.claude/projects/<cwd-slug>/<session-id>.jsonl inside the sandbox HOME.
+        """
+        return [".claude/projects", ".claude/sessions"]
+
     def argv(
         self,
         *,
@@ -621,6 +672,7 @@ class ClaudeCodeAdapter:
         job_id: str,
         prompt: str,
         attach_dir: str | None = None,
+        resume_session: str | None = None,
     ) -> list[str]:
         # No --dir: build_bwrap_argv --chdir's to the worktree. --verbose is
         # REQUIRED for stream-json (the CLI rejects the combination without it).
@@ -634,6 +686,8 @@ class ClaudeCodeAdapter:
             "--model",
             wire,
         ]
+        if resume_session:
+            argv += ["--resume", resume_session]
         if attach_dir:
             # Controller-written material (the frozen review diff) lives outside
             # the worktree, and Claude's tools refuse paths outside the working
@@ -893,6 +947,21 @@ class CodexAdapter:
         """
         return None
 
+    def session_store_paths(self) -> list[str]:
+        """HOME-relative paths holding CONVERSATION state, not credentials.
+
+        Provider session history lives inside the provider's HOME, and every
+        job gets a fresh synthetic HOME that is reclaimed afterwards -- so
+        without persisting these, a resumed job finds nothing and the CLI
+        answers "No conversation found with session ID". Measured per
+        provider; an empty list means resume is refused for it rather than
+        silently starting a fresh conversation dressed as a continuation.
+
+        Measured via `codex doctor`: rollout/session files live under
+        ~/.codex/sessions.
+        """
+        return [".codex/sessions"]
+
     def argv(
         self,
         *,
@@ -904,6 +973,7 @@ class CodexAdapter:
         job_id: str,
         prompt: str,
         attach_dir: str | None = None,
+        resume_session: str | None = None,
     ) -> list[str]:
         # --skip-git-repo-check: the sandbox mounts the git dir read-only and
         # Codex's own check is redundant with the rail's worktree identity work.
@@ -914,10 +984,14 @@ class CodexAdapter:
         # readonly job the worktree is a read-only mount, so even a wrong value
         # here cannot grant writes.
         sandbox_mode = "workspace-write" if agent.endswith("bounded-write") else "read-only"
-        argv = list(provider_argv) + [
-            "exec", "--skip-git-repo-check", "--json",
-            "--sandbox", sandbox_mode, "--model", wire,
-        ]
+        argv = list(provider_argv) + ["exec"]
+        if resume_session:
+            # Codex resumes through a SUBCOMMAND rather than a flag:
+            # `codex exec resume <session> <prompt>`. Same headless --json
+            # stream, so the normalizer and the whole evidence path are unchanged.
+            argv += ["resume", resume_session]
+        argv += ["--skip-git-repo-check", "--json", "--sandbox", sandbox_mode,
+                 "--model", wire]
         if attach_dir:
             argv += ["--add-dir", attach_dir]
         return argv + [prompt]

@@ -111,6 +111,7 @@ def build_bwrap_argv(
     provider_argv: Sequence[str],
     command_binds: Sequence[str] | None = None,
     broker_socket: str | None = None,
+    session_binds: Sequence[tuple[str, str]] | None = None,
 ) -> list[str]:
     bwrap = require_bwrap()
     argv: list[str] = [
@@ -165,6 +166,12 @@ def build_bwrap_argv(
         argv.extend(["--ro-bind", ident.git_dir, ident.git_dir])
 
     argv.extend(["--bind", synth_home, synth_home])
+    # Durable provider CONVERSATION state, bound over the per-job HOME so a
+    # resumed job can find the session the previous one created. Deliberately
+    # narrow: only the paths an adapter names, never the whole provider config
+    # directory, which is where credentials live.
+    for src, dst in session_binds or ():
+        argv.extend(["--bind", src, dst])
     argv.extend(["--chdir", wt])
 
     for extra in command_binds or ():

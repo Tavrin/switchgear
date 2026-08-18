@@ -84,6 +84,8 @@ def run_job(
     lease_token: Optional[str] = None,
     job_id: Optional[str] = None,
     attachments: Optional[dict[str, str]] = None,
+    resume_session: Optional[str] = None,
+    resumed_from: Optional[str] = None,
 ) -> dict[str, Any]:
     profile = load_profile(profile_path)
     profile_digest = sha256_json(profile)
@@ -297,6 +299,7 @@ def run_job(
             job_id=job_id,
             prompt=job_prompt,
             attach_dir=attach_dir,
+            resume_session=resume_session,
         )
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
@@ -335,6 +338,19 @@ def run_job(
             provider.assert_pinned_version(
                 probe.returncode, probe.stdout, probe.timed_out, adapter.name
             )
+        # Durable conversation state, per worktree per provider, so a later
+        # `resume` can continue this session. It lives OUTSIDE the job directory
+        # precisely because the job's sandbox home is reclaimed when the job
+        # ends -- which is why the first resume attempt failed with "No
+        # conversation found with session ID".
+        session_binds = []
+        for rel in getattr(adapter, "session_store_paths", lambda: [])():
+            src = os.path.join(
+                root.path, "sessions", lease.identity_key(ident), adapter.name, rel
+            )
+            os.makedirs(src, mode=0o700, exist_ok=True)
+            session_binds.append((src, os.path.join(dirs["home"], rel)))
+
         bwrap_argv = sandbox.build_bwrap_argv(
             ident=ident,
             policy=policy,
@@ -342,6 +358,7 @@ def run_job(
             provider_argv=inner_prefix + inner,
             command_binds=extra_binds,
             broker_socket=broker_sock,
+            session_binds=session_binds,
         )
         before_id = identity.git_identity_digest(ident)
         before_tree = identity.tree_digest(ident)
@@ -470,6 +487,11 @@ def run_job(
             "error": err or None,
             "lease_uuid": token_uuid,
         }
+        if resume_session:
+            # A resumed job is a NEW job with its own sandbox, evidence and
+            # cost -- but it is not independent history, and a reviewer reading
+            # only this record would miss that the model already had context.
+            record["resumed"] = {"session": resume_session, "from_job": resumed_from}
         if err:
             record["error"] = err
         else:

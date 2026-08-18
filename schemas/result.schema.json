@@ -161,6 +161,21 @@
       "type": "number",
       "minimum": 0,
       "description": "Measured cost of this job in USD, summed from the provider's own per-step figures. Not an estimate."
+    },
+    "resumed": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "from_job": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "Set when this job continued a prior provider session. A resumed job is new work with its own evidence, but its model already held context from the named job."
     }
   }
 }
