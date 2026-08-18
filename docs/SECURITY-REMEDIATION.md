@@ -323,7 +323,10 @@ committed `__main__.py`. No security decision stays in the shell wrapper.
   OpenCode runtime JSON from that object only.
 - **Probes:** unit test that compiled tools.bash=deny ⇒ runtime JSON
   bash deny and sandbox does not grant extra writes.
-- **Status:** implemented
+- **Status:** implemented; the static `policies/*.json` and
+  `adapters/opencode/*` copies were deleted 2026-08-18. They had survived the
+  fix unreferenced and had already drifted weaker than the generated config —
+  the drift this finding predicted, arriving on schedule.
 - **Blocks:** A, B
 
 ---

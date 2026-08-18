@@ -20,7 +20,7 @@ It never calls a live model and never touches live config.
 - Process-group timeout reaps grandchildren; `orphans_remaining=0`
 - Red-team suite in `tests/write/test_redteam_containment.sh`
 - `containment.required=true` + missing backend refuses
-- Noun grep on `bin/ lib/ adapters/ policies/ skills/`
+- Noun grep on the generic substrate (every scan directory that exists)
 
 ## Later live dry-run (not this repo)
 

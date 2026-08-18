@@ -6,9 +6,16 @@ pattern='(^|[^A-Za-z0-9_-])(another project|Freelancer|the old merge-policy scri
 # standalone tracker CLI name
 br_pattern='(^|[^A-Za-z0-9_-])br([^A-Za-z0-9_-]|$)'
 
-hits=$(grep -RInE "$pattern" \
-  "$ROOT/bin" "$ROOT/lib" "$ROOT/python" "$ROOT/adapters" "$ROOT/policies" "$ROOT/skills" "$ROOT/models" "$ROOT/commands" \
-  || true)
+# Scan every generic-substrate directory that exists. Listing a directory that
+# has been deleted would otherwise reduce coverage silently, so the set actually
+# scanned is printed and must not be empty.
+SCAN=()
+for d in bin lib python adapters policies skills models commands; do
+  if [ -d "$ROOT/$d" ]; then SCAN+=("$ROOT/$d"); fi
+done
+[ ${#SCAN[@]} -gt 0 ] || { echo "FAIL: no generic-substrate directories found" >&2; exit 1; }
+
+hits=$(grep -RInE "$pattern" "${SCAN[@]}" || true)
 if [ -n "$hits" ]; then
   echo "FAIL: project nouns in generic code:" >&2
   echo "$hits" >&2
@@ -16,12 +23,10 @@ if [ -n "$hits" ]; then
 fi
 
 # 'br' as a token (not branch/break/...)
-hits=$(grep -RInE "$br_pattern" \
-  "$ROOT/bin" "$ROOT/lib" "$ROOT/python" "$ROOT/adapters" "$ROOT/policies" "$ROOT/skills" "$ROOT/models" "$ROOT/commands" \
-  || true)
+hits=$(grep -RInE "$br_pattern" "${SCAN[@]}" || true)
 if [ -n "$hits" ]; then
   echo "FAIL: tracker token in generic code:" >&2
   echo "$hits" >&2
   exit 1
 fi
-echo "ok - no project nouns in generic substrate"
+echo "ok - no project nouns in generic substrate (scanned: ${SCAN[*]##*/})"

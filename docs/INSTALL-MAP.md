@@ -24,8 +24,8 @@ Not the install state. These:
 
 ## Current standing instruction
 
-**Disposable and lab repositories only.** The write lane has exactly one live
-end-to-end cycle behind it (a three-line change in a two-file toy repo, 2026-08-18).
+**Disposable and lab repositories only.** The write lane has a handful of live
+end-to-end cycles behind it (2026-08-18).
 That is enough to call it working, not enough to call it trusted. Do not point
 bounded-write at a real project until the write lane has meaningful mileage and a
 cross-vendor review has been demonstrated.
@@ -41,15 +41,21 @@ This table is the destination list after Stage 2/3 decisions.
 |---|---|---|
 | `agent-ops/bin/ai-opencode` | `~/.local/bin/ai-opencode` | Stage 2, **beside** the live wrapper, after the language decision |
 | `agent-ops/python/ai_ops/*` | `~/.local/lib/ai-ops/` (or next to the binary) | Stage 2; the launcher resolves the package relative to itself |
-| `agent-ops/adapters/opencode/agents/readonly.md` | `~/.config/opencode/agents/ai-ops-readonly.md` | Stage 2 |
-| `agent-ops/adapters/opencode/runtime-readonly.json` | `~/.config/opencode/ai-ops-readonly-runtime.json` | Stage 2 |
 | `agent-ops/skills/opencode-delegation/SKILL.md` | **One** canonical skill location. Prefer leaving it in this repo, or a single user-level path that both harnesses already discover. Do **not** maintain a second copy. Never overwrite the live project-specific skill before a project profile exists. | Stage 3 |
 | Project-authored profile (not in this repo) | owned by that project | Stage 1 |
 
 ## Never installed by this work
 
-- `adapters/opencode/agents/bounded-write.md`
-- `adapters/opencode/runtime-bounded-write.json`
+- `adapters/*`, `policies/*` — **deleted** (2026-08-18), completing F20. They
+  were static copies of the agent frontmatter, the OpenCode runtime JSON and the
+  mode policy; nothing loaded them, and they had already drifted weaker than what
+  actually runs: they punched a `/tmp/opencode/**` hole in `external_directory`
+  and lacked the `plugin: []` that keeps host plugins out. The agent definition
+  and runtime config are now generated per job from the compiled policy
+  (`CompiledPolicy.agent_definition` / `to_opencode_runtime`) and written into
+  the sandbox's own `$HOME`. Nothing is installed into `~/.config/opencode`, and
+  nothing should be: provider-config isolation depends on the host config being
+  invisible to the job.
 - `bin/ai-cmd`, `bin/ai-ro`, `lib/*.sh` — **deleted** in the N2 remediation.
   They were the pre-Python host-side command path (`os.execvp` from a
   user-supplied profile, no sandbox) and are superseded by
