@@ -31,6 +31,14 @@ PINNED_PROVIDERS: dict[str, dict[str, str | None]] = {
         "path": "/home/user/.local/share/claude/versions/2.1.234",
         "version": "2.1.234",
     },
+    "codex": {
+        # The vendored static musl binary, NOT the `codex` on PATH -- that is a
+        # `#!/usr/bin/env node` npm shim which dies inside the sandbox with
+        # "node: No such file or directory".
+        "path": ("/home/user/.nvm/versions/node/v22.22.0/lib/node_modules/@openai/codex/"
+                 "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"),
+        "version": "0.147.0",
+    },
     "grok": {
         # The launcher symlinks into ~/.grok/downloads; the real file is pinned
         # so an update that repoints the symlink is caught rather than followed.

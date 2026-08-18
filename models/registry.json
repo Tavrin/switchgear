@@ -30,10 +30,21 @@
       "credential_class": "oauth",
       "auth_file": "~/.codex/auth.json",
       "auth_format": "codex-tokens",
+      "auth_header": "authorization",
+      "auth_scheme": "Bearer",
       "allowed_paths": [
-        "/responses"
+        "/responses",
+        "/ps/mcp"
       ],
-      "_note": "ChatGPT subscription path. Needs a ChatGPT-Account-ID header (chatgpt_account_id claim). No adapter/pin yet -> cannot run live. Capture a real stream first."
+      "allowed_get_paths": [
+        "/models",
+        "/plugins/featured",
+        "/ps/plugins/list",
+        "/ps/plugins/installed",
+        "/ps/plugins/suggested"
+      ],
+      "credential_tier": "full",
+      "_note": "ChatGPT subscription. MEASURED: inference is POST /responses, but only after supports_websockets=false -- by default Codex uses wss://api.openai.com/v1/responses which ignores the redirect and no HTTP broker can proxy. ChatGPT-Account-ID is derived from the token and is injected by the broker. The plugin/model GETs are allowlisted because denying them sent the CLI into a 647-request retry loop."
     },
     "claude": {
       "upstream": "https://api.anthropic.com",
@@ -135,6 +146,11 @@
       "provider": "claude",
       "model_family": "claude",
       "vendor_family": "anthropic"
+    },
+    "codex/gpt-5.6-sol": {
+      "provider": "codex",
+      "model_family": "gpt",
+      "vendor_family": "openai"
     }
   },
   "deny": [

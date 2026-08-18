@@ -352,6 +352,90 @@ class ClaudeRealStream(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_API_KEY", env)
 
 
+CODEX_FIXTURE = ROOT / "tests" / "fixtures" / "codex-real-scout.jsonl"
+
+
+class CodexRealStream(unittest.TestCase):
+    """Anchored on a stream captured 2026-08-18 from codex-cli 0.147.0."""
+
+    def setUp(self):
+        self.raw = CODEX_FIXTURE.read_text()
+        self.events, _ = parse_lenient(self.raw)
+        self.adapter = get_adapter("codex")
+
+    def test_the_fixture_still_carries_the_real_vocabulary(self):
+        types = {e.get("type") for e in self.events}
+        self.assertEqual(
+            types,
+            {"thread.started", "turn.started", "item.started", "item.completed",
+             "turn.completed"},
+        )
+        # thread_id is on the FIRST event, unlike Grok's sessionId which is only
+        # on its terminal event -- resume info exists from job start.
+        self.assertEqual(self.events[0]["type"], "thread.started")
+        self.assertTrue(self.events[0].get("thread_id"))
+
+    def test_normalize_reads_items_and_usage(self):
+        norm = self.adapter.normalize(self.events, run_ended=True)
+        self.assertTrue([n for n in norm if n["event"] == "status"][0]["sessionId"])
+        fin = [n for n in norm if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+        self.assertGreater(fin["tokens"], 0)
+        # Codex reports NO cost. Report 0.0 rather than invent one.
+        self.assertEqual(fin["costUSD"], 0.0)
+        tools = [n["name"] for n in norm if n["event"] == "tool"]
+        self.assertIn("command_execution", tools)
+
+    def test_an_error_item_is_a_failure_even_when_the_turn_closes_normally(self):
+        """Measured: a run whose code-mode host was missing emitted an error
+        item, answered "I can't inspect the file", and closed its turn normally
+        -- so it read as completed. Claims-done-with-evidence-of-failure."""
+        evs = [
+            {"type": "thread.started", "thread_id": "t1"},
+            {"type": "turn.started"},
+            {"type": "item.completed",
+             "item": {"id": "i0", "type": "error", "message": "code-mode host missing"}},
+            {"type": "item.completed",
+             "item": {"id": "i1", "type": "agent_message", "text": "I can't inspect it."}},
+            {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}},
+        ]
+        fin = [n for n in self.adapter.normalize(evs, run_ended=True)
+               if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_FAILED)
+        self.assertIn("code-mode host", fin["exitSummary"])
+
+    def test_codex_is_full_tier_and_forces_the_http_transport(self):
+        """supports_websockets=false is load-bearing: by default Codex reaches
+        inference over wss://api.openai.com/v1/responses, which ignores the
+        base-url redirect and which an HTTP broker cannot proxy at all."""
+        import tempfile as _tf
+
+        self.assertFalse(getattr(self.adapter, "credential_in_sandbox", False))
+        home = _tf.mkdtemp(prefix="cdxenv-")
+        env = self.adapter.isolation_env(home, {}, "http://127.0.0.1:8099")
+        self.assertTrue(env["CODEX_HOME"].endswith(".codex"))
+        cfg = Path(env["CODEX_HOME"], "config.toml").read_text()
+        self.assertIn("supports_websockets = false", cfg)
+        self.assertIn("http://127.0.0.1:8099", cfg)
+        # A placeholder session is written; the real token stays controller-side.
+        auth = json.loads(Path(env["CODEX_HOME"], "auth.json").read_text())
+        self.assertIsNone(auth["OPENAI_API_KEY"])
+        self.assertEqual(auth["tokens"]["account_id"], self.adapter.PLACEHOLDER_ACCOUNT)
+
+    def test_extra_binds_include_the_helper_binaries(self):
+        """Binding only the executable gave a job that authenticated and answered
+        while reporting "the workspace execution tool is unavailable"."""
+        import os as _os
+
+        real = ("/home/user/.nvm/versions/node/v22.22.0/lib/node_modules/@openai/codex/"
+                "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex")
+        if not _os.path.exists(real):
+            self.skipTest("codex not installed")
+        binds = self.adapter.extra_binds([real])
+        self.assertTrue(binds)
+        self.assertTrue(_os.path.isdir(_os.path.join(binds[0], "bin")))
+
+
 class ExecutionPinning(unittest.TestCase):
     """Content pin, not path pin (atelier ATT-006, owner ruling)."""
 

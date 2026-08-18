@@ -41,7 +41,7 @@ import base64
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .errors import Refuse
@@ -60,6 +60,12 @@ class Credential:
     cls: str
     source: str
     expires_at: float | None = None
+    # Headers the UPSTREAM requires that are derived from the real credential,
+    # so they must be injected controller-side alongside it. Codex needs
+    # ChatGPT-Account-ID, and the CLI derives it from its own token's claims --
+    # which in the full tier is a PLACEHOLDER, so the sandbox would send the
+    # wrong account id unless the broker overrides it.
+    extra_headers: dict = field(default_factory=dict)
 
     def authorization(self) -> str:
         return f"Bearer {self.token}"
@@ -152,6 +158,29 @@ def _extract_grok(doc: dict[str, Any]) -> tuple[str, float | None]:
     raise Refuse("grok auth file has no session entry with a key")
 
 
+def codex_account_id(token: str) -> str | None:
+    """The chatgpt_account_id claim, read from the access token.
+
+    Measured: the Codex CLI puts this in a ChatGPT-Account-ID header and derives
+    it from whatever token it holds. Under the full tier that is a placeholder,
+    so the broker must replace the header using the REAL token's claim.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode()))
+    except Exception:
+        return None
+    auth = claims.get("https://api.openai.com/auth")
+    if isinstance(auth, dict):
+        acct = auth.get("chatgpt_account_id")
+        if isinstance(acct, str) and acct:
+            return acct
+    return None
+
+
 def _extract_codex(doc: dict[str, Any]) -> tuple[str, float | None]:
     """`{"tokens": {"access_token": <jwt>, ...}, "OPENAI_API_KEY": null}`
 
@@ -219,6 +248,10 @@ def load_oauth_credential(provider_id: str, prec: dict[str, Any]) -> Credential:
 
     token, expires_at = extractor(doc)
     cred = Credential(token=token, cls="oauth", source=path, expires_at=expires_at)
+    if fmt == "codex-tokens":
+        acct = codex_account_id(token)
+        if acct:
+            cred.extra_headers["chatgpt-account-id"] = acct
     remaining = cred.seconds_remaining()
     if remaining is not None and remaining <= EXPIRY_SKEW_S:
         raise Refuse(

@@ -13,29 +13,38 @@ locally first?** If it sends the placeholder, the broker swaps in the real value
 and the credential never enters the sandbox — the full tier. If it validates
 locally, the real (access) token must be inside the sandbox — the fallback tier.
 
-| CLI | Auth | Redirect knob | Sends placeholder? | Tier | Status |
+| CLI | Auth | Redirect knob | Placeholder? | Tier | Status |
 |---|---|---|---|---|---|
-| **OpenCode** | API key | provider config `baseURL` | yes | full | **shipped, live-proven** |
-| **Codex** | ChatGPT OAuth | `model_providers.*.base_url` | **yes** — `Bearer <ph>` → `/v1/responses` | full plumbing | adapter unwritten; backend-token acceptance unproven |
-| **Claude Code** | Claude OAuth | `ANTHROPIC_BASE_URL` | **yes** — `x-api-key: <ph>` → `/v1/messages` | full plumbing | adapter unwritten; backend-token acceptance unproven |
-| **Grok** | xAI OIDC | `GROK_CLI_BASE_URL` | **no** — validates session locally | fallback | **shipped, live-proven** (access token in sandbox, refresh stripped) |
+| **OpenCode** | API key | provider config `baseURL` | yes | full | **shipped, live** |
+| **Claude Code** | Claude OAuth | `ANTHROPIC_BASE_URL` | yes | full | **shipped, live** |
+| **Codex** | ChatGPT OAuth | `chatgpt_base_url` + `supports_websockets=false` | yes | full | **shipped, live** |
+| **Grok** | xAI OIDC | `GROK_CLI_BASE_URL` | **no** — validates locally | fallback | **shipped, live** (token in sandbox, refresh stripped) |
 
-Two facts behind the table, both measured against recording servers with no
-spend:
+Facts behind the table, all measured against recording servers with no spend:
 
-- **Three of four send a placeholder.** Only Grok rejects it — four different
-  fakes (env token, `XAI_API_KEY`, a synthetic session file, a structurally
-  valid fake JWT with all twelve real claims), three of them making zero network
-  calls. It checks a signature locally. So Grok cannot reach the full tier; the
-  other three can.
-- **Claude Code uses `x-api-key`, not `Authorization`.** The broker learned a
-  per-provider auth header for this (`auth_header`/`auth_scheme` in the provider
-  record). Anthropic-shaped: `x-api-key`, no scheme. OpenAI/xAI-shaped:
-  `authorization: Bearer`.
-
-**Still unproven, needs real spend, is Etienne's call:** whether each backend
-accepts its own OAuth *access* token as the API bearer (vs. requiring a separate
-key). The plumbing is proven for three; this is one ~$0.01 job per provider.
+- **Three of four accept a placeholder** and send it to the redirected endpoint,
+  so the broker swaps in the real credential and it never enters the sandbox.
+  Only Grok validates its session locally (four fakes tried, three made zero
+  network calls).
+- **The auth header differs.** Claude Code's OAuth path is
+  `Authorization: Bearer` via `ANTHROPIC_AUTH_TOKEN`; `ANTHROPIC_API_KEY` would
+  select the BYOK `x-api-key` path instead. Hence `auth_header`/`auth_scheme` per
+  provider.
+- **Codex is websocket-first.** By default it reaches inference over
+  `wss://api.openai.com/v1/responses`, which ignores the base-url redirect and
+  which an HTTP broker cannot proxy. `supports_websockets = false` in its config
+  forces the HTTP transport; without it the provider is simply not brokerable.
+- **Some headers are derived from the credential.** Codex sends
+  `ChatGPT-Account-ID` computed from its own token's claims — a placeholder token
+  yields the wrong account, so the broker drops the incoming header and injects
+  one derived from the real token (`Credential.extra_headers`).
+- **Query strings matter.** Claude posts to `/v1/messages?beta=true`; an
+  allowlist matched with `endswith` denies it. The matcher compares the path
+  component only.
+- **A provider may be more than one file.** Codex needs its sibling helper
+  binaries (`codex-code-mode-host`, bundled `rg`); binding only the executable
+  produced a job that answered "the workspace execution tool is unavailable".
+  Adapters declare `extra_binds()`.
 
 ## The three edits
 

@@ -58,6 +58,9 @@ _DROP_HEADERS = frozenset({
     # PLACEHOLDER x-api-key untouched and inject the real value in a header the
     # backend ignores.
     "authorization", "x-api-key",
+    # Derived from the credential upstream-side; the sandbox's copy is computed
+    # from its PLACEHOLDER token and would name the wrong account.
+    "chatgpt-account-id",
 })
 
 
@@ -86,7 +89,7 @@ def _path_allowed(request_path: str, allowed: tuple[str, ...]) -> bool:
     return any(path.endswith(p) for p in allowed)
 
 
-def _forward_headers(incoming, auth_header: str, auth_value: str) -> dict:
+def _forward_headers(incoming, auth_header: str, auth_value: str, extra: dict | None = None) -> dict:
     """Relay the client's headers, swapping in the real credential.
 
     Forwarding matters beyond politeness: the upstream sits behind a CDN that
@@ -108,6 +111,8 @@ def _forward_headers(incoming, auth_header: str, auth_value: str) -> dict:
         if value is not None:
             out[low] = value
     out[auth_header] = auth_value
+    for key, value in (extra or {}).items():
+        out[key.lower()] = value
     out.setdefault("content-type", "application/json")
     out.setdefault("accept", "application/json")
     return out
@@ -177,7 +182,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             b.upstream + _join_path(b.upstream, self.path),
             data=payload,
             method=method,
-            headers=_forward_headers(self.headers, b.auth_header, b.auth_value()),
+            headers=_forward_headers(self.headers, b.auth_header, b.auth_value(), b.credential_headers()),
         )
         try:
             with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
@@ -299,6 +304,10 @@ class CredentialBroker:
         self.denials: list[str] = []
         self._srv: Optional[http.server.ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
+
+    def credential_headers(self) -> dict:
+        """Headers derived from the real credential (e.g. ChatGPT-Account-ID)."""
+        return dict(getattr(self.credential, "extra_headers", {}) or {})
 
     def auth_value(self) -> str:
         """The credential value for the upstream auth header, resolved per request.

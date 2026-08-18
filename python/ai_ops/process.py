@@ -111,6 +111,13 @@ def run_sandboxed(
         try:
             proc = subprocess.Popen(
                 list(argv),
+                # No stdin. A provider that reads stdin (codex exec announces
+                # "Reading additional input from stdin...") would otherwise
+                # inherit the CONTROLLER's stdin and block until the job timeout
+                # -- measured: a live Codex job hung for the full 240s and
+                # produced zero events. Nothing in the rail feeds a provider on
+                # stdin; the prompt is argv.
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=dict(env),

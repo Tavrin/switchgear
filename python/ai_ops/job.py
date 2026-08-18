@@ -266,6 +266,12 @@ def run_job(
         )
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
+        # A provider may need more than its own executable (Codex ships helper
+        # binaries beside it). Read-only, and only what the adapter names.
+        extra_binds += [
+            b for b in getattr(adapter, "extra_binds", lambda _a: [])(list(prov_argv))
+            if os.path.exists(b)
+        ]
         broker_sock = None
         if bk is not None:
             relay = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_relay.py")

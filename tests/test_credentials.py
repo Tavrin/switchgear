@@ -433,8 +433,11 @@ class ProviderPinning(unittest.TestCase):
         from ai_ops.errors import Refuse
         from ai_ops.provider import assert_pinned_version
 
+        # A provider name that is deliberately NOT in PINNED_PROVIDERS. (This
+        # used to use "codex", which then got pinned -- the assertion is about
+        # the absent-pin rule, not about any particular provider.)
         with self.assertRaises(Refuse) as cm:
-            assert_pinned_version(0, b"anything", False, "codex")
+            assert_pinned_version(0, b"anything", False, "not-a-pinned-provider")
         self.assertIn("no pinned version", str(cm.exception))
 
 
