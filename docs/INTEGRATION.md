@@ -199,6 +199,26 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Checking the install before you depend on it
+
+```
+ai-opencode --state <root> --json doctor
+```
+
+Every check reports `{name, status: pass|warn|fail, detail, remedy}`, and any
+check that reports a problem also names what to do about it — a refusal without a
+remedy is a dead end for an agent, which cannot tell "you configured this wrong"
+from "the model failed".
+
+Exit is `1` only when something **failed**. Warnings never decide the verdict, so
+CI can gate on `doctor` without an unused provider or an unfunded model pool
+turning the build red. A provider you do not use, or a pool with no credential
+installed, is a warning by design.
+
+Doctor reports and never repairs — including no token refresh as a side effect of
+being asked a question. Credential checks name the class, source path and time to
+expiry, never the secret, so the output is safe to paste into a bug report.
+
 ### Finding jobs you have lost track of
 
 `status` answers about one job you already know the id of. `jobs` answers what a

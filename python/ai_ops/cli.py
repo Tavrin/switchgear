@@ -709,6 +709,7 @@ def cmd_providers(ns: argparse.Namespace) -> int:
 
     from .adapters import get_adapter
     from .compat import PINNED_PROVIDERS, accepted_versions, record_verified, version_token
+    from .provider import installed_version
 
     only = getattr(ns, "provider", None)
     rows = []
@@ -716,18 +717,7 @@ def cmd_providers(ns: argparse.Namespace) -> int:
         if only and name != only:
             continue
         binary = rec.get("launcher") or rec.get("path")
-        installed = None
-        if binary and os.path.exists(binary):
-            try:
-                out = subprocess.run(
-                    [os.path.realpath(binary), "--version"],
-                    capture_output=True, text=True, timeout=30,
-                    stdin=subprocess.DEVNULL,
-                )
-                lines = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
-                installed = lines[-1] if lines else None
-            except Exception as exc:
-                installed = f"(unreadable: {type(exc).__name__})"
+        installed = installed_version(binary)
         accepted = accepted_versions(name)
         ok = bool(installed) and (version_token(installed) in accepted)
         row = {"provider": name, "installed": installed, "verified": accepted,
@@ -803,6 +793,33 @@ def cmd_execution_profile(ns: argparse.Namespace) -> int:
     print(json.dumps(prof, indent=2) if ns.json
           else "\n".join(f"{k}={v}" for k, v in prof.items()))
     return 0
+
+
+def cmd_doctor(ns: argparse.Namespace) -> int:
+    """Check the install and report what to do about anything broken.
+
+    Exit 0 on pass OR warn, 1 on any fail -- so CI can gate on this without a
+    provider nobody uses turning the build red.
+    """
+    from . import doctor
+
+    try:
+        state = _state_path(ns)
+    except Exception:
+        state = None  # doctor must run on a machine with no state root at all
+    out = doctor.run_all(state)
+
+    if ns.json:
+        print(json.dumps(out, indent=2))
+    else:
+        mark = {doctor.PASS: "ok  ", doctor.WARN: "WARN", doctor.FAIL: "FAIL"}
+        for c in out["checks"]:
+            print(f"{mark[c['status']]}  {c['name']:24} {c['detail']}")
+            if c["remedy"]:
+                print(f"        -> {c['remedy']}")
+        n = out["counts"]
+        print(f"\n{n[doctor.PASS]} pass, {n[doctor.WARN]} warn, {n[doctor.FAIL]} fail")
+    return 1 if out["status"] == doctor.FAIL else 0
 
 
 def cmd_jobs(ns: argparse.Namespace) -> int:
@@ -1132,6 +1149,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ep = sub.add_parser("execution-profile", help="content digest of the launcher and package, for pinning")
     ep.set_defaults(func=cmd_execution_profile)
+
+    dr = sub.add_parser("doctor", help="check this install and report how to fix what is broken")
+    dr.set_defaults(func=cmd_doctor)
 
     jb = sub.add_parser("jobs", help="list jobs in the state root with their live state")
     jb.add_argument("--state-filter", dest="state_filter",

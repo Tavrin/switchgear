@@ -84,6 +84,36 @@ def assert_pinned_version(
 
 
 CREDENTIAL_ENV = "OPENCODE_API_KEY"
+def installed_version(binary: str | None) -> str | None:
+    """The `--version` line this binary prints, or None if it is not installed.
+
+    Shared by `providers` and `doctor` so the two cannot disagree about whether a
+    provider is present. Returns a `(unreadable: ...)` string rather than raising:
+    a binary that exists but will not run is a different diagnosis from an absent
+    one, and telling those apart is doctor's whole job.
+
+    Deliberately NOT in compat.py. That module is the pin TABLE and the comparison
+    rules -- pure data and pure functions -- and a test guards it against
+    executing anything, because an orphaned host-side version check living there
+    was a real bug (glm-F6). Probing a binary is a provider concern; this is where
+    "which executable is this, and is it live" already lives.
+    """
+    import subprocess
+
+    if not binary or not os.path.exists(binary):
+        return None
+    try:
+        out = subprocess.run(
+            [os.path.realpath(binary), "--version"],
+            capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
+        lines = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
+        return lines[-1] if lines else None
+    except Exception as exc:
+        return f"(unreadable: {type(exc).__name__})"
+
+
 CREDENTIAL_DIR = os.path.expanduser("~/.config/ai-ops/credentials")
 DEFAULT_CREDENTIAL_FILE = os.path.expanduser("~/.config/ai-ops/provider-credential")
 

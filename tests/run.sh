@@ -21,6 +21,9 @@ echo "== adapters / normalized vocabulary (real captured stream) =="
 echo "== credential classes (api-key + oauth) =="
 /usr/bin/python3 "$ROOT/tests/test_credentials.py"
 
+echo "== doctor (broken installs, not just healthy ones) =="
+/usr/bin/python3 "$ROOT/tests/test_doctor.py"
+
 echo "== quota / budget =="
 /usr/bin/python3 "$ROOT/tests/test_quota.py"
 
