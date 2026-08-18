@@ -147,6 +147,11 @@
           "type": "integer"
         }
       }
+    },
+    "cost_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Measured cost of this job in USD, summed from the provider's own per-step figures. Not an estimate."
     }
   }
 }

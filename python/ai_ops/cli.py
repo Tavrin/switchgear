@@ -57,6 +57,10 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             "freeze": record.get("freeze"),
             "review": record.get("review"),
             "provider_calls": record.get("provider_calls"),
+            # Measured, from the provider's own per-step figures. A caller
+            # deciding whether to keep delegating needs the real number, and it
+            # is already in the persisted record.
+            "cost_usd": record.get("cost_usd"),
         }, indent=2))
         return
     print(f"model={record['model']['id']}")
@@ -396,6 +400,48 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return rec, adapter.normalize(parsed)
 
 
+def cmd_quota(ns: argparse.Namespace) -> int:
+    """What is left, and what we have spent.
+
+    Deliberately reports two DIFFERENT things without blending them into one
+    reassuring number: subscription pools that publish a reading (which this rail
+    does not spend), and the measured spend of this state root (which it does).
+    The pool agent-ops actually bills -- opencode-go -- publishes no quota at all,
+    so an "overall remaining" figure would be an invention.
+    """
+    from . import quota as quotamod
+
+    state_path = _state_path(ns)
+    budget = quotamod.load_budget()
+    today = quotamod.spent_since(state_path, quotamod.day_start())
+    out: dict[str, Any] = {
+        "budget_file": quotamod.budget_path(),
+        "daily_usd": budget.get("daily_usd"),
+        "spent_today_usd": round(today, 6),
+        "max_provider_calls_per_job": quotamod.max_provider_calls(),
+        "ledger": quotamod.ledger_path(state_path),
+        "external": quotamod.external_all(),
+    }
+    if isinstance(out["daily_usd"], (int, float)) and out["daily_usd"] > 0:
+        out["remaining_usd"] = round(float(out["daily_usd"]) - today, 6)
+    if ns.json:
+        print(json.dumps(out, indent=2))
+        return 0
+    print(f"budget file      {out['budget_file']}")
+    print(f"daily limit      {out['daily_usd'] if out['daily_usd'] else 'unlimited (no budget file)'}")
+    print(f"spent today      ${out['spent_today_usd']:.6f}")
+    if "remaining_usd" in out:
+        print(f"remaining        ${out['remaining_usd']:.6f}")
+    print(f"call ceiling     {out['max_provider_calls_per_job'] or 'none'}")
+    for rec in out["external"]:
+        stale = "  STALE" if rec["stale"] else ""
+        age = f"{rec['age_s']}s old" if rec["age_s"] is not None else "no timestamp"
+        print(f"{rec['provider']:16} min remaining {rec['min_remaining_percent']}%  ({age}){stale}")
+    if not out["external"]:
+        print("external         none published")
+    return 0
+
+
 def _live_state(ns, rec: dict, jd: str) -> str:
     """What is this job doing right now?
 
@@ -596,6 +642,9 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--token")
     ls.add_argument("--mode")
     ls.set_defaults(func=cmd_lease)
+
+    qt = sub.add_parser("quota")
+    qt.set_defaults(func=cmd_quota)
 
     cx = sub.add_parser("cancel")
     cx.add_argument("job")

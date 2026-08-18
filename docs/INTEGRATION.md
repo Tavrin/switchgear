@@ -31,9 +31,47 @@ ai-opencode --json [--profile P] [--state S] [--provider ABS] <command>
 | `logs <job-id> [--format digest\|full]` | projections over `evidence/events.jsonl`; **digest is the default and is byte-capped in code** | — |
 
 `--json` prints a stable object: `job_id, status, mode, role, model, dir, exit,
-error, artifacts{events,stderr,handoff}, freeze, review, provider_calls`.
+error, artifacts{events,stderr,handoff}, freeze, review, provider_calls,
+cost_usd`.
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
+
+### Quota and budget
+
+`quota` reports two things and deliberately does not blend them:
+
+- **External readings** for subscription pools that publish one
+  (`~/.cache/ai-quota/{claude,codex}.json`). This rail does not spend those; it
+  reports them so a caller routing across providers can decide. Every reading is
+  reduced to one shape and carries its age, and one older than an hour is marked
+  `STALE` — a stale reading is worse than none, because it invites a confident
+  wrong decision. Route on `min_remaining_percent`: the worst window, since a
+  weekly pool at 3% is not rescued by a five-hour window that just reset.
+- **Measured spend.** The pool agent-ops actually bills (`opencode-go`) publishes
+  no quota at all, so there is nothing to read — but every job's real cost comes
+  back in its stream. `cost_usd` is on each record and appended to
+  `<state>/spend.jsonl`.
+
+Limits are **operator-owned**, in `~/.config/ai-ops/budget.json`
+(`AI_OPS_BUDGET_FILE` overrides). They are never profile-declared, for the same
+reason the model registry is not: a project that can raise its own ceiling does
+not have a ceiling.
+
+```json
+{"daily_usd": 5.00, "max_provider_calls_per_job": 12}
+```
+
+- `daily_usd` refuses to **start** a job once the day's measured spend reaches
+  it. Honest limit: this bounds spend before a job, not during one, since a job's
+  cost is only known once its stream reports it.
+- `max_provider_calls_per_job` is the per-job bound, enforced in the broker,
+  which denies rather than throttles — a runaway agent that is merely slowed down
+  still spends the budget, just later. It counts **attempts**, not forwards:
+  `provider_calls.forwarded` means "a model answered", and a loop whose calls all
+  fail upstream would never trip a ceiling counting successes.
+
+Absent budget file means unlimited, and `quota` says so rather than implying a
+limit exists.
 
 ### Background jobs
 

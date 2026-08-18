@@ -112,6 +112,11 @@ def run_job(
     # A background launch picks the id in the PARENT so it can hand the caller a
     # job id and a log path immediately, before any work starts. create_job_dirs
     # still creates the directory exclusively, so a collision is still a failure.
+    from . import quota as quotamod
+
+    # Before any work, and before any job directory exists: a budget checked
+    # after the spend is an audit, not a control.
+    quotamod.assert_within_budget(root.path)
     job_id = job_id or new_job_id()
     dirs = state.create_job_dirs(root, job_id)
     lock_cm = None
@@ -160,11 +165,14 @@ def run_job(
         if not cred:
             return _execute(None)
         sock = os.path.join(dirs["job"], "broker.sock")
+        from . import quota as quotamod
+
         with brokermod.CredentialBroker(
             cred,
             upstream=upstream,
             allowed_models=wire_model_names(model["id"]),
             unix_socket=sock,
+            max_calls=quotamod.max_provider_calls(),
         ) as bk:
             return _execute(bk)
 
@@ -398,6 +406,27 @@ def run_job(
                 # later edit cannot relabel two same-family models as independent.
                 "models_registry_digest": registry_digest(),
             }
+        # What this job actually cost, from the provider's own per-step figures
+        # rather than an estimate. It is the only spend number the rail has that
+        # is measured, it is what the daily ceiling counts, and it belongs in the
+        # persisted record -- computing it after the write would leave the file
+        # and the returned record disagreeing.
+        try:
+            from .adapters import get_adapter, parse_lenient
+
+            parsed, _ = parse_lenient(result.stdout.decode("utf-8", "replace"))
+            fin = next(
+                (n for n in get_adapter(profile.get("provider")).normalize(parsed)
+                 if n["event"] == "finished"),
+                {},
+            )
+            record["cost_usd"] = float(fin.get("costUSD") or 0.0)
+            quotamod.record_spend(root.path, job_id, model["id"], record["cost_usd"])
+        except Exception:
+            # Accounting must never fail a job that already ran and already cost
+            # money: losing the record is bad, losing the work as well is worse.
+            pass
+
         # strip None error for schema
         if record.get("error") is None:
             record.pop("error", None)

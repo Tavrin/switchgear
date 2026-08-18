@@ -101,6 +101,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not any(self.path.endswith(p) for p in b.allowed_paths):
             self._deny(403, f"path not allowed: {self.path}")
             return
+        if b.max_calls is not None and b.attempts >= b.max_calls:
+            # Denied, not throttled: a runaway agent that is merely slowed down
+            # still spends the budget, just later.
+            self._deny(429, f"provider call ceiling reached ({b.max_calls} per job)")
+            return
         length = int(self.headers.get("content-length") or 0)
         if length > MAX_BODY:
             self._deny(413, "request too large")
@@ -115,6 +120,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if requested not in b.allowed_models:
                 self._deny(403, f"model not allowed: {requested!r}")
                 return
+        b.attempts += 1
         req = urllib.request.Request(
             b.upstream + _join_path(b.upstream, self.path),
             data=payload,
@@ -174,6 +180,7 @@ class CredentialBroker:
         allowed_models: Optional[set] = None,
         timeout_s: int = 300,
         unix_socket: Optional[str] = None,
+        max_calls: Optional[int] = None,
     ) -> None:
         if not credential:
             raise Refuse("broker requires a credential")
@@ -189,6 +196,18 @@ class CredentialBroker:
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
         self.forwarded = 0
+        # A hard ceiling on brokered calls for ONE job. Earned by a reviewer that
+        # looped 35 times looking for a diff it could not reach: the job timeout
+        # was the only bound, and every one of those calls was billed. None means
+        # no ceiling configured.
+        self.max_calls = max_calls
+        # ATTEMPTS, not forwards. `forwarded` means "a model answered" and
+        # live.sh's retry rule depends on exactly that meaning: forwarded == 0
+        # is how it tells infrastructure failure from a real defect. But a
+        # runaway loop whose calls all fail upstream never increments forwarded,
+        # so a ceiling counting forwards would never fire on the case that most
+        # needs bounding. Count what leaves the controller.
+        self.attempts = 0
         self.denials: list[str] = []
         self._srv: Optional[http.server.ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None

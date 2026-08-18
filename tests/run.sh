@@ -18,6 +18,9 @@ echo "== adversarial (absolute mock) =="
 echo "== adapters / normalized vocabulary (real captured stream) =="
 /usr/bin/python3 "$ROOT/tests/test_adapters.py"
 
+echo "== quota / budget =="
+/usr/bin/python3 "$ROOT/tests/test_quota.py"
+
 echo "== live-smoke retry rule (hermetic) =="
 bash "$ROOT/tests/test_live_retry.sh"
 
