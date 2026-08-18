@@ -1358,6 +1358,166 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- worktree exclusivity and job detachment -----------------------------
+
+    def test_two_write_jobs_cannot_share_one_worktree(self):
+        """Two agents in one working tree share one git index: `git add` by A
+        then `git commit` by B commits A's files under B's message, and nothing
+        errors — both believe they committed their own work. Workers here cannot
+        run git at all (the git dir is a read-only mount), but the controller
+        can, so the worktree still has to be exclusive.
+
+        The exclusivity is the WORKER's flock, held for the whole job, not the
+        token — which is why this asserts against a job that is actually
+        running."""
+        p = run_cli(self.args("--json", "lease", "acquire", "--dir", str(self.wt),
+                              "--mode", "bounded-write"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        token = json.loads(p.stdout)["lease"]
+        env = envelope(str(self.wt), role="implement", mode="bounded-write")
+        epath = self.tmp / "env.json"
+        epath.write_text(json.dumps(env))
+
+        launched = run_cli(
+            self.args("--json", "write", str(self.wt), "implement",
+                      "--envelope", str(epath), "--token", token, "--background"),
+            env={"AI_OPS_WRITE": "1", "AI_OPS_MOCK_BEHAVIOR": "slow-stream",
+                 "AI_OPS_MOCK_EXTRA": "8"})
+        self.assertEqual(launched.returncode, 0, launched.stderr)
+        job_id = json.loads(launched.stdout)["job_id"]
+
+        deadline = time.time() + 15
+        while time.time() < deadline and self._state_of(job_id) != "running":
+            time.sleep(0.3)
+        self.assertEqual(self._state_of(job_id), "running")
+
+        second = run_cli(self.args("lease", "acquire", "--dir", str(self.wt),
+                                   "--mode", "bounded-write"))
+        self.assertNotEqual(second.returncode, 0,
+                            "a second lease was granted on a worktree in use")
+        # And it must REFUSE, not crash. A double close of the lock fd made this
+        # path raise EBADF, which replaced the Refuse — so contention surfaced as
+        # a raw traceback instead of the refusal contract every caller parses, on
+        # the one path that only happens under load.
+        self.assertIn("ai-opencode: REFUSING", second.stderr)
+        self.assertNotIn("Traceback", second.stderr)
+        self.assertIn("jobs --state-filter running", second.stderr,
+                      "the refusal must name how to see what holds it")
+        run_cli(self.args("cancel", job_id))
+
+    def test_releasing_a_worktree_in_use_refuses_cleanly(self):
+        """Same double-close bug as acquire, same consequence: the EBADF from the
+        second close replaced the Refuse, so the caller saw a traceback instead
+        of the reason."""
+        p = run_cli(self.args("--json", "lease", "acquire", "--dir", str(self.wt),
+                              "--mode", "bounded-write"))
+        token = json.loads(p.stdout)["lease"]
+        env = envelope(str(self.wt), role="implement", mode="bounded-write")
+        epath = self.tmp / "env3.json"
+        epath.write_text(json.dumps(env))
+        launched = run_cli(
+            self.args("--json", "write", str(self.wt), "implement",
+                      "--envelope", str(epath), "--token", token, "--background"),
+            env={"AI_OPS_WRITE": "1", "AI_OPS_MOCK_BEHAVIOR": "slow-stream",
+                 "AI_OPS_MOCK_EXTRA": "8"})
+        job_id = json.loads(launched.stdout)["job_id"]
+        deadline = time.time() + 15
+        while time.time() < deadline and self._state_of(job_id) != "running":
+            time.sleep(0.3)
+
+        rel = run_cli(self.args("lease", "release", "--dir", str(self.wt),
+                                "--token", token))
+        self.assertNotEqual(rel.returncode, 0)
+        self.assertIn("ai-opencode: REFUSING", rel.stderr)
+        self.assertNotIn("Traceback", rel.stderr)
+        self.assertNotIn("Bad file descriptor", rel.stderr)
+        run_cli(self.args("cancel", job_id))
+
+    def test_no_lock_path_closes_a_descriptor_twice(self):
+        """Structural, because this bug is invisible until the contended path
+        runs. A close inside an `except` next to a `finally` that also closes is
+        an EBADF waiting for load — and worse, an fd-reuse hazard: between the
+        two closes another thread can open a descriptor and get the same number,
+        and the second close shuts its file."""
+        import ast as _ast
+
+        src = (ROOT / "python" / "ai_ops" / "lease.py").read_text()
+        tree = _ast.parse(src)
+        offenders = []
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.Try) or not node.finalbody:
+                continue
+
+            def closes(body):
+                return any(
+                    isinstance(n, _ast.Call)
+                    and isinstance(n.func, _ast.Attribute)
+                    and n.func.attr == "close"
+                    for stmt in body for n in _ast.walk(stmt)
+                )
+
+            if not closes(node.finalbody):
+                continue
+            for handler in node.handlers:
+                if closes(handler.body):
+                    offenders.append(handler.lineno)
+            for stmt in node.body:
+                for inner in _ast.walk(stmt):
+                    if isinstance(inner, _ast.Try):
+                        for h in inner.handlers:
+                            if closes(h.body):
+                                offenders.append(h.lineno)
+        self.assertEqual(offenders, [],
+                         f"close() inside an except whose finally also closes: "
+                         f"lines {offenders}")
+
+    def test_a_write_without_the_lease_token_is_refused(self):
+        """Reading the token off disk and validating it against itself would not
+        be authorization."""
+        p = run_cli(self.args("--json", "lease", "acquire", "--dir", str(self.wt),
+                              "--mode", "bounded-write"))
+        token = json.loads(p.stdout)["lease"]
+        env = envelope(str(self.wt), role="implement", mode="bounded-write")
+        epath = self.tmp / "env2.json"
+        epath.write_text(json.dumps(env))
+
+        no_token = run_cli(self.args("write", str(self.wt), "implement",
+                                     "--envelope", str(epath)),
+                           env={"AI_OPS_WRITE": "1"})
+        self.assertNotEqual(no_token.returncode, 0)
+        self.assertIn("lease", no_token.stderr.lower())
+
+        wrong = run_cli(self.args("write", str(self.wt), "implement",
+                                  "--envelope", str(epath), "--token", "not-the-token"),
+                        env={"AI_OPS_WRITE": "1"})
+        self.assertNotEqual(wrong.returncode, 0)
+        run_cli(self.args("lease", "release", "--dir", str(self.wt), "--token", token))
+
+    def test_a_background_job_outlives_the_cli_that_launched_it(self):
+        """A job backgrounded as an ordinary child of the harness gets reaped at
+        session end, timeout or reconnection — measured elsewhere as a 7-minute
+        push vanishing mid-run with nothing to show. --background re-execs into
+        its OWN session so the launching process's fate is irrelevant."""
+        info = self._launch(extra="8")
+        job_id = info["job_id"]
+
+        # The launching CLI has already returned; if the job were its child it
+        # would be gone. Give it a moment, then confirm it is genuinely running.
+        time.sleep(2.0)
+        self.assertEqual(self._state_of(job_id), "running",
+                         "the job did not survive its launcher returning")
+
+        meta = json.loads((self.state / "launch" / f"{job_id}.json").read_text())
+        # Its own session leader: that is what makes it survivable, and what lets
+        # cancel kill the job without killing the caller.
+        sid = subprocess.run(["ps", "-o", "sid=", "-p", str(meta["pid"])],
+                             capture_output=True, text=True).stdout.strip()
+        self.assertTrue(sid, "the launched pid is gone")
+        self.assertNotEqual(sid, str(os.getsid(0)),
+                            "the job shares this process's session and would be "
+                            "reaped with it")
+        run_cli(self.args("cancel", job_id))
+
     # --- projections must use the JOB's provider, not the caller's profile ---
 
     def test_a_job_records_which_adapter_ran_it(self):

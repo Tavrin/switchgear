@@ -98,8 +98,20 @@ def acquire(
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            os.close(fd)
-            raise Refuse("live lease lock already held on this worktree") from exc
+            # Do NOT close here: the `finally` below owns this fd. Closing twice
+            # raised EBADF, and that OSError REPLACED the Refuse -- so lock
+            # contention surfaced as a raw traceback instead of the refusal
+            # contract every caller parses, on the one path that only happens
+            # under load. A double close is also an fd-reuse hazard: between the
+            # two closes another thread can open a descriptor and get the same
+            # number, and the second close would shut its file.
+            raise Refuse(
+                "another job holds the lease lock on this worktree; it is in use "
+                "right now. Wait for it to finish (`ai-opencode jobs "
+                "--state-filter running`), or work in a different worktree — two "
+                "jobs in one tree interleave into a state neither of them "
+                "believes in."
+            ) from exc
         # we hold flock only for metadata mutation here; worker will re-lock
         # Holding LOCK_EX here means no worker is mid-job on this worktree, so an
         # existing token is stale by definition and is replaced. (A previous
@@ -123,11 +135,16 @@ def acquire(
         atomic_write_json(token_path, token)
         return token
     finally:
+        # Both tolerant: this runs on the contended path too, where the lock was
+        # never taken.
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
             pass
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def release(root: StateRoot, ident: WorktreeIdentity, token_uuid: str, owner: str) -> None:
@@ -141,8 +158,13 @@ def release(root: StateRoot, ident: WorktreeIdentity, token_uuid: str, owner: st
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            os.close(fd)
-            raise Refuse("cannot release: worker still holds the lease") from exc
+            # Same double-close bug as acquire had: the `finally` owns this fd,
+            # and closing it here made the second close raise EBADF, which
+            # replaced this Refuse with a traceback.
+            raise Refuse(
+                "cannot release: a worker still holds this worktree. Wait for the "
+                "job to finish, or cancel it (`ai-opencode cancel <job>`)."
+            ) from exc
         existing = read_json(token_path)
         if existing.get("lease_uuid") != token_uuid:
             raise Refuse("forged or mismatched lease token")
@@ -154,7 +176,10 @@ def release(root: StateRoot, ident: WorktreeIdentity, token_uuid: str, owner: st
             fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
             pass
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def load_token(root: StateRoot, ident: WorktreeIdentity) -> dict[str, Any]:
