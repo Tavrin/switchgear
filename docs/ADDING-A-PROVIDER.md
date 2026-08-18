@@ -18,7 +18,7 @@ locally, the real (access) token must be inside the sandbox — the fallback tie
 | **OpenCode** | API key | provider config `baseURL` | yes | full | **shipped, live-proven** |
 | **Codex** | ChatGPT OAuth | `model_providers.*.base_url` | **yes** — `Bearer <ph>` → `/v1/responses` | full plumbing | adapter unwritten; backend-token acceptance unproven |
 | **Claude Code** | Claude OAuth | `ANTHROPIC_BASE_URL` | **yes** — `x-api-key: <ph>` → `/v1/messages` | full plumbing | adapter unwritten; backend-token acceptance unproven |
-| **Grok** | xAI OIDC | `GROK_CLI_BASE_URL` | **no** — validates session locally | fallback only | adapter shipped; fails closed pending a tier decision |
+| **Grok** | xAI OIDC | `GROK_CLI_BASE_URL` | **no** — validates session locally | fallback | **shipped, live-proven** (access token in sandbox, refresh stripped) |
 
 Two facts behind the table, both measured against recording servers with no
 spend:

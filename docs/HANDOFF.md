@@ -204,16 +204,14 @@ network" was true of every path anyone had run and false of one nobody had.
 
 Still open:
 
-0. **DECISIONS NEEDED — OAuth tiers** (`docs/ADDING-A-PROVIDER.md` has the full
-   measured fleet table). The broker's OAuth plumbing is built and the redirect
-   is proven for THREE of the four target CLIs: Codex sends `Bearer <placeholder>`
-   and Claude Code sends `x-api-key: <placeholder>` to their redirected
-   endpoints, so both can reach the FULL tier (credential never in the sandbox).
-   Only Grok validates its session locally and is limited to the FALLBACK tier
-   (real access token in the sandbox). Two calls for Etienne:
-   (a) accept the fallback tier for Grok, or leave it fail-closed;
-   (b) spend ~$0.01 per backend to confirm each honours its OAuth access token
-       as the API bearer — the one fact the free probes cannot settle.
+0. **OAuth providers — where each stands.** Grok is LIVE at the fallback tier
+   (chosen by Etienne 2026-08-18): access token in the sandbox, refresh stripped,
+   egress broker-locked. Proven with real scouts. Codex and Claude Code are
+   full-tier candidates (they send a placeholder to their redirected endpoint,
+   measured) with the broker plumbing built and the registry scaffolded to the
+   researched-correct upstreams/headers; each still needs its adapter, a captured
+   fixture, and one ~$0.01 run to confirm the backend honours its OAuth access
+   token. `docs/ADDING-A-PROVIDER.md` has the full fleet table and procedure.
 
 1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
    confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex
