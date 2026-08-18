@@ -63,7 +63,7 @@ enabling change: nothing else here is possible without it.
 | Projection | Who it's for | Guarantee |
 |---|---|---|
 | **summary** — the existing `--json` record | a delegating agent, always | bounded, ~50-100 tokens |
-| **digest** — tool names, counters, tokens/cost, truncated final text | an agent that needs to know *what happened*, or is debugging a failure | **hard byte cap**, states when it truncated |
+| **digest** — STRUCTURED: state, counters, tokens/cost, parsed failures | an agent that needs to know *what happened*, or is debugging a failure | **hard byte cap**, states when it truncated. Not prose — see the atelier section for why |
 | **full** — the raw stream | a human terminal, a TUI, atelier's UI, a file tail | unbounded — never for agent context |
 
 ### Enforcement, not advice
@@ -85,10 +85,16 @@ output. Straw man:
 
 ```
 started  {job, provider, model, mode, role}
-tool     {name, target}
-text     {content}
-finished {status, exit, changed_files, tokens, cost}
+status   {sessionId}                 # REQUIRED: without it resume cannot exist
+tool     {name, target}              # rendered as text by atelier; keep minimal
+text     {content}                   # truncate at write time (atelier uses 400 chars)
+finished {status, exit, exitSummary, turns, costUSD, tokens}
+         # status: completed | completed_empty | needs_input
+         # needs_input parks the ticket back to the operator -- load-bearing
 ```
+
+`changed_files` is deliberately absent: atelier derives the result manifest from
+git itself and ignores agent-reported file lists. Keep it internally if useful.
 
 This is the structural advantage over `the old Codex wrapper`, which passes Codex's raw
 format through: one viewer, one digest implementation, and one `normalizeLine`
@@ -103,35 +109,107 @@ gives the quota work its input.
 
 ## Consumption by atelier
 
-Confirmation was requested from `atelier-fable-agent` and had not arrived when
-this was written; treat the following as inference to be checked, not fact.
+Confirmed by `atelier-fable-agent` against atelier main `7479671`, with file:line
+references so it can be re-verified. This section is **fact**, not inference.
 
-Atelier's `docs/AGENTS-ADAPTERS.md` describes `normalizeLine` mapping
-Claude-style NDJSON, which suggests it reads the spawned process's **stdout as a
-pipe**. agent-ops instead writes an append-only file and prints a small JSON
-record on stdout. Two ways to fit:
+### Write to the codex adapter shape
 
-- the adapter tails `artifacts.events` (already published in the `--json` record)
-  and feeds `normalizeLine`; or
-- agent-ops grows a `--stream` mode that mirrors normalized events to stdout as
-  NDJSON while the summary goes to a file.
+Atelier supports both models, per adapter. The claude lane is stdout-as-pipe
+(`server/lib/agents/claude.mjs:99-127`). The codex lane is exactly what agent-ops
+already does: a detached background job whose stdout yields only a job id, after
+which the adapter polls job-state JSON/log files and can reattach after a daemon
+restart (`codex.mjs:908+`, `capabilities.canResume=true`, `liveInput=false`).
 
-**Ask before building.** If atelier wants stdout NDJSON, `--stream` is a small
-addition; if it is happy tailing a file, do nothing.
+So "append-only JSONL + job id on stdout" does **not** fight the dispatcher — it
+is the better-behaved pattern, because it survives daemon restarts and the pipe
+model cannot. Build the adapter to the codex shape.
 
-Two things atelier will need that are not yet settled:
+**New constraint (ATT-006):** adapters implement `executionEnv(base)` and the
+dispatcher records an *execution profile* — a digest of the exact spawn env plus
+the resolved executable path — at first spawn, enforced on resume. A stable
+absolute launcher path makes this trivial; a "latest version wins" resolver is
+what they had to pin away for codex.
 
-- **Mid-run steering.** Atelier can reply to a running agent. agent-ops has no
-  stdin path into the sandboxed process. If that capability must survive, it
-  changes the sandbox design and should be settled before the adapter is written.
-- **Verify collides with the freeze.** Atelier's verify step runs the real test
-  suite; running a Python suite creates `__pycache__`, which changes the worktree
-  and invalidates the frozen digest, so promotion refuses. Observed today. The
-  fix belongs in the adapter — verify on a copy, or set `PYTHONDONTWRITEBYTECODE=1`
-  and equivalents — **not** in the digest, because including ignored files is a
-  deliberate measure against a worker hiding payloads behind `.gitignore`.
+> **Watch out:** `~/.local/bin/ai-opencode` is currently a symlink into the
+> working tree. The *path* is stable but its *content* changes with every edit.
+> That is deliberate for a lab tool and wrong for profile pinning. Before the
+> adapter lands, decide whether atelier pins a released copy instead.
 
----
+### Event vocabulary — corrected
+
+The straw man was missing fields atelier actually consumes
+(`claude.mjs:113-147`):
+
+| Field | Why |
+|---|---|
+| `sessionId` on a status event | captured for resume; **without it, reply-by-restart cannot work at all** |
+| `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
+| terminal `status` ∈ `completed` / `completed_empty` / `needs_input` | `needs_input` is load-bearing: it parks the ticket back to the operator |
+| `exitSummary` text | shown on the record |
+| `text{content}` | mid-run display; atelier truncates to 400 chars per line (`dispatch.mjs:4711`) |
+
+**Drop `changed_files` from the atelier-facing contract.** Atelier never trusts
+agent-reported file lists: it derives the result manifest itself from git at
+finalization (ATT-002) and validates the landed tree against it at merge
+(ATT-004). Keep it for our own viewer if useful; atelier will ignore it.
+
+`tool{name,target}` is rendered only as text there — keep it minimal.
+
+### Mid-run steering is NOT required
+
+`capabilities.liveInput` is per-adapter: claude `true`, codex `false`. A reply to
+a running codex dispatch is refused with 409 and works instead as a **cold
+resume** — new process, prior context via the provider's own resume mechanism,
+keyed on the captured `sessionId`.
+
+So agent-ops needs **no stdin path into the sandbox**. What it does need is a
+durable session/thread identifier surfaced in events, or resume cannot exist.
+
+### The verify collision is shared, and unresolved on both sides
+
+Atelier has the *same* problem. Since ATT-003 verification runs in a fresh
+detached checkout with pre/post probes, and the post status uses
+`--untracked-files=all --ignored=matching` — so a Python suite creating
+`__pycache__` there would raise `EATELIER_VERIFICATION_MUTATED_WORKTREE`. Their
+golden suite is Node-based and hermetic, so they have not paid this cost yet;
+their own review flagged "verify in a pristine checkout against non-fixture
+projects" as untested.
+
+**Therefore: do not treat atelier as the layer that absorbs this.** Both layers
+currently demand side-effect-free verify commands (`PYTHONDONTWRITEBYTECODE`,
+`CARGO_TARGET_DIR`, npm cache redirection). A shared out-of-tree-cache convention
+is an open design item, and atelier has said it would likely adopt whatever
+agent-ops settles on.
+
+Their suggested shape is "digest over tracked content only + an explicit
+side-effect allowlist". **Do not adopt the first half uncritically.** Digesting
+non-tracked content was earned by a live finding: a worker cannot stage, so all
+its output is untracked, and `.gitignore` is worker-writable — dropping ignored
+content re-opens hiding a payload behind it. The reconcilable version is: keep
+non-tracked content in the *integrity* digest, and add an explicit, operator-owned
+**side-effect allowlist** of paths permitted to change during verify without
+invalidating the freeze. That preserves the anti-hiding property while making
+verify survivable.
+
+### Context budget — atelier solved it, copy the approach
+
+Bounded **at write time, not summarised after**: the full stream goes only to an
+append-only per-dispatch JSONL on disk; emitted lines truncate to 400 chars;
+verify output keeps head 1KB + tail 1KB with a parsed failure collector
+(`dispatch.mjs:4689-4690`); the record carries only summary fields. The UI tails
+the file, a delegating agent reads the record.
+
+**Their one correction to the tiering above, and it is important:** make the
+bounded tier **structured** — state, exit summary, parsed failures, counters —
+**not a prose summary**. Prose self-reports from the worker are exactly what
+atelier distrusts; they tripwire agents whose self-report claims tests passed
+when verify says otherwise.
+
+That matches what this rail learned independently today: `handoff.changes` came
+back with absolute paths and nothing validated it, and a reviewer's verdict
+flipped between runs. **Never let a worker's self-description be load-bearing.**
+The digest should carry counters and parsed facts; model prose belongs in the
+full stream, clearly marked as a self-report.
 
 ## Build order
 
