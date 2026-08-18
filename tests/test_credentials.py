@@ -302,6 +302,55 @@ class BrokerUsesTheCredential(unittest.TestCase):
             self.assertEqual(get(bk, "/v1/account"), 403)
 
 
+class ProviderProfileConsistency(unittest.TestCase):
+    def test_a_profile_provider_and_a_mismatched_binary_are_named(self):
+        """A profile names a provider BINARY and --provider supplies one. If they
+        disagree the rail would build one CLI's argv for another's executable.
+
+        It used to surface as a VERSION error naming the WRONG provider and
+        recommending a verify command that cannot help -- and which, if forced
+        through, would record a foreign version and let the mismatch run. The
+        refusal must name the mismatch itself.
+        """
+        import subprocess
+
+        from ai_ops.compat import PINNED_PROVIDERS
+
+        claude = PINNED_PROVIDERS["claude"]["path"]
+        codex = PINNED_PROVIDERS["codex"]["path"]
+        if not (os.path.exists(claude) and os.path.exists(codex)):
+            self.skipTest("both providers not installed")
+        prof = json.loads((ROOT / "project-profiles" / "example.json").read_text())
+        prof["provider"] = "claude"
+        prof["models"] = {"allow": ["claude/claude-sonnet-5"], "deny": []}
+        prof["roles"] = {"scout": {"model": "claude/claude-sonnet-5", "mode": "readonly"}}
+        tmp = Path(tempfile.mkdtemp(prefix="mismatch-"))
+        (tmp / "p.json").write_text(json.dumps(prof))
+        state = tmp / "state"
+        repo = tmp / "repo"
+        repo.mkdir()
+        for cmd in (["git", "init", "-q", "-b", "main"],
+                    ["git", "config", "user.email", "a@b"],
+                    ["git", "config", "user.name", "a"]):
+            subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+        (repo / "a.txt").write_text("x\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "i"], cwd=repo, check=True, capture_output=True)
+        main = ROOT / "python" / "ai_ops" / "__main__.py"
+        subprocess.run([sys.executable, str(main), "--state", str(state),
+                        "state", "provision", str(state)], check=True, capture_output=True)
+        env = dict(os.environ, AI_OPS_ALLOW_LIVE_PROVIDER="1")
+        p = subprocess.run(
+            [sys.executable, str(main), "--profile", str(tmp / "p.json"),
+             "--state", str(state), "--provider", codex, "scout", str(repo), "hi"],
+            capture_output=True, text=True, env=env, timeout=120,
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("provider mismatch", p.stderr)
+        self.assertIn("'claude'", p.stderr)
+        self.assertIn("'codex'", p.stderr)
+
+
 class FallbackTierSandboxCredential(unittest.TestCase):
     """Grok validates its session locally, so its ACCESS token goes in the
     sandbox -- but the refresh token must not, and OpenCode must never get one."""

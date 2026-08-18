@@ -253,6 +253,23 @@ def run_job(
             adapter.write_sandbox_credential(dirs["home"], provider_id, prec or {})
         env = adapter.isolation_env(dirs["home"], runtime, broker_url)
         prov_argv, _live = provider.resolve_provider(provider_path)
+        # The profile names a provider BINARY and --provider supplies one; if
+        # they disagree the rail would build (say) Claude's argv for the Codex
+        # executable. It used to surface as a confusing VERSION error naming the
+        # wrong provider and recommending a verify command that cannot help --
+        # and which, if forced through, would record a foreign version and let
+        # the mismatch actually run. Name it for what it is.
+        from .compat import pinned_for_path
+
+        _pinned = pinned_for_path(prov_argv[-1]) if prov_argv else None
+        if _pinned and _pinned[0] != adapter.name:
+            raise Refuse(
+                f"provider mismatch: the profile declares provider "
+                f"{adapter.name!r} but --provider is the {_pinned[0]!r} binary "
+                f"({prov_argv[-1]}). Use that provider's own profile, or point "
+                f"--provider at the {adapter.name!r} binary "
+                "(`ai-opencode providers` prints the path)."
+            )
         # Providers without an agent-file mechanism get the SAME role
         # instructions in their prompt. One source (policy.role_instructions),
         # two delivery paths -- a worker told a different contract from the one
