@@ -343,7 +343,7 @@ def run_job(
         # (Grok) needs its access token inside the sandbox. Only for such an
         # adapter, and only with a live credential and a broker in play, so the
         # token still has no egress except the one brokered upstream.
-        if getattr(adapter, "credential_in_sandbox", False) and cred is not None and bk is not None:
+        if adapter.credential_in_sandbox and cred is not None and bk is not None:
             adapter.write_sandbox_credential(dirs["home"], provider_id, prec or {})
         env = adapter.isolation_env(dirs["home"], runtime, broker_url)
         prov_argv, _live = provider.resolve_provider(provider_path)
@@ -399,7 +399,7 @@ def run_job(
         # A provider may need more than its own executable (Codex ships helper
         # binaries beside it). Read-only, and only what the adapter names.
         extra_binds += [
-            b for b in getattr(adapter, "extra_binds", lambda _a: [])(list(prov_argv))
+            b for b in adapter.extra_binds(list(prov_argv))
             if os.path.exists(b)
         ]
         broker_sock = None
@@ -437,7 +437,7 @@ def run_job(
         # ends -- which is why the first resume attempt failed with "No
         # conversation found with session ID".
         session_binds = []
-        for rel in getattr(adapter, "session_store_paths", lambda: [])():
+        for rel in adapter.session_store_paths():
             src = os.path.join(
                 root.path, "sessions", lease.identity_key(ident), adapter.name, rel
             )

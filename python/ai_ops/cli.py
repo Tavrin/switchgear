@@ -187,7 +187,7 @@ def cmd_models(ns: argparse.Namespace) -> int:
             binary = prec.get("path")
             if not binary or not os.path.exists(binary):
                 continue
-            argv = adapter.list_models_argv([binary]) if hasattr(adapter, "list_models_argv") else None
+            argv = adapter.list_models_argv([binary])
             if not argv:
                 rows.append({"provider": pname, "listable": False,
                              "note": "this CLI offers no model-list command"})
@@ -384,7 +384,7 @@ def cmd_resume(ns: argparse.Namespace) -> int:
         with open(events_path, encoding="utf-8", errors="replace") as fh:
             parsed, _ = parse_lenient(fh.read())
         session = adapter.session_id(parsed)
-    if not getattr(adapter, "session_store_paths", lambda: [])():
+    if not adapter.session_store_paths():
         _die(
             f"resume is not supported for provider {adapter.name!r}: its "
             "conversation-store location has not been measured, and resuming "
@@ -732,7 +732,7 @@ def cmd_providers(ns: argparse.Namespace) -> int:
             # adapter's argv depends on? A version number proves nothing; a
             # missing flag breaks every job for that provider.
             adapter = get_adapter(name)
-            needed = adapter.required_flags() if hasattr(adapter, "required_flags") else []
+            needed = adapter.required_flags()
             try:
                 helptext = subprocess.run(
                     [os.path.realpath(binary), "--help"],

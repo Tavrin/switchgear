@@ -84,13 +84,39 @@ Get it from the free redirect probe (below), not from the CLI's own output.
 
 ### 2. `python/ai_ops/adapters.py` — the behaviour
 
-A class with `name`, `argv`, `version_argv`, `agent_name`, `session_id`,
-`normalize`, `isolation_env`, `broker_runtime`; registered in `_ADAPTERS`.
-`normalize` is the only substantial one, and the standing rule makes even it
+Subclass `ProviderAdapter` and register it in `_ADAPTERS`. **Seven** methods have
+no possible default and must be written:
+
+| method | what it is for |
+|---|---|
+| `argv` | the command line to run inside the sandbox |
+| `normalize` | this CLI's raw events → the normalized vocabulary |
+| `validate_result` | `(handoff, error)` from the raw stream |
+| `session_id` | the durable session id; without it there is no resume |
+| `isolation_env` | the sandboxed process environment |
+| `broker_runtime` | how this CLI is pointed at the broker |
+| `required_flags` | the CLI surface `argv` depends on |
+
+Everything else is inherited, and **every default is the honest negative**: no
+session store (so resume is refused rather than silently starting a fresh
+conversation), no refresh path, no model listing, no extra binds, no effort
+control, credential never in the sandbox. A provider that genuinely lacks a
+capability needs to write nothing at all; one that has a capability has to say
+so deliberately.
+
+`validate_adapter()` runs at import over `_ADAPTERS` and refuses an incomplete
+one by name. This is not decoration: before it existed, a half-written adapter
+registered happily and died of `AttributeError` partway through a job — after the
+sandbox was built and, for a live provider, after money had been spent.
+
+`normalize` is the only substantial method, and the standing rule makes even it
 mechanical: **write it from a committed real capture, never from documentation
 and never from the mock.** The terminal-honesty policy is shared
 (`_finish_events`), so a new adapter cannot relax "truncated is never
 completed".
+
+A complete minimal adapter is about 25 lines; there is a working one in
+`tests/test_adapters.py::AddingAProvider`, which exists to keep that claim true.
 
 ### 3. `python/ai_ops/compat.py` — the pin
 
@@ -163,6 +189,7 @@ components are rejected because a symlink can be repointed underneath you.
 Verified: with a provider named but each piece missing in turn —
 
 - no adapter → `no adapter for provider 'x' (known: [...])`
+- incomplete adapter → refused at import, naming each missing method
 - no pin → `no pinned version for provider 'x'; refusing to run it live`
 - no registry record → `provider 'x' is not in the controller registry`
 - no credential → refuses rather than running unbrokered on the host network

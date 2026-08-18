@@ -264,7 +264,7 @@ def refresh_via_own_cli(
 
     from . import sandbox
 
-    argv = adapter.refresh_argv(list(provider_argv)) if hasattr(adapter, "refresh_argv") else None
+    argv = adapter.refresh_argv(list(provider_argv))
     if not argv:
         return False
     path = os.path.expanduser(prec.get("auth_file") or "")

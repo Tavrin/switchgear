@@ -715,6 +715,126 @@ class ResumeContract(unittest.TestCase):
                 self.assertNotEqual(path.rstrip("/"), ".codex", name)
 
 
+class AddingAProvider(unittest.TestCase):
+    """The claim under test: a new harness (a Mistral subscription, say) is a
+    small, well-defined amount of work with loud failures — not archaeology
+    across four existing adapters."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def _minimal(self):
+        """A complete adapter, written to the interface and nothing else. If
+        this stops being short, the seam has regressed."""
+        from ai_ops.adapters import ProviderAdapter
+
+        class MistralAdapter(ProviderAdapter):
+            name = "mistral"
+
+            def required_flags(self):
+                return ["run", "--model", "--json"]
+
+            def argv(self, *, provider_argv, worktree, model_id, agent, role,
+                     job_id, prompt, attach_dir=None, resume_session=None,
+                     effort=None):
+                wire = model_id.split("/", 1)[-1]
+                return list(provider_argv) + ["run", "--json", "--model", wire, prompt]
+
+            def normalize(self, events, run_ended=False):
+                return [{"event": "text", "content": str(e.get("text", ""))}
+                        for e in events]
+
+            def validate_result(self, raw, *, require_handoff):
+                return None, None
+
+            def session_id(self, events):
+                return next((e.get("sid") for e in events if e.get("sid")), None)
+
+            def isolation_env(self, synth_home, runtime, broker_base_url=None):
+                return {"HOME": synth_home}
+
+            def broker_runtime(self, runtime, base_url, model_id):
+                return dict(runtime, base_url=base_url)
+
+        return MistralAdapter()
+
+    def test_a_new_adapter_needs_only_the_required_methods(self):
+        """Seven methods, no boilerplate: the optional surface is inherited."""
+        from ai_ops.adapters import EFFORT_UNSUPPORTED, validate_adapter
+
+        adapter = self._minimal()
+        validate_adapter("mistral", adapter)  # must not raise
+
+        # Everything optional has an honest default, without a line written.
+        self.assertEqual(adapter.session_store_paths(), [])
+        self.assertIsNone(adapter.refresh_argv(["/bin/x"]))
+        self.assertIsNone(adapter.list_models_argv(["/bin/x"]))
+        self.assertEqual(adapter.extra_binds(["/bin/x"]), [])
+        self.assertEqual(adapter.effort_support()["status"], EFFORT_UNSUPPORTED)
+        self.assertFalse(adapter.credential_in_sandbox)
+        self.assertEqual(adapter.version_argv(["/bin/x"]), ["/bin/x", "--version"])
+        self.assertEqual(adapter.agent_name("bounded-write"), "ai-ops-bounded-write")
+
+    def test_defaults_are_the_honest_negative_not_a_guess(self):
+        """A provider that cannot resume must REFUSE to resume, not quietly
+        start a fresh conversation dressed as a continuation."""
+        adapter = self._minimal()
+        self.assertEqual(adapter.session_store_paths(), [],
+                         "an unmeasured provider must not claim resume support")
+
+    def test_an_incomplete_adapter_is_refused_at_registration(self):
+        """Previously it registered fine and died of AttributeError partway
+        through a job — after the sandbox was built and, live, after spending."""
+        from ai_ops.adapters import ProviderAdapter, validate_adapter
+        from ai_ops.errors import Refuse
+
+        class HalfWritten(ProviderAdapter):
+            name = "half"
+
+            def argv(self, **kw):
+                return []
+
+        with self.assertRaises(Refuse) as ctx:
+            validate_adapter("half", HalfWritten())
+        msg = str(ctx.exception)
+        self.assertIn("normalize", msg, "the refusal must name what is missing")
+        self.assertIn("ADDING-A-PROVIDER", msg, "and where to look")
+
+    def test_a_non_conforming_object_is_refused(self):
+        from ai_ops.adapters import validate_adapter
+        from ai_ops.errors import Refuse
+
+        class NotAnAdapter:
+            name = "nope"
+
+        with self.assertRaises(Refuse):
+            validate_adapter("nope", NotAnAdapter())
+
+    def test_a_name_mismatch_is_refused(self):
+        """get_adapter keys off the registry key and the profile names the same
+        string; a disagreement would pick the wrong adapter silently."""
+        from ai_ops.adapters import validate_adapter
+        from ai_ops.errors import Refuse
+
+        with self.assertRaises(Refuse) as ctx:
+            validate_adapter("mistral-large", self._minimal())
+        self.assertIn("mistral", str(ctx.exception))
+
+    def test_every_shipped_adapter_passes_its_own_check(self):
+        from ai_ops.adapters import _ADAPTERS, validate_adapter
+
+        for name, adapter in _ADAPTERS.items():
+            validate_adapter(name, adapter)
+
+    def test_the_new_adapter_actually_builds_a_command_line(self):
+        argv = self._minimal().argv(
+            provider_argv=["/usr/bin/mistral"], worktree="/w",
+            model_id="mistral/mistral-large", agent="ai-ops-readonly",
+            role="scout", job_id="j", prompt="MSG")
+        self.assertEqual(argv, ["/usr/bin/mistral", "run", "--json",
+                                "--model", "mistral-large", "MSG"])
+
+
 class EffortContract(unittest.TestCase):
     """Effort is measured per provider, refused when unmeasured, and never
     silently dropped."""
