@@ -841,6 +841,65 @@ def cmd_execution_profile(ns: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_capabilities(ns: argparse.Namespace) -> int:
+    """Describe this tool to a caller that has never seen it.
+
+    Everything is derived from live code: commands from the parser, providers
+    from the adapter registry, effort from each adapter, limits from the budget.
+    """
+    from . import capabilities as capmod
+
+    profile = None
+    try:
+        profile = load_profile(_profile_path(ns))
+    except Exception:
+        # A caller asking what the tool can do should get an answer even with a
+        # broken or absent profile -- that is when they need it most.
+        pass
+    try:
+        state_path = _state_path(ns)
+    except SystemExit:
+        state_path = None
+
+    out = capmod.describe(build_parser(), profile, state_path)
+    if ns.json:
+        print(json.dumps(out, indent=2))
+        return 0
+
+    print("commands:")
+    for c in out["commands"]:
+        print(f"  {c['command']:20} {c['help']}")
+    print("\nproviders:")
+    for p in out["providers"]:
+        bits = []
+        bits.append("resume" if p["can_resume"] else "no-resume")
+        eff = p["effort"].get("status")
+        bits.append(f"effort:{eff}")
+        if not p["has_adapter"]:
+            bits.append("NO ADAPTER")
+        if not p["pinned"]:
+            bits.append("NOT PINNED (cannot run live)")
+        ver = p["installed_version"] or "not installed"
+        print(f"  {p['provider']:12} {ver:32} {', '.join(bits)}")
+    print("\nexit codes:")
+    for code, meaning in out["refusals"]["exit_codes"].items():
+        print(f"  {code:>3}  {meaning}")
+    print(f"\nrefusals: every one is one stderr line starting "
+          f"{out['refusals']['stderr_prefix']!r} and names a remedy")
+    lim = out["limits"]
+    print(f"\nlimits: daily_usd={lim['daily_usd'] or 'unlimited'}  "
+          f"calls/job={lim['max_provider_calls_per_job'] or 'unlimited'}  "
+          f"concurrent={lim['max_concurrent_jobs'] or 'unlimited'}")
+    if out.get("profile"):
+        pr = out["profile"]
+        print(f"\nprofile {pr['name']!r}: provider={pr['provider']} "
+              f"write_enabled={pr['write_enabled']}")
+        for role, spec in (pr["roles"] or {}).items():
+            extra = f" effort={spec['effort']}" if spec.get("effort") else ""
+            print(f"  role {role:12} {spec.get('model')} ({spec.get('mode')}){extra}")
+    return 0
+
+
 def cmd_gc(ns: argparse.Namespace) -> int:
     """Reclaim old jobs. Opt-in, dry-run by default, selector required.
 
@@ -1261,6 +1320,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ep = sub.add_parser("execution-profile", help="content digest of the launcher and package, for pinning")
     ep.set_defaults(func=cmd_execution_profile)
+
+    cp = sub.add_parser("capabilities",
+                        help="describe this tool: commands, providers, limits, refusal contract")
+    cp.set_defaults(func=cmd_capabilities)
 
     gp = sub.add_parser("gc", help="reclaim old jobs (opt-in; dry-run unless --yes)")
     gp.add_argument("--older-than", dest="older_than",

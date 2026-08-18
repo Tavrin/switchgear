@@ -20,12 +20,19 @@ def resolve_command(verb: str, args: Sequence[str]) -> list[str]:
     rec = command_record(verb)
     argv0 = rec["argv"][0]
     if argv0 in _FORBIDDEN_BASES or argv0.endswith("/sh") or argv0.endswith("/bash"):
-        raise Refuse(f"command {verb} uses a forbidden base executable")
+        raise Refuse(
+            f"command {verb} uses a forbidden base executable — the command "
+            "registry must name an absolute path to an allowed binary"
+        )
     arity = rec.get("arity") or {}
     amin = int(arity.get("min", 0))
     amax = int(arity.get("max", 0))
     if not (amin <= len(args) <= amax):
-        raise Refuse(f"command {verb} arity {len(args)} not in {amin}..{amax}")
+        raise Refuse(
+            f"command {verb} was given {len(args)} argument(s); it accepts "
+            f"{amin} to {amax}. The allowed shape is fixed in the command "
+            "registry, not by the caller."
+        )
     allow_opts = set(rec.get("allow_options") or [])
     allow_paths = bool(rec.get("allow_paths"))
     for a in args:

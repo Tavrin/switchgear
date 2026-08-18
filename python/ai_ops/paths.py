@@ -13,15 +13,21 @@ SAFE_JOB = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 def require_safe_id(value: str, name: str = "id") -> str:
     if not SAFE_ID.match(value or ""):
-        raise Refuse(f"unsafe {name}: {value!r}")
+        raise Refuse(
+            f"unsafe {name}: {value!r} — use only letters, digits, dot, dash and "
+            "underscore, at most 128 characters"
+        )
     if ".." in value:
-        raise Refuse(f"traversal in {name}")
+        raise Refuse(f"traversal in {name}: {value!r} contains '..'; use a plain name")
     return value
 
 
 def require_job_id(value: str) -> str:
     if not SAFE_JOB.match(value or ""):
-        raise Refuse(f"unsafe job id: {value!r}")
+        raise Refuse(
+            f"unsafe job id: {value!r} — a job id is the uuid printed by the "
+            "command that created it (`ai-opencode jobs` lists them)"
+        )
     return value
 
 
@@ -53,13 +59,17 @@ def reject_symlinks(abs_path: str, label: str) -> str:
     path = os.path.abspath(abs_path)
     hit = _symlink_in_path(path)
     if hit:
-        raise Refuse(f"{label} contains symlink component: {hit}")
+        raise Refuse(
+            f"{label} contains symlink component: {hit} — pass the resolved path "
+            "instead. A symlink is refused because it can be repointed underneath "
+            "the rail after the check and before the use."
+        )
     return path
 
 
 def require_absolute(path: str, label: str) -> str:
     if not path or not os.path.isabs(path):
-        raise Refuse(f"{label} must be an absolute path")
+        raise Refuse(f"{label} must be an absolute path (got {path!r})")
     return path
 
 
@@ -75,7 +85,10 @@ def mkdir_exclusive(path: str, mode: int = 0o700) -> None:
     parent = os.path.dirname(path)
     reject_symlinks(parent, "parent")
     if os.path.islink(path) or os.path.lexists(path):
-        raise Refuse(f"refusing to create over existing path: {path}")
+        raise Refuse(
+            f"refusing to create over existing path: {path} — remove it first if "
+            "it is stale; the rail never overwrites what it did not create"
+        )
     os.mkdir(path, mode)
 
 
@@ -94,11 +107,22 @@ def require_disjoint(a: str, b: str, label_a: str, label_b: str) -> None:
     inside a --ro-bind and punches a real hole in readonly containment.
     """
     if is_within(a, b) or is_within(b, a):
-        raise Refuse(f"{label_a} and {label_b} must not overlap ({a} vs {b})")
+        raise Refuse(
+            f"{label_a} and {label_b} must not overlap ({a} vs {b}). Put the state "
+            "root somewhere outside every worktree it records jobs for — "
+            "/var/tmp/ai-ops-state or ~/.local/state/ai-ops are reasonable "
+            "choices. The synthetic HOME is a writable bind under the state root, "
+            "so nesting it inside a worktree punches a hole straight through "
+            "readonly containment."
+        )
 
 
 def stat_identity(path: str) -> tuple[int, int]:
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):
-        raise Refuse(f"path is a symlink: {path}")
+        raise Refuse(
+            f"path is a symlink: {path} — pass the path it resolves to. Identity "
+            "here is (device, inode), and a symlink has its own, so accepting one "
+            "would let the target be swapped after the check."
+        )
     return st.st_dev, st.st_ino

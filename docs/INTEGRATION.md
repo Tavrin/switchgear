@@ -199,6 +199,30 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Finding out what the tool can do, from the tool
+
+```
+ai-opencode --json capabilities
+```
+
+Commands and their flags, providers with version/resume/effort/credential-tier,
+the limits in force, the refusal contract and the exit table — for a caller that
+has never seen this tool and cannot go and read docs mid-task.
+
+Everything in it is **derived from live code**: commands by walking the argparse
+parser, providers from the adapter registry crossed with the version pins, effort
+from each adapter's own `effort_support()`, limits from the budget file. Nothing
+is written down twice, because a hand-maintained capability list is stale the day
+after it is written — the model registry had already drifted to 18 hand-listed
+ids where the provider served 26.
+
+Tests keep it honest rather than trusting it: the reported provider set must
+equal the adapter registry (so adding a fifth provider without wiring it in fails
+CI), every command must document itself, the published exit table is asserted
+against `jobstate.exit_code_for`, and the published refusal prefix is asserted
+against a real refusal's stderr. It answers even with a broken or absent profile,
+which is when a caller needs it most.
+
 ### Concurrency
 
 Operator-owned, in the same budget file as `daily_usd`, and **absent means

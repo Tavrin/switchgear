@@ -144,7 +144,19 @@ def inspect_worktree(path: str) -> WorktreeIdentity:
         common = os.path.abspath(os.path.join(abs_path, common))
     else:
         common = os.path.abspath(common)
-    head = _git(abs_path, "rev-parse", "HEAD").strip()
+    try:
+        head = _git(abs_path, "rev-parse", "HEAD").strip()
+    except Refuse as exc:
+        # A repository with no commits is the common case here, and git's own
+        # message for it ("ambiguous argument 'HEAD'") reads like a usage error
+        # in the rail rather than a description of the worktree.
+        if "ambiguous argument" in str(exc) or "unknown revision" in str(exc):
+            raise Refuse(
+                f"{abs_path} is a git repository with no commits yet, so it has "
+                "no HEAD to pin the job against. Make an initial commit "
+                "(`git commit --allow-empty -m init`) and run this again."
+            ) from exc
+        raise
     branch = _git(abs_path, "rev-parse", "--abbrev-ref", "HEAD").strip()
     linked = os.path.isfile(git_file) and not os.path.islink(git_file)
     if os.path.islink(git_file):

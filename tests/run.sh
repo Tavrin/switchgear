@@ -27,6 +27,9 @@ echo "== secret scanning of worker output =="
 echo "== doctor (broken installs, not just healthy ones) =="
 /usr/bin/python3 "$ROOT/tests/test_doctor.py"
 
+echo "== capabilities: derived, not hand-written =="
+/usr/bin/python3 "$ROOT/tests/test_capabilities.py"
+
 echo "== provider health + cost rollup =="
 /usr/bin/python3 "$ROOT/tests/test_health.py"
 
