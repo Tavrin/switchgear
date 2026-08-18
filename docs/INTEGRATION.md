@@ -199,6 +199,32 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Provider health, and where the money went
+
+`models` carries a `health` block per allowlisted model, aggregated from past job
+records: recent ok/failed counts, a failure ratio, and `unhealthy` once a model
+fails a majority of at least three recent jobs. `doctor` surfaces the same thing
+as a **warning**.
+
+**It reports and never gates.** The rail will not refuse a job for an unhealthy
+model, and the reason is this tool's audience: an AI agent testing a fix *for*
+the failing model would otherwise be refused from testing its own fix. A test
+asserts `run_job` never consults health at all.
+
+Broker counters are kept apart in the same way `quota` keeps them apart: `denied`
+is policy, `transport` is upstream-unreachable. A network blip must not read as a
+model refusing requests.
+
+```
+ai-opencode --state <root> quota --rollup [--today]
+```
+
+aggregates measured spend by provider, model and UTC day. One honesty note it
+prints: a provider at `$0.00` is labelled **unmetered, not free** — Codex on a
+ChatGPT subscription reports no per-step cost at all, so the total is a floor on
+what was spent rather than the whole bill. Blending those would invite routing
+everything at the "free" provider.
+
 ### Retention: `gc`
 
 Nothing is ever removed unless you ask. `gc` is opt-in, reports by default, and

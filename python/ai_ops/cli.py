@@ -253,12 +253,53 @@ def cmd_models(ns: argparse.Namespace) -> int:
             print(f"\nnote: {note}")
         return 0
 
-    print("profile allowlist:")
+    # The default path. It ignored --json entirely, in the one command an
+    # orchestrator is most likely to call programmatically.
+    from . import health as healthmod
+
+    try:
+        seen = healthmod.observe(_state_path(ns))
+        by_model = {m["model"]: m for m in seen["models"]}
+    except Exception:
+        # Health is an observation over past jobs. A state root that does not
+        # exist yet is not a reason to refuse to list models.
+        by_model = {}
+
+    entries = []
     for m in allow:
         rec = model_record(m)
-        reach = _reachability(rec.get("provider") or "")
-        print(f"  {m}  family={rec.get('model_family')}  "
-              f"vendor={rec.get('vendor_family')}  [{rec.get('identity_source')}]  {reach}")
+        entry = {
+            "id": m,
+            "model_family": rec.get("model_family"),
+            "vendor_family": rec.get("vendor_family"),
+            "identity_source": rec.get("identity_source"),
+            "reachability": _reachability(rec.get("provider") or ""),
+        }
+        obs = by_model.get(m)
+        if obs:
+            # REPORTED, never enforced: an agent testing a fix for a failing
+            # model must not be refused from testing its own fix.
+            entry["health"] = {
+                "ok": obs["ok"], "failed": obs["failed"],
+                "failure_ratio": obs["failure_ratio"],
+                "unhealthy": obs["unhealthy"],
+                "last_failure": obs["last_failure"],
+            }
+        entries.append(entry)
+
+    if ns.json:
+        print(json.dumps({"allow": entries}, indent=2))
+        return 0
+
+    print("profile allowlist:")
+    for entry in entries:
+        print(f"  {entry['id']}  family={entry['model_family']}  "
+              f"vendor={entry['vendor_family']}  [{entry['identity_source']}]  "
+              f"{entry['reachability']}")
+        h = entry.get("health")
+        if h and h["unhealthy"]:
+            print(f"      WARN recent jobs: {h['failed']} failed / "
+                  f"{h['ok'] + h['failed']} (last: {h['last_failure']}) — reported, not enforced")
     return 0
 
 
@@ -939,6 +980,9 @@ def cmd_quota(ns: argparse.Namespace) -> int:
     }
     if isinstance(out["daily_usd"], (int, float)) and out["daily_usd"] > 0:
         out["remaining_usd"] = round(float(out["daily_usd"]) - today, 6)
+    if getattr(ns, "rollup", False):
+        since = quotamod.day_start() if getattr(ns, "today", False) else 0.0
+        out["rollup"] = quotamod.rollup(state_path, since)
     if ns.json:
         print(json.dumps(out, indent=2))
         return 0
@@ -954,6 +998,18 @@ def cmd_quota(ns: argparse.Namespace) -> int:
         print(f"{rec['provider']:16} min remaining {rec['min_remaining_percent']}%  ({age}){stale}")
     if not out["external"]:
         print("external         none published")
+    roll = out.get("rollup")
+    if roll:
+        print(f"\nmeasured spend across {roll['jobs']} job(s): ${roll['total_usd']:.6f}")
+        for row in roll["by_provider"]:
+            note = "" if row["metered"] else "   (reports no cost; billed elsewhere)"
+            print(f"  {row['name']:16} ${row['cost_usd']:>10.6f}  {row['jobs']:>3} jobs{note}")
+        print("  by model:")
+        for row in roll["by_model"]:
+            print(f"    {row['name']:34} ${row['cost_usd']:>10.6f}  {row['jobs']:>3} jobs")
+        if roll["unmetered_providers"]:
+            print(f"  NOTE: {', '.join(roll['unmetered_providers'])} reported no cost, "
+                  "so the total is a floor and not the whole bill.")
     return 0
 
 
@@ -1227,6 +1283,10 @@ def build_parser() -> argparse.ArgumentParser:
     jb.set_defaults(func=cmd_jobs)
 
     qt = sub.add_parser("quota", help="measured spend, budget limits, and published provider quota")
+    qt.add_argument("--rollup", action="store_true",
+                    help="aggregate measured spend by provider, model and day")
+    qt.add_argument("--today", action="store_true",
+                    help="with --rollup, limit the aggregation to the current UTC day")
     qt.set_defaults(func=cmd_quota)
 
     rs = sub.add_parser("resume", help="continue a job's provider session with a new message")

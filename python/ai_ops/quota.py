@@ -169,6 +169,92 @@ def spent_since(state_path: str, since_ts: float) -> float:
     return total
 
 
+def read_ledger(state_path: str, since_ts: float = 0.0) -> list[dict[str, Any]]:
+    """Ledger entries at or after `since_ts`.
+
+    Same torn-final-line tolerance as spent_since, and for the same reason: the
+    file is appended to while jobs run, so the last line is routinely half
+    written. A malformed line is skipped, never a reason to refuse an answer
+    about the lines that are fine.
+    """
+    path = ledger_path(state_path)
+    out: list[dict[str, Any]] = []
+    if not os.path.isfile(path):
+        return out
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if float(rec.get("ts") or 0) >= since_ts:
+                    out.append(rec)
+    except OSError:
+        pass
+    return out
+
+
+def rollup(state_path: str, since_ts: float = 0.0) -> dict[str, Any]:
+    """Measured spend aggregated by provider, by model and by UTC day.
+
+    The ledger was a flat list with a single "spent today" sum over it, which
+    answers whether you may start a job and nothing else. The question a caller
+    routing across providers actually has -- where is the money going -- needed
+    every entry read by hand.
+
+    Costs are summed as recorded. No estimation, no extrapolation: every figure
+    here traces to a provider's own per-step report for a specific job.
+    """
+    entries = read_ledger(state_path, since_ts)
+    by_provider: dict[str, dict[str, Any]] = {}
+    by_model: dict[str, dict[str, Any]] = {}
+    by_day: dict[str, float] = {}
+
+    for rec in entries:
+        model = str(rec.get("model") or "unknown")
+        # The pool, which is what a caller routes on. Model ids are
+        # provider-qualified by construction (`claude/claude-haiku-4-5`).
+        provider = model.split("/", 1)[0] if "/" in model else "unknown"
+        cost = float(rec.get("costUSD") or 0.0)
+        ts = float(rec.get("ts") or 0)
+
+        for bucket, key in ((by_provider, provider), (by_model, model)):
+            slot = bucket.setdefault(key, {"cost_usd": 0.0, "jobs": 0})
+            slot["cost_usd"] += cost
+            slot["jobs"] += 1
+        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        by_day[day] = by_day.get(day, 0.0) + cost
+
+    def ranked(bucket: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = [{"name": k, **v} for k, v in bucket.items()]
+        for row in rows:
+            row["cost_usd"] = round(row["cost_usd"], 6)
+            # $0.00 across every job does NOT mean free. Measured: Codex on a
+            # ChatGPT subscription reports no per-step cost at all, so its
+            # entries are genuinely 0.0 while the work is billed against a
+            # subscription elsewhere. Reporting that as a cost of zero would
+            # invite a caller to route everything there believing it is free, so
+            # the two cases are labelled rather than blended.
+            row["metered"] = row["cost_usd"] > 0
+        return sorted(rows, key=lambda r: -r["cost_usd"])
+
+    unmetered = sorted(k for k, v in by_provider.items() if v["cost_usd"] <= 0)
+    return {
+        "total_usd": round(sum(float(r.get("costUSD") or 0.0) for r in entries), 6),
+        "jobs": len(entries),
+        # Providers that ran jobs and reported no cost. The total below is
+        # therefore a floor on what was spent, not the whole bill.
+        "unmetered_providers": unmetered,
+        "by_provider": ranked(by_provider),
+        "by_model": ranked(by_model),
+        "by_day": [{"day": d, "cost_usd": round(c, 6)} for d, c in sorted(by_day.items())],
+    }
+
+
 def day_start(now: float | None = None) -> float:
     now = time.time() if now is None else now
     return now - (now % 86400)

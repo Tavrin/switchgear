@@ -284,6 +284,28 @@ def check_effort() -> list[dict[str, Any]]:
     return out
 
 
+def check_health(state_path: str | None) -> list[dict[str, Any]]:
+    """Models that have been failing recently. WARN at worst, never FAIL.
+
+    Part of this tool's audience is an AI agent driving it, and an agent testing
+    a fix FOR a failing model must not be refused from testing its own fix. So
+    this reports and the rail never gates on it.
+    """
+    if not state_path:
+        return []
+    from . import health as healthmod
+
+    lines = healthmod.warnings(state_path)
+    if not lines:
+        return [_check("health.models", PASS, "no model failing a majority of recent jobs")]
+    return [
+        _check(f"health.{line.split(':')[0]}", WARN, line,
+               "check the provider's status, or route this role to another model. "
+               "The rail does NOT refuse these jobs — this is a report.")
+        for line in lines
+    ]
+
+
 CHECKS: list[tuple[str, Callable[..., list[dict[str, Any]]], bool]] = [
     ("sandbox", check_sandbox, False),
     ("registry", check_registry, False),
@@ -291,6 +313,7 @@ CHECKS: list[tuple[str, Callable[..., list[dict[str, Any]]], bool]] = [
     ("credentials", check_credentials, False),
     ("state", check_state, True),
     ("effort", check_effort, False),
+    ("health", check_health, True),
     ("sessions", check_sessions, True),
 ]
 
