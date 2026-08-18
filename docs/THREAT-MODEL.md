@@ -92,8 +92,18 @@ provider JSON is never evaluated. Handoff and results only under
 - **A hostile upstream** sees the prompts and the diff. Injection reaching the
   prompt is a real risk; the containment limits what it can *do*, not what it can
   *say*.
-- **Quota is unbounded.** Nothing consults remaining budget; a runaway job spends
-  until the upstream refuses. Open work.
+- **Spend is bounded before a job, not during one.** `daily_usd` in the
+  operator-owned budget file refuses to START a job once the day's measured spend
+  reaches it, and the broker's `max_provider_calls_per_job` denies past a per-job
+  ceiling counting ATTEMPTS (not successes — a loop whose calls all fail upstream
+  would never trip a ceiling counting forwards). What remains unbounded is a
+  single job's own cost: it is only known once its stream reports it, so one
+  runaway job can exceed the daily ceiling within itself. The job timeout and the
+  call ceiling are what bound that, not the budget.
+- **Secrets in worker OUTPUT are flagged, not prevented.** A pattern detector
+  records `secrets_suspected` on the record and warns; the evidence is kept
+  byte-intact and the status is unchanged. It is deliberately low-recall to stay
+  low-false-positive, so it is a tripwire, not a control.
 
 ## Install-time risk
 

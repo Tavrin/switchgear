@@ -26,38 +26,54 @@ from a controller-owned registry.
 
 ---
 
-## 2. Where things stand (all verified today)
+## 2. Where things stand
 
-HEAD `b83a33c` on `rem/stage0-security-remediation`. Suite: **71 hermetic + 3
-config probes green** (`bash agent-ops/tests/run.sh`).
+Updated 2026-08-18 after the operability and hardening work. Suite: **348 tests
+across 11 suites** (`bash tests/run.sh`), green on this machine AND against a
+synthetic clean HOME with no providers installed. CI runs it on every push.
 
-Installed: `~/.local/bin/ai-opencode` → symlink to the working tree, so edits are
-live immediately.
+19 commands, 36 modules, ~10k lines.
 
-**Working, proven live end-to-end** (real models, real repos, today):
+Installed here as `~/.local/bin/ai-opencode` → symlink to the working tree, so
+edits are live immediately.
 
-| Lane | Proof |
-|---|---|
-| `scout` (readonly) | found planted bugs with line numbers |
-| `write` (bounded-write) | multi-file edit, valid handoff, `awaiting_review` |
-| `review` (readonly) | cross-vendor (kimi/moonshot judging deepseek) found two real defects the implementer missed |
-| `promote` | atomic, generation CAS, refused correctly on every negative case |
+**All four providers live on both lanes.** OpenCode, Claude Code and Codex at the
+FULL credential tier (the token never enters the sandbox — placeholder in, real
+value swapped by the broker); Grok at the FALLBACK tier (access token inside,
+refresh stripped) because its CLI validates its session locally. Every lane is
+proven by a completed job, not by inspection — the last one, Grok bounded-write,
+closed 2026-08-18 with a cross-vendor review and promote.
 
-**Security properties, measured from inside the sandbox, not assumed:**
+**Security properties, measured from inside the sandbox rather than assumed:**
 
-- READONLY: worktree/gitdir/primary/siblings all unwritable; host `$HOME`,
-  sibling worktrees, state store simply **do not exist** (`ENOENT`). `/` inside is
-  `[bin, dev, etc, lib, lib64, proc, tmp, usr]`.
-- bounded-WRITE: only the leased worktree is writable.
-- **No network**: with a credential broker in play the sandbox runs
-  `--unshare-net`. Measured: `direct_internet: BLOCKED`, `via_broker: OK 200`.
-- **Credential never enters the sandbox**: broker holds it controller-side and
-  injects `Authorization` upstream; the sandbox gets
-  `broker-placeholder-not-a-credential`. Broker allowlists
-  `/chat/completions` + `/messages` and pins the request model.
-- Process ownership: SIGKILL of the controller leaves **zero** surviving `bwrap`
-  or provider processes.
+- READONLY: worktree, git dir, primary and siblings all unwritable; host `$HOME`,
+  sibling worktrees and the state store simply **do not exist** (`ENOENT`).
+- bounded-WRITE: only the leased worktree is writable; the git dir stays
+  read-only, which is why the controller commits and the worker never runs git.
+- **No network** when a broker is in play (`--unshare-net`). Measured:
+  `direct_internet: BLOCKED`, `via_broker: OK 200`.
+- **Credential never enters the sandbox** at the full tier. The broker allowlists
+  the inference paths, pins the request model, and counts ATTEMPTS against the
+  per-job ceiling. Proven live: a Grok job was denied mid-run for reaching at
+  `grok-4.6` while pinned to `grok-4.5`.
+- **Provider children cannot outlive their job.** `--unshare-pid` makes the
+  sandbox pid 1 of its own namespace. Measured on a real Codex job: 55 matching
+  host processes before, 55 after. This is the leak that cost another project
+  754 processes and 15.4 GB with swap exhausted.
 - `RLIMIT_FSIZE` caps any single file the worker writes (kernel-enforced).
+- Evidence is written through pipes drained by the controller, so a worker can
+  append to its own record and never seek back over it.
+
+**The operability layer**, all added after dogfooding showed the gaps were absent
+systems rather than broken ones: `jobs`, `doctor`, `gc`, `capabilities`,
+`quota --rollup`, provider health, a concurrency cap, per-role reasoning effort,
+and secret scanning of worker output.
+
+**Known limits, stated because they bound what this is ready for:** Linux only
+(bwrap); not a uid boundary; prompt injection is unmitigated by design — the
+containment limits what a steered worker can *do*, not what it can *say*; spend
+is bounded before a job, not within one; single operator, single machine, no
+authn on the state root.
 
 ---
 
@@ -173,92 +189,80 @@ Every one of these was earned by a specific bug. Breaking one silently re-opens 
 - **Evidence is persisted before integrity asserts**, so a worker cannot erase its
   own record by tripping one.
 
+Earned later, in the operability and hardening rounds:
+
+- **The absence of a record is never evidence of a benign state.** A missing
+  `result.json` meant "running" for a cancelled job, a crashed background job, a
+  dead foreground job, and a job id that never existed. Liveness is recorded
+  (pid + start time + boot id) and checked, never inferred from what is missing —
+  and `gc` protects `unknown` for the same reason.
+- **Never identify a process by pattern.** Matching command lines fooled another
+  project three times, once matching the operator's own shell; it fooled me three
+  more times in one session while I was writing the test for their finding. Use
+  the triple, or a heartbeat.
+- **Effort values are per MODEL, not per provider.** One provider was measured
+  serving two models with different sets. Adapters declare mechanism; the
+  controller registry holds measured values with an `effort_source`. Unmeasured
+  means refuse — OpenCode silently ignores an effort it does not understand and
+  runs at the default while the record claims otherwise.
+- **A projection resolves the adapter from the JOB, not from the caller.** Reading
+  a Claude job's logs under the wrong profile normalized with the OpenCode adapter
+  and reported a completed job as `failed / truncated`. A confident falsehood.
+- **Every recursive delete is guarded at the delete.** Not by the care of whoever
+  built the path.
+- **One owner per file descriptor.** A `close()` in an `except` beside a `finally`
+  that also closes made lock contention raise EBADF, which *replaced* the refusal
+  — so the guard reported itself as a crash on the only path that happens under
+  load.
+- **Provider installs are discovered, never hardcoded**, and every installed build
+  is recognised. An unrecognised real binary is treated as a mock and runs without
+  the live gate.
+- **The rail states the sandbox's limits to the worker.** A limit hit is the
+  boundary, not a defect — say which and stop. Elsewhere this cost two dead lanes
+  and a run of false "wedged GPU" reports.
+
 ---
 
 ## 7. Unfinished work, in priority order
 
-**Closed 2026-08-18 by `agent-ops-opus-2`** (items 1-5 of the original list):
+Everything from the original list is closed. What follows is what stands between
+this and "a small team can rely on it", hardest last.
 
-1. `tests/live.sh` retry-on-transport-failure was **already complete** -- the
-   fear that the edit was cut mid-write was unfounded. Verified by running it,
-   not reading it, and the harness that verified it is now a committed hermetic
-   test (`tests/test_live_retry.sh`): it extracts `live_job()` verbatim and
-   drives it with a stub CLI, so the rule cannot rot into "retry until green".
-2. Doc drift closed. `THREAT-MODEL.md` and `CONTAINMENT.md` rewritten from the
-   code. Grounding them turned up a real defect (below).
-3. Dead artifacts deleted (`adapters/*`, `policies/*`), completing F20. They had
-   drifted **weaker** than the generated config: a `/tmp/opencode/**` hole in
-   `external_directory` and no `plugin: []`.
-4. `openrouter/*` marked clearly. `ai-opencode models` now reports each id as
-   reachable or UNREACHABLE with the path where its credential belongs.
-5. Verify-mutates-worktree: `PYTHONDONTWRITEBYTECODE=1` in the sandbox env, so an
-   agent-ops job cannot dirty its own freeze with `__pycache__`. The atelier-side
-   half (its verify step runs the real suite *outside* this sandbox) is still
-   atelier's adapter to fix.
+1. **Prompt injection is unmitigated.** The threat model names it: containment
+   limits what a steered worker can *do*, not what it can *say*. In readonly the
+   blast radius is a wrong answer; in bounded-write the worker writes into the
+   worktree and the only check is a review performed by another model, which is
+   equally steerable. This is the live attack surface for anything pointed at
+   content the operator did not write. **Design work, not a fix** — it needs a
+   decision about how far the boundary should go.
+2. **Not a uid boundary.** No user namespace: the worker runs as the invoking
+   user. Mount and network isolation hold, but a bwrap escape or a mount mistake
+   is the whole account rather than a container. Also design work.
+3. **Never run under real load.** The concurrency cap was verified at cap=1 with
+   two jobs. No soak test, no many-worktree fan-out, no multi-day run. Everything
+   verified so far is one operator, roughly sequential.
+4. **Fixture freshness is manual.** `providers verify` checks that a new build
+   still offers the CLI surface the adapter's argv needs, and explicitly does NOT
+   check the event vocabulary — that needs a re-captured stream. These CLIs update
+   weekly, so a silent normalization regression is plausible and would present as
+   "jobs stopped working" with no obvious cause. A check that flags when an
+   installed version has moved past the version its fixture came from is cheap and
+   unwritten.
+5. **No live channel into a running job.** Messages are launch-time inputs plus
+   cold resumes. Another project built a `queue` command because
+   cancel-and-relaunch was otherwise the only way to add information to a running
+   lane, and measured five of seven restarts as pure waste. Whether this belongs
+   here or in the orchestrator is unresolved.
+6. **Grok is fallback tier.** Its access token is inside the sandbox because its
+   CLI validates the session locally. Egress is still broker-locked and the
+   refresh token is stripped, but it is a weaker claim than the other three.
+7. **The atelier adapter lane.** agent-ops's side is built
+   (`docs/INTEGRATION.md`, "atelier lane contract"); the adapter is atelier's to
+   write and they own the scheduling. Do NOT rename our `execution-profile` fields
+   preemptively to match their `executable`/`digestPaths` shape — they will ask
+   where our behaviour is ground truth.
 
-**Found while doing the above** -- a live job with `AI_OPS_ALLOW_LIVE_PROVIDER=1`
-and no credential fell through to the unbrokered path, and since `--unshare-net`
-is requested only when there is a broker socket to bind, it ran the provider on
-the **host network**. Now refuses. Same lesson as the six: "the sandbox has no
-network" was true of every path anyone had run and false of one nobody had.
-
-Still open:
-
-0. **All four target providers are LIVE.** OpenCode, Claude Code and Codex run
-   at the FULL tier (credential never enters the sandbox: placeholder in, real
-   token swapped by the broker). Grok runs at the FALLBACK tier (access token in
-   the sandbox, refresh stripped) because its CLI validates its session locally.
-   Every one proven end to end with a real scout. `docs/ADDING-A-PROVIDER.md`
-   carries the fleet table and the per-CLI gotchas (Codex is websocket-first and
-   needs supports_websockets=false; Claude's OAuth header is Authorization not
-   x-api-key; Codex's ChatGPT-Account-ID is broker-injected).
-   BOUNDED-WRITE is live on OpenCode, Claude Code and Codex (each proven with a
-   real edit + valid handoff + exact delta attribution). Grok's write lane is
-   wired and hermetically tested but UNPROVEN live: its OAuth session expired
-   during the test and the rail refused cleanly ("re-login with its own CLI").
-   Re-run `python3 /tmp/live_write.py grok` after `grok login --device-code`
-   before claiming it works.
-
-1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
-   confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex
-   (ChatGPT account) and Claude Code (Claude account). All three OAuth CLIs
-   measured structurally identical (access + refresh token in a readable file)
-   and all carry backend-redirect + token-injection knobs, so the FULL
-   containment tier extends to them: broker holds the tokens, refreshes
-   controller-side, refresh token never crosses any boundary. Grok is first —
-   its vocabulary is captured (`tests/fixtures/grok-real-scout.jsonl`), its
-   adapter is shipped, and its auth file carries its own OIDC issuer/client id.
-   The ordered engineering list is at the end of that section — note item 2:
-   `resolve_provider` currently classifies any non-OpenCode binary as a *mock*,
-   which is fail-closed but wrong, and must become per-provider pinning first.
-2. **The atelier adapter lane.** Spec written and owner-confirmed
-   (`atelier:specs/wave-3/agent-ops-adapter.md`); agent-ops's side is built (see
-   `docs/INTEGRATION.md` "atelier lane contract"). ATT-009 merged to atelier main
-   `45676c7` (2026-08-18), so the pieces the spec leans on now exist in
-   production: `createExecutionProfile` carries `executable {resolvedPath,
-   version, digest}` with `digestPaths` — the content-digest pattern our
-   `execution-profile` / `launcherDigest` feeds. ATT-009 and ATT-010 are merged;
-   ATT-008 (the sandbox lane where the atelier<->agent-ops convergence decision
-   is made) is STAGED but deliberately HELD for a fresh Codex window + Etienne's
-   explicit go, per atelier's safeguard posture. The adapter lane follows ATT-008.
-   atelier owns scheduling and will ping when it starts. Note two threads must
-   not be conflated: the atelier integration-owner thread (which specced the
-   adapter lane) is separate from the dogfooding session that exercised the rail
-   on real repos and reported the ambient-state bugs (fixed in commit 8bc0b3b).
-   Follow-ups on those bugs go to the dogfooding context-holder, not atelier. **Open item for when it does:** check
-   our `execution-profile` field names against atelier's `executable`/`digestPaths`
-   shape — do NOT rename preemptively; the adapter is atelier's to write and they
-   will ask where our behaviour is ground truth.
-3. **Launcher pinning (ATT-006).** Recommendation given: keep the symlink, pin by
-   CONTENT digest, and digest `python/ai_ops/` too — the launcher is an 11-line
-   stub, so digesting the resolved executable alone pins the one file that never
-   changes. A released copy becomes right when the lab-only constraint lifts.
-4. **The verify side-effect allowlist.** Joint ruling with atelier: integrity
-   keeps covering untracked + ignored content; out-of-tree cache env vars are
-   first-line (`PYTHONDONTWRITEBYTECODE` is done); the escape hatch is an
-   operator-owned, registry-level allowlist. The "never project-declared" half is
-   load-bearing — a project that can allowlist its own hiding place has none. The
-   test to write is that a project-supplied entry is IGNORED, not merged.
+---
 
 ## 8. Orientation
 
@@ -276,14 +280,20 @@ agent-ops/
     policy.py      CompiledPolicy + generated agent definitions
     registry.py    controller-owned models/providers
   docs/INTEGRATION.md      the caller contract — read this first
+  docs/ADDING-A-PROVIDER.md  how a new harness is added (7 methods, ~25 lines)
+  docs/FRICTION-AUDIT.md   another project's failure catalogue, checked against this
+  docs/PORTABILITY.md      what is Linux-bound and what to do elsewhere
   docs/REVIEW-6d217a6.md   the independent review that started the remediation
   tests/run.sh             hermetic, must stay free of live calls
   tests/live.sh            opt-in live smoke (AI_OPS_LIVE=1), uncommitted
+  .github/workflows/tests.yml  CI: the suite on a machine that is not the author's
 ```
 
 Fixtures: `~/Documents/agent-ops-dogfood` and `~/Documents/agent-ops-trial` are
 disposable and safe to delete or reuse.
 
-**Standing constraint:** disposable and lab repositories only. The write lane has
-a handful of live cycles behind it — enough to call it working, not enough to
-call it trusted. Do not point bounded-write at a real project yet.
+**Standing constraint:** disposable and lab repositories only. The write lane now
+has a good many live cycles behind it across all four providers — enough to call
+it working, not enough to call it trusted with someone else's repository. See
+§7.1–7.3 for what would change that; prompt injection is the one that matters
+most, and it is unaddressed.
