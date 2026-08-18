@@ -58,44 +58,55 @@ def _require_disk_headroom(path: str) -> None:
         )
 
 
-def _resolve_effort(requested: str | None, adapter) -> str | None:
-    """Validate a profile's effort request against what the provider can prove.
+def _resolve_effort(requested: str | None, adapter, model: dict) -> str | None:
+    """Validate a profile's effort request against what the MODEL can prove.
 
-    Effort is PROFILE-OWNED, never a caller flag, for the same reason model
+    Effort is profile-owned, never a caller flag, for the same reason model
     choice is: it is a cost and behaviour lever, and the profile is where those
     are fixed and validated. A bare --effort override would defeat the invariant
     the budget, the model allowlist and the command allowlist all rely on.
 
-    Refuses rather than silently dropping. Measured on the pinned builds: grok,
-    codex and opencode all ACCEPT an unrecognised effort value at parse time and
-    run anyway -- so passing an unverified value through would buy a job that
-    quietly ran at the model's default while the record claimed otherwise. A
-    refusal with a remedy is worth more than a lie in the evidence.
+    Two separate facts are checked, because they come from different places and
+    fail differently:
+
+      * the PROVIDER must have an effort control at all -- mechanism, from the
+        adapter;
+      * the MODEL must have a measured set containing this value -- fact, from
+        the controller registry.
+
+    Refuses rather than silently dropping. Measured: OpenCode ACCEPTS an
+    unrecognised effort and runs the job to completion at full price, so passing
+    an unverified value through buys a job that quietly ran at the model's
+    default while the record claims otherwise. A refusal naming its remedy is
+    worth more than a lie in the evidence.
     """
     if not requested:
         return None
-    from .adapters import EFFORT_SUPPORTED, EFFORT_UNMEASURED
+    from .adapters import EFFORT_SUPPORTED
+    from .registry import effort_values
 
     support = adapter.effort_support()
-    status = support.get("status")
-    if status == EFFORT_UNMEASURED:
-        raise Refuse(
-            f"provider {adapter.name!r} exposes an effort control "
-            f"({support.get('flag')}) but its accepted VALUES have never been "
-            "measured on this build, so the rail will not send one blindly — the "
-            "CLI accepts anything and silently ignores what it does not know. "
-            "Measure the values with one cheap live job, add them to that "
-            "adapter's effort_support(), or drop `effort` from this role."
-        )
-    if status != EFFORT_SUPPORTED:
+    if support.get("status") != EFFORT_SUPPORTED:
         raise Refuse(
             f"provider {adapter.name!r} has no effort control; remove `effort` "
-            f"from role config for this profile."
+            "from this role."
         )
-    values = support.get("values") or []
+
+    model_id = model.get("id")
+    values = effort_values(model)
+    if values is None:
+        raise Refuse(
+            f"no effort values have been measured for model {model_id!r}, so the "
+            "rail will not send one blindly. Effort is a per-MODEL fact — one "
+            "provider was measured serving two models with different sets — so "
+            "it cannot be inferred from the provider. Measure it (send a "
+            "deliberate nonsense value; most providers answer with the accepted "
+            f"list) and add `effort_values` to {model_id!r} in "
+            "models/registry.json, or drop `effort` from this role."
+        )
     if requested not in values:
         raise Refuse(
-            f"effort {requested!r} is not accepted by {adapter.name!r} "
+            f"effort {requested!r} is not accepted by {model_id!r} "
             f"(measured: {', '.join(values)})"
         )
     return requested
@@ -192,7 +203,7 @@ def run_job(
     # Validated here rather than at argv-build time: an unusable effort request
     # must cost nothing, so it is refused before the job directory exists and
     # before the budget is touched.
-    effort = _resolve_effort(spec.get("effort"), adapter)
+    effort = _resolve_effort(spec.get("effort"), adapter, model)
 
     # Before any work, and before any job directory exists: a budget checked
     # after the spend is an audit, not a control.

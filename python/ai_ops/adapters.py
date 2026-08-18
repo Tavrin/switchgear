@@ -84,23 +84,33 @@ def parse_lenient(text: str) -> tuple[list[dict[str, Any]], int]:
 # "nobody has measured which values it accepts" are different facts, and
 # collapsing them into one produces exactly the guessing this rail forbids.
 #
-# Measured 2026-08-18 by reading each CLI's own --help on the pinned build:
+# Effort values are a property of the MODEL, not of the provider, so an adapter
+# declares only the MECHANISM -- whether this CLI has an effort control and how
+# the value is spelled on its command line. The accepted VALUES live per model in
+# models/registry.json, which is where controller-owned measured facts belong.
 #
-#   claude    --effort <level>            help ENUMERATES low, medium, high,
-#                                         xhigh, max
-#   grok      --reasoning-effort <EFFORT> flag confirmed (alias --effort); help
-#                                         gives no value list
-#   codex     -c model_reasoning_effort=  config key confirmed in the binary;
-#                                         no enumeration anywhere
-#   opencode  --variant <string>          help says "provider-specific reasoning
-#                                         effort, e.g. high, max, minimal" --
-#                                         an EXAMPLE, explicitly not a list, and
-#                                         it varies by underlying model anyway
+# That split was forced by measurement rather than chosen for tidiness. The
+# OpenAI API's generic enumeration lists `none, minimal, low, medium, high,
+# xhigh, max`, but running `minimal` against gpt-5.6-sol was refused with
+# "Unsupported value: 'minimal' is not supported with the 'gpt-5.6-sol' model".
+# One provider, two models, two different sets -- so any provider-level list is
+# wrong for some model in the pool, and would be wrong silently.
 #
-# Also measured: none of grok, codex or opencode validate the value at parse
-# time (each accepted `bogus-value` and still ran). So a wrong value is silently
-# ignored by the provider rather than rejected, which is why the rail refuses
-# unmeasured values itself instead of passing them through and hoping.
+# How each CLI fails a bad value, measured 2026-08-18 on the pinned builds:
+#
+#   grok     rejects CLIENT-SIDE before any API call, naming its own set:
+#            "unknown effort level 'x'; use one of: high, medium, low". Free.
+#   codex    forwards it; the API rejects with HTTP 400 and enumerates the set
+#            FOR THAT MODEL. Costs one failed turn.
+#   claude   --effort is enumerated in its own --help.
+#   opencode ACCEPTED `--variant not-a-real-value` and ran the job to completion,
+#            returning a real answer at full price ($0.0022). It neither
+#            validates nor reports -- the value is simply dropped.
+#
+# That last case is the whole argument for refusing an unmeasured value instead
+# of passing it through and hoping: a provider that silently ignores an effort it
+# does not understand hands back a job that ran at the model's default while the
+# record claims otherwise. A lie in the evidence, bought at full price.
 EFFORT_SUPPORTED = "supported"
 EFFORT_UNMEASURED = "unmeasured"
 EFFORT_UNSUPPORTED = "unsupported"
@@ -339,16 +349,14 @@ class OpenCodeAdapter(ProviderAdapter):
     # behind the same seam as parse() -- otherwise the seam is nominal and the
     # next provider still has to edit the job lifecycle.
     def effort_support(self) -> dict[str, Any]:
-        """`--variant` is documented as "provider-specific reasoning effort".
+        """`--variant`. Mechanism only; values are per model in the registry.
 
-        UNMEASURED, not supported: the help text gives examples ("e.g. high, max,
-        minimal"), and an example list is not an accepted-value list. It is also
-        genuinely per-model here, since opencode fronts many vendors -- so the
-        set cannot be a property of the adapter at all, and pinning one would be
-        wrong for most of the pool.
+        Flagged `validates: none` because it was MEASURED not to: an unknown
+        value ran to completion at full price rather than being reported. For
+        this provider a wrong value is invisible, which is why the rail must be
+        the one to catch it.
         """
-        return {"status": EFFORT_UNMEASURED, "flag": "--variant"}
-
+        return {"status": EFFORT_SUPPORTED, "flag": "--variant", "validates": "none"}
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -598,14 +606,11 @@ class GrokAdapter(ProviderAdapter):
         return dest
 
     def effort_support(self) -> dict[str, Any]:
-        """`--reasoning-effort` (alias `--effort`) confirmed on 1.0.x.
-
-        UNMEASURED: the flag exists and takes a value, but the CLI enumerates
-        nothing and accepts anything at parse time, so the accepted set is only
-        knowable from a live call.
-        """
-        return {"status": EFFORT_UNMEASURED, "flag": "--reasoning-effort"}
-
+        """`--reasoning-effort` (alias `--effort`). Validated client-side by the
+        CLI itself, which names its set in the error, so a bad value costs
+        nothing. The MODEL may still refuse a value the CLI accepts."""
+        return {"status": EFFORT_SUPPORTED, "flag": "--reasoning-effort",
+                "validates": "client"}
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -894,19 +899,8 @@ class ClaudeCodeAdapter(ProviderAdapter):
     credential_in_sandbox = False
 
     def effort_support(self) -> dict[str, Any]:
-        """The only provider that enumerates its own values.
-
-        Read off `claude --help` on the pinned build: "Effort level for the
-        current session (low, medium, high, xhigh, max)". Measured, so it is
-        SUPPORTED and the rail can validate a requested value before spending
-        anything.
-        """
-        return {
-            "status": EFFORT_SUPPORTED,
-            "flag": "--effort",
-            "values": ["low", "medium", "high", "xhigh", "max"],
-        }
-
+        """`--effort`, enumerated in the CLI's own --help."""
+        return {"status": EFFORT_SUPPORTED, "flag": "--effort", "validates": "client"}
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -1212,15 +1206,11 @@ class CodexAdapter(ProviderAdapter):
         ])
 
     def effort_support(self) -> dict[str, Any]:
-        """`-c model_reasoning_effort=<v>`: the KEY is confirmed, the values are not.
-
-        The config key is present in the pinned binary. No enumeration is
-        published and `-c model_reasoning_effort=bogus-value` is accepted at parse
-        time, so the accepted set stays UNMEASURED rather than being copied from
-        another provider that happens to use similar words.
-        """
-        return {"status": EFFORT_UNMEASURED, "flag": "-c model_reasoning_effort="}
-
+        """`-c model_reasoning_effort=<v>`. The CLI forwards anything; the API
+        rejects an unknown value with a 400 that enumerates the set FOR THAT
+        MODEL -- which is how the per-model nature of this was discovered."""
+        return {"status": EFFORT_SUPPORTED, "flag": "-c model_reasoning_effort=",
+                "validates": "api"}
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 

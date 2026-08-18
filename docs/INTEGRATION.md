@@ -332,27 +332,49 @@ are asserted clean.
 Effort is **profile-owned**, set per role, never a caller flag:
 
 ```json
-"roles": { "scout": { "model": "claude/claude-haiku-4-5-20251001",
+"roles": { "scout": { "model": "codex/gpt-5.6-sol",
                       "mode": "readonly", "effort": "low" } }
 ```
 
 It is a cost and behaviour lever exactly like model choice, so it lives where
-model choice already lives and is validated against the same kind of allowlist. A
-bare `--effort` override would defeat the invariant the budget, the model
-allowlist and the command allowlist all rely on.
+model choice already lives and is validated against the same kind of allowlist.
 
-An adapter reports one of **three** states, not a boolean — `supported` (with the
-measured values), `unmeasured`, or `unsupported`. "This provider has no effort
-control" and "nobody has measured which values it accepts" are different facts.
-`doctor` prints the current table; today only Claude Code is `supported`
-(`low, medium, high, xhigh, max`, enumerated by its own `--help`).
+**The accepted values are a property of the MODEL, not the provider.** That was
+forced by measurement, not chosen for tidiness: `gpt-5.6-codex` accepts `minimal`
+and `gpt-5.6-sol` refuses it — one provider, one flag, two different sets. So an
+adapter declares only the *mechanism* (does this CLI have an effort control, how
+is the value spelled, and where a bad value gets caught), while the *values* live
+per model in `models/registry.json` alongside every measured entry:
 
-A request the rail cannot verify is **refused**, never silently dropped, and
-refused before the job directory exists so it costs nothing. This matters because
-Grok, Codex and OpenCode were each measured to **accept an unrecognised effort
-value at parse time and run anyway** — passing one through would buy a job that
-quietly ran at the model's default while the record claimed otherwise.
+```jsonc
+"codex/gpt-5.6-sol": {
+  "effort_values": ["none", "low", "medium", "high", "xhigh", "max"],
+  "effort_source": "model-error: gpt-5.6-sol refused 'minimal' and enumerated these"
+}
+```
 
+Every measured model records **how** it was measured, so an auditor can weigh the
+set rather than just read it. A model with no `effort_values` is *unmeasured*, and
+the rail refuses effort for it — identity can be derived from an id by rule, an
+accepted-value set cannot.
+
+Where a bad value is caught differs per provider, which `doctor` prints:
+
+| provider | flag | catches a bad value |
+|---|---|---|
+| Claude Code | `--effort` | client-side |
+| Grok | `--reasoning-effort` | client-side, names the set, free |
+| Codex | `-c model_reasoning_effort=` | the API, HTTP 400, names the set for that model |
+| OpenCode | `--variant` | **nothing** — see below |
+
+OpenCode was measured to **accept `--variant not-a-real-value` and run the job to
+completion at full price**, returning a real answer. It neither validates nor
+reports. That is the whole argument for refusing an unmeasured value rather than
+passing it through: a provider that silently drops an effort it does not
+understand hands back a job that ran at the model's default while the record
+claims otherwise — a lie in the evidence, bought at full price.
+
+Refusals happen before the job directory exists, so a bad request costs nothing.
 The value actually sent is recorded on the job as `effort` (null when none was).
 
 ### Checking the install before you depend on it

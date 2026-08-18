@@ -98,6 +98,25 @@ def derive_identity(model_id: str, provider: str) -> dict[str, str]:
     }
 
 
+def effort_values(model_rec: dict[str, Any]) -> list[str] | None:
+    """The effort values MEASURED for this model, or None if nobody has.
+
+    Per model, never per provider. One provider was observed to serve two models
+    with different sets -- the OpenAI API advertises `minimal` generically and
+    gpt-5.6-sol refuses it -- so a provider-level list is wrong for some model in
+    the pool, and wrong silently.
+
+    None means unmeasured, and unmeasured means the rail refuses rather than
+    guessing. That is deliberately the DEFAULT for a model nobody has curated:
+    identity can be derived from an id by rule, but an accepted-value set cannot
+    be, and inventing one is how a job ends up running at an effort nobody chose.
+    """
+    values = model_rec.get("effort_values")
+    if isinstance(values, list) and values and all(isinstance(v, str) for v in values):
+        return list(values)
+    return None
+
+
 def model_record(model_id: str) -> dict[str, Any]:
     reg = load_models()
     deny = reg.get("deny") or []

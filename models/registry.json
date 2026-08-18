@@ -135,22 +135,92 @@
     "grok/grok-4.6": {
       "provider": "grok",
       "model_family": "grok",
-      "vendor_family": "xai"
+      "vendor_family": "xai",
+      "effort_values": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "effort_source": "cli-enumerated (grok rejects client-side and names the set)"
     },
     "claude/claude-sonnet-5": {
       "provider": "claude",
       "model_family": "claude",
-      "vendor_family": "anthropic"
+      "vendor_family": "anthropic",
+      "effort_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effort_source": "cli-enumerated (claude --help); not spot-verified on this model"
     },
     "claude/claude-opus-5": {
       "provider": "claude",
       "model_family": "claude",
-      "vendor_family": "anthropic"
+      "vendor_family": "anthropic",
+      "effort_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effort_source": "cli-enumerated (claude --help); not spot-verified on this model"
     },
     "codex/gpt-5.6-sol": {
       "provider": "codex",
       "model_family": "gpt",
-      "vendor_family": "openai"
+      "vendor_family": "openai",
+      "effort_values": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effort_source": "model-error: gpt-5.6-sol refused 'minimal' and enumerated these"
+    },
+    "codex/gpt-5.6-codex": {
+      "provider": "codex",
+      "model_family": "gpt",
+      "vendor_family": "openai",
+      "effort_values": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effort_source": "api-schema enumeration; 'minimal' accepted live, unlike gpt-5.6-sol"
+    },
+    "claude/claude-haiku-4-5-20251001": {
+      "provider": "claude",
+      "model_family": "claude",
+      "vendor_family": "anthropic",
+      "effort_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effort_source": "cli-enumerated (claude --help); 'low' and 'max' both verified live"
+    },
+    "grok/grok-4.5": {
+      "provider": "grok",
+      "model_family": "grok",
+      "vendor_family": "xai",
+      "effort_values": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "effort_source": "cli-enumerated (grok rejects client-side and names the set); 'low' verified live"
     }
   },
   "deny": [

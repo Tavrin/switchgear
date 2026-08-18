@@ -1686,18 +1686,17 @@ class RailTests(unittest.TestCase):
     # --- effort ------------------------------------------------------------
 
     def test_effort_from_the_profile_lands_on_the_record(self):
-        """Profile-owned, end to end: the mock provider is opencode-shaped, whose
-        values are UNMEASURED, so this also proves the refusal is real rather
-        than a lint on a string."""
+        """Profile-owned, end to end. The mock is opencode-shaped and its model
+        has no measured effort set, so this also proves the refusal is real
+        rather than a lint on a string."""
         prof = json.loads(self.profile.read_text())
         prof["roles"]["scout"]["effort"] = "high"
         self.profile.write_text(json.dumps(prof, indent=2))
         p = run_cli(self.args("scout", str(self.primary), "hello"))
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("never been measured", p.stderr)
-        self.assertIn("--variant", p.stderr, "refusal must name the control it means")
-        self.assertIn("measure the values", p.stderr.lower(),
-                      "refusal must name a remedy")
+        self.assertIn("deepseek-v4-flash", p.stderr, "must name the MODEL, not the provider")
+        self.assertIn("per-MODEL", p.stderr, "must say why it cannot be inferred")
+        self.assertIn("registry.json", p.stderr, "must say where to record it")
 
     def test_a_role_without_effort_records_null(self):
         p = run_cli(self.args("--json", "scout", str(self.primary), "hello"))

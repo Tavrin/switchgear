@@ -255,32 +255,49 @@ def check_sessions(state_path: str | None) -> list[dict[str, Any]]:
 
 
 def check_effort() -> list[dict[str, Any]]:
-    """Which providers can be given a reasoning-effort value, and which cannot yet.
+    """Which providers have an effort control, and which models have a measured set.
 
-    Reported so `effort` is DISCOVERABLE without reading source: an agent writing
-    a profile needs to know that asking Codex for `high` will be refused today,
-    and why, before it writes the role.
+    Reported per MODEL because that is what it is: one provider was measured
+    serving two models with different sets. An agent writing a profile needs to
+    know that asking for `minimal` on gpt-5.6-sol will be refused, before it
+    writes the role.
     """
-    from .adapters import EFFORT_SUPPORTED, EFFORT_UNMEASURED, _ADAPTERS
+    from .adapters import EFFORT_SUPPORTED, _ADAPTERS
+    from .registry import effort_values, load_models
 
     out: list[dict[str, Any]] = []
     for name in sorted(_ADAPTERS):
         sup = _ADAPTERS[name].effort_support()
-        status = sup.get("status")
-        if status == EFFORT_SUPPORTED:
-            out.append(_check(f"effort.{name}", PASS,
-                              f"{sup['flag']} accepts {', '.join(sup['values'])}"))
-        elif status == EFFORT_UNMEASURED:
-            out.append(_check(
-                f"effort.{name}", PASS,
-                f"{sup.get('flag')} exists, accepted values unmeasured — effort "
-                "requests are refused for this provider",
-                "measure the accepted values with one cheap live job and add them "
-                f"to {name}'s effort_support(); until then a role must not set "
-                "`effort` for it.",
-            ))
-        else:
+        if sup.get("status") != EFFORT_SUPPORTED:
             out.append(_check(f"effort.{name}", PASS, "no effort control"))
+            continue
+        note = {
+            "client": "the CLI rejects a bad value itself",
+            "api": "the API rejects a bad value",
+            "none": "the CLI SILENTLY IGNORES an unknown value — the rail is the "
+                    "only thing that can catch a mistake here",
+        }.get(sup.get("validates"), "")
+        out.append(_check(f"effort.{name}", PASS, f"{sup['flag']} — {note}"))
+
+    models = (load_models().get("models") or {})
+    measured = {k: effort_values(v) for k, v in models.items() if effort_values(v)}
+    if measured:
+        out.append(_check(
+            "effort.measured_models", PASS,
+            f"{len(measured)} model(s) with a measured set: "
+            + "; ".join(f"{k} [{', '.join(v)}]" for k, v in sorted(measured.items())),
+        ))
+    unmeasured = sorted(k for k in models if not effort_values(models[k]))
+    if unmeasured:
+        out.append(_check(
+            "effort.unmeasured_models", PASS,
+            f"{len(unmeasured)} model(s) have no measured set, so `effort` is "
+            "refused for them: " + ", ".join(unmeasured[:6])
+            + (" ..." if len(unmeasured) > 6 else ""),
+            "measure one by sending a deliberate nonsense value (most providers "
+            "answer with the accepted list) and add `effort_values` to that "
+            "model in models/registry.json.",
+        ))
     return out
 
 

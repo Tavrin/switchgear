@@ -58,6 +58,17 @@
         "derived"
       ],
       "description": "Whether family/vendor came from a curated registry entry or from controller-owned derivation rules. Recorded so an auditor can tell a derived classification from a curated one."
+    },
+    "effort_values": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "reasoning-effort values MEASURED for this model. Absent means unmeasured, and the rail refuses effort for it."
+    },
+    "effort_source": {
+      "type": "string",
+      "description": "how effort_values was established, so an auditor can weigh it"
     }
   }
 }

@@ -18,11 +18,24 @@ locally, the real (access) token must be inside the sandbox — the fallback tie
 | **OpenCode** | API key | full | **live** | **live** |
 | **Claude Code** | Claude OAuth | full | **live** | **live** |
 | **Codex** | ChatGPT OAuth | full | **live** | **live** |
-| **Grok** | xAI OIDC | fallback | **live** | wired, **unproven** (session expired mid-test; needs `grok login`) |
+| **Grok** | xAI OIDC | fallback | **live** | **live** |
 
 Tier = whether the credential enters the sandbox. Full: never (placeholder in,
 real token swapped by the broker). Fallback: the access token is inside, refresh
 token stripped, egress still broker-locked.
+
+All four lanes are proven by a completed job, not by inspection. The Grok write
+lane was closed last (2026-08-18): a bounded-write job changed exactly one line of
+one file, parked at `awaiting_review`, was reviewed cross-vendor by Claude Haiku
+(different model, family, vendor and provider — every independence rule met) and
+promoted. Total $0.072.
+
+That run also produced the first live evidence of the broker's model pin firing
+against a real provider: `denied: 1 — model not allowed: 'grok-4.6'`. The Grok
+CLI attempted a call against a model the job was not pinned to, and the broker
+refused it while the five legitimate calls went through. The pin is not
+theoretical, and a provider reaching for a second model mid-job is not
+hypothetical either.
 
 Facts behind the table, all measured against recording servers with no spend:
 

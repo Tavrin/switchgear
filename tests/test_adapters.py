@@ -848,32 +848,76 @@ class EffortContract(unittest.TestCase):
         base.update(over)
         return get_adapter(name).argv(**base)
 
-    def test_three_states_not_a_boolean(self):
-        """"unsupported" and "not yet measured" are different facts. Collapsing
-        them is the guessing this rail exists to avoid."""
+    def test_status_is_from_the_declared_set(self):
+        """`unsupported` and `unmeasured` remain distinct states even though the
+        VALUES moved to the registry: a provider with no effort control at all is
+        a different fact from a model nobody has measured."""
         from ai_ops.adapters import (
             EFFORT_SUPPORTED, EFFORT_UNMEASURED, EFFORT_UNSUPPORTED, _ADAPTERS,
         )
 
         allowed = {EFFORT_SUPPORTED, EFFORT_UNMEASURED, EFFORT_UNSUPPORTED}
         for name, adapter in _ADAPTERS.items():
+            self.assertIn(adapter.effort_support()["status"], allowed, name)
+
+    def test_a_provider_with_no_effort_control_defaults_to_unsupported(self):
+        """The base class default, so a new harness cannot have an effort control
+        invented for it by omission."""
+        from ai_ops.adapters import EFFORT_UNSUPPORTED, ProviderAdapter
+
+        self.assertEqual(ProviderAdapter().effort_support()["status"],
+                         EFFORT_UNSUPPORTED)
+
+    def test_adapters_declare_mechanism_only(self):
+        """Effort VALUES are a per-model fact and live in the registry. An
+        adapter that carried a value list would be wrong for some model in its
+        own pool, and wrong silently."""
+        from ai_ops.adapters import _ADAPTERS
+
+        for name, adapter in _ADAPTERS.items():
             sup = adapter.effort_support()
-            self.assertIn(sup["status"], allowed, name)
-            if sup["status"] == EFFORT_SUPPORTED:
-                self.assertTrue(sup.get("values"),
-                                f"{name} claims supported but measured no values")
+            self.assertNotIn("values", sup,
+                             f"{name} carries a provider-level value list")
+            self.assertIn("flag", sup)
+            self.assertIn(sup["validates"], {"client", "api", "none"}, name)
 
-    def test_claude_is_the_only_measured_provider_today(self):
-        """Guards the honesty of the table: if another provider is promoted to
-        `supported`, that must be a deliberate edit backed by a measurement, not
-        a copied value list."""
-        from ai_ops.adapters import EFFORT_SUPPORTED, _ADAPTERS
+    def test_opencode_is_flagged_as_not_validating(self):
+        """Measured: `--variant not-a-real-value` was accepted and the job ran to
+        completion at full price. For this provider the rail is the only thing
+        that can catch a bad value, so the adapter has to say so."""
+        from ai_ops.adapters import _ADAPTERS
 
-        measured = {n for n, a in _ADAPTERS.items()
-                    if a.effort_support()["status"] == EFFORT_SUPPORTED}
-        self.assertEqual(measured, {"claude"})
-        self.assertEqual(_ADAPTERS["claude"].effort_support()["values"],
-                         ["low", "medium", "high", "xhigh", "max"])
+        self.assertEqual(_ADAPTERS["opencode"].effort_support()["validates"], "none")
+
+    def test_the_registry_holds_per_model_sets_that_genuinely_differ(self):
+        """The measurement that forced this shape: one provider, two models, two
+        different sets. gpt-5.6-codex accepts `minimal` live; gpt-5.6-sol refuses
+        it and enumerated the rest in its own error."""
+        from ai_ops.registry import effort_values, model_record
+
+        sol = effort_values(model_record("codex/gpt-5.6-sol"))
+        codex_m = effort_values(model_record("codex/gpt-5.6-codex"))
+        self.assertIsNotNone(sol)
+        self.assertIsNotNone(codex_m)
+        self.assertNotIn("minimal", sol)
+        self.assertIn("minimal", codex_m)
+        self.assertNotEqual(sol, codex_m)
+
+    def test_every_measured_model_records_how_it_was_measured(self):
+        """An auditor must be able to weigh a value set, not just read it."""
+        from ai_ops.registry import effort_values, load_models
+
+        for mid, rec in (load_models().get("models") or {}).items():
+            if effort_values(rec):
+                self.assertTrue(rec.get("effort_source"),
+                                f"{mid} has effort_values with no effort_source")
+
+    def test_an_uncurated_model_has_no_effort_set(self):
+        """Identity can be derived from an id by rule; an accepted-value set
+        cannot. Unmeasured is the fail-closed default."""
+        from ai_ops.registry import effort_values, model_record
+
+        self.assertIsNone(effort_values(model_record("grok/grok-9.9-invented")))
 
     def test_each_provider_carries_effort_in_its_own_form(self):
         cl = self._argv("claude", effort="high")
@@ -904,42 +948,56 @@ class EffortContract(unittest.TestCase):
 
 
 class EffortResolution(unittest.TestCase):
-    """The refusal path. Measured: grok, codex and opencode all ACCEPT an
-    unrecognised effort value and run anyway, so a value the rail cannot verify
-    must never be sent."""
+    """The refusal path. Measured: OpenCode ACCEPTS an unrecognised effort value
+    and runs the job to completion at full price, so a value the rail cannot
+    verify must never be sent."""
 
     def setUp(self):
         sys.path.insert(0, str(ROOT / "python"))
 
-    def _resolve(self, requested, provider):
+    def _resolve(self, requested, provider, model_id):
         from ai_ops.job import _resolve_effort
+        from ai_ops.registry import model_record
 
-        return _resolve_effort(requested, get_adapter(provider))
+        return _resolve_effort(requested, get_adapter(provider), model_record(model_id))
 
     def test_no_request_is_not_a_refusal(self):
-        for name in ("claude", "grok", "opencode", "codex"):
-            self.assertIsNone(self._resolve(None, name))
+        self.assertIsNone(self._resolve(None, "claude", "claude/claude-sonnet-5"))
+        self.assertIsNone(self._resolve(None, "opencode", "opencode-go/glm-5.3"))
 
-    def test_measured_value_passes_through(self):
-        self.assertEqual(self._resolve("xhigh", "claude"), "xhigh")
+    def test_a_measured_value_passes_through(self):
+        self.assertEqual(
+            self._resolve("xhigh", "claude", "claude/claude-sonnet-5"), "xhigh")
+        self.assertEqual(self._resolve("high", "grok", "grok/grok-4.5"), "high")
+        self.assertEqual(self._resolve("low", "codex", "codex/gpt-5.6-sol"), "low")
 
-    def test_value_outside_the_measured_set_is_refused(self):
+    def test_a_value_outside_the_model_set_is_refused(self):
         from ai_ops.errors import Refuse
 
         with self.assertRaises(Refuse) as ctx:
-            self._resolve("ultra", "claude")
+            self._resolve("ultra", "claude", "claude/claude-sonnet-5")
         self.assertIn("ultra", str(ctx.exception))
         self.assertIn("low", str(ctx.exception), "refusal must name what IS accepted")
 
-    def test_unmeasured_provider_is_refused_with_a_remedy(self):
+    def test_the_same_value_can_be_valid_for_one_model_and_not_another(self):
+        """The whole reason this is per model. Same provider, same flag."""
         from ai_ops.errors import Refuse
 
-        for name in ("grok", "codex", "opencode"):
-            with self.assertRaises(Refuse) as ctx:
-                self._resolve("high", name)
-            msg = str(ctx.exception)
-            self.assertIn("unmeasured" if "unmeasured" in msg else "measured", msg)
-            self.assertIn("measure", msg.lower(), f"{name} refusal names no remedy")
+        self.assertEqual(
+            self._resolve("minimal", "codex", "codex/gpt-5.6-codex"), "minimal")
+        with self.assertRaises(Refuse) as ctx:
+            self._resolve("minimal", "codex", "codex/gpt-5.6-sol")
+        self.assertIn("gpt-5.6-sol", str(ctx.exception))
+
+    def test_an_unmeasured_model_is_refused_with_a_remedy(self):
+        from ai_ops.errors import Refuse
+
+        with self.assertRaises(Refuse) as ctx:
+            self._resolve("high", "opencode", "opencode-go/deepseek-v4-flash")
+        msg = str(ctx.exception)
+        self.assertIn("deepseek-v4-flash", msg, "the refusal must name the model")
+        self.assertIn("per-MODEL", msg, "and say why it cannot be inferred")
+        self.assertIn("registry.json", msg, "and where to record it")
 
 
 class ExecutionPinning(unittest.TestCase):
