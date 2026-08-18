@@ -81,12 +81,17 @@ def load_provider_credential(name: str | None = None) -> str | None:
     where unrelated secrets live (work keys, cloud tokens), and this rail must
     forward exactly one credential and never a whole environment.
 
-    RESIDUAL, accepted knowingly: the provider process receives a usable
-    credential and has network access, so a hostile provider can exfiltrate it.
-    Use a DEDICATED, separately-budgeted, independently revocable key -- never a
-    personal or shared one. Stage 2 (a controller-side broker proxy addressed via
-    provider options.baseURL, plus --unshare-net) removes this residual by never
-    placing the credential inside the sandbox at all.
+    The credential never enters the sandbox. It is read here, in the controller,
+    and held by the broker (broker.py), which attaches the Authorization header
+    on the way upstream; the sandbox gets a placeholder and a loopback URL. That
+    closes the earlier residual in which a hostile provider could exfiltrate a
+    usable key. Still use a DEDICATED, separately-budgeted, independently
+    revocable key -- the broker bounds what the key can be spent on, not what a
+    compromised upstream could do with it.
+
+    Returns None when no credential is configured. Callers that requested a live
+    provider must treat that as a refusal, not as a fallback: without a broker
+    the sandbox is not given a network namespace of its own.
     """
     path = credential_path(name)
     if not os.path.isfile(path):

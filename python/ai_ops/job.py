@@ -141,6 +141,18 @@ def run_job(
             prec = registry_provider(provider_id)
             cred = provider.load_provider_credential(prec.get("credential") or provider_id)
             upstream = os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or prec["upstream"]
+            if not cred:
+                # Fail closed. Falling through to the no-broker path here would
+                # silently drop --unshare-net (the namespace is requested only
+                # when there is a broker socket to bind), leaving a live provider
+                # process on the host network. It could not reach a model without
+                # a credential, so this bought nothing and cost the strongest
+                # containment property the rail has.
+                raise Refuse(
+                    f"live provider requested but no credential for {provider_id!r} "
+                    f"at {provider.credential_path(prec.get('credential') or provider_id)} "
+                    "(refusing: an unbrokered live job would run on the host network)"
+                )
         if not cred:
             return _execute(None)
         sock = os.path.join(dirs["job"], "broker.sock")

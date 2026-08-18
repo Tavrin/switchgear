@@ -732,6 +732,26 @@ class RailTests(unittest.TestCase):
         finally:
             os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
 
+    def test_live_without_a_credential_refuses_rather_than_dropping_the_namespace(self):
+        """A job that asks for a live provider but has no credential must refuse.
+
+        --unshare-net is requested only when there is a broker socket to bind, so
+        falling through to the no-broker path put the provider process on the
+        HOST network. Without a credential it could not reach a model anyway, so
+        that fallback bought nothing and silently surrendered the strongest
+        containment property the rail has. Fail closed instead.
+        """
+        p = run_cli(
+            self.args("scout", str(self.primary), "look"),
+            env={
+                "AI_OPS_ALLOW_LIVE_PROVIDER": "1",
+                "AI_OPS_PROVIDER_CREDENTIAL_FILE": str(self.tmp / "no-such-credential"),
+                "AI_OPS_MOCK_BEHAVIOR": "ok",
+            },
+        )
+        self.assertNotEqual(p.returncode, 0, p.stdout)
+        self.assertIn("no credential", p.stderr)
+
     def test_k1_untracked_content_is_in_the_digest(self):
         """kimi-1 (BLOCKER): a worker cannot stage (git dir is ro in-sandbox), so
         every file it creates is untracked. `git status` reports untracked files

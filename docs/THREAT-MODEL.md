@@ -1,55 +1,101 @@
 # Threat model
 
+Current as of 2026-08-18. Controls listed here are implemented, not planned;
+`CONTAINMENT.md` describes the OS boundary in detail.
+
 ## Actors
 
 - Honest manager launching scouts/reviews/writes
 - Confused manager (wrong cwd, two workers, stale lease)
 - Model/tool that tries to escape the worktree
-- Prompt-injection content in a repo or web page
+- Prompt-injection content in a repo or a fetched page
 - Concurrent managers racing a lease
+- A hostile or compromised provider binary
+- A reviewer job trying to launder a promotion
 
 ## Assets
 
-- Primary checkout and other worktrees
+- Primary checkout and sibling worktrees
 - `.git` identity (HEAD, remotes, config, worktree list)
-- User home, harness config, credentials
-- Job results (integrity of review artifacts)
+- User home and harness config
+- **The provider credential**
+- Job results — the integrity of the evidence a promotion rests on
 
-## Controls (Stage 0)
+## Controls
 
-- Deny bash in the provider agent (closes shell-prefix injection)
-- Pin runtime via `OPENCODE_CONFIG_CONTENT`; disable project config
-- Refuse foreign `OPENCODE_CONFIG_DIR`
-- Before/after integrity snapshots (tree + git identity + other worktrees)
-- Symlink-target resolution of dirty paths
-- Optional canaries (`AI_OPS_CANARIES`)
-- Atomic leases (`flock`) with pid **and** starttime **and** boot_id
-- Process group TERM/KILL + descendant walk
-- Structured `{verb,args[]}` only; no `eval` / `sh -c`
-- Handoff/results only under `$STATE/jobs/<job-id>/`
-- Write kill switch + `write_enabled: false` on the example profile
-- Review independence at profile-required level (job/model/family/provider)
-- Never eval provider JSON
+### OS boundary (the authority)
 
-## Residual (not fully fail-closed)
+`bwrap` mount namespace; only the leased worktree is writable, and only for
+bounded-write. Host `$HOME`, sibling worktrees and the state store are absent
+rather than merely denied. Refuses if the backend is unavailable; the provider
+is never executed outside it, not even for `--version`. `RLIMIT_FSIZE` and
+process-group ownership bound resource abuse. See `CONTAINMENT.md`.
 
-Inherited from the live rail and still true here:
+### Credential
 
-- Ignored files may be invisible depending on git status
-- Writes far outside `$abs` that also avoid canaries
-- A child that `setsid`s away from the recorded process group (Stage W
-  `bwrap` is the intended closure)
-- Provider permission semantics can change upstream
+Read controller-side from an operator-owned mode-600 file, never from the
+controller's environment (which is where unrelated secrets live). Held by the
+broker; the sandbox receives a placeholder. With a broker the sandbox has
+`--unshare-net` and reaches exactly one upstream, over a bind-mounted unix
+socket, on an allowlisted path, pinned to the resolved model. A live job with
+no credential refuses rather than running unbrokered on the host network.
 
-**Provider permission policy + canaries are not an OS write boundary.**
+Provider env is constructed from scratch and asserted secret-free — never
+filtered from the host env, which fails open on anything unanticipated.
 
-## Stage W requirement
+### Provider posture (defence in depth, not the boundary)
 
-Production bounded-write requires an OS-level write boundary where
-supported (`bwrap` on Linux). If the backend is missing, refuse.
-No silent insecure fallback.
+Bash denied. Runtime pinned via `OPENCODE_CONFIG_CONTENT`; project config,
+external skills and default plugins disabled; a foreign `OPENCODE_CONFIG_DIR`
+refused. The agent definition and runtime config are **generated** from the
+compiled policy into the sandbox's own `$HOME` — there are no static copies to
+drift, and nothing is installed into the host provider config, which the job
+cannot see anyway.
+
+### Evidence integrity
+
+Before/after snapshots of tree, git identity and sibling worktrees; digests cover
+untracked and ignored content and resolve symlinked directories, because a worker
+cannot stage and `.gitignore` is worker-writable. Each job freezes its **own**
+delta, not the cumulative worktree. Git-dir *legitimacy* is checked, not only
+stability, so a poisoned pointer is not adopted by a later job. Evidence is
+persisted before integrity asserts, so a worker cannot erase its record by
+tripping one.
+
+### Promotion
+
+Promotion binds to reviewer-attested fields (`reviewed_tree_digest`,
+`reviewed_dir` from the reviewer's own record) — comparing freeze-derived values
+back to the freeze proves nothing. Serious findings block promotion regardless of
+the reviewer's verdict. Review independence (job/model/family/provider) is
+enforced against a controller-owned registry: a profile may name model ids but
+may never declare families, or it manufactures its own independence.
+
+### Concurrency and containment of intent
+
+Atomic leases (`flock`) with pid, starttime and boot_id. Mutual exclusion is
+unconditional for bounded-write; only the lease *token* requirement is
+profile-gated. Structured `{verb,args[]}` commands only; no `eval`/`sh -c`;
+provider JSON is never evaluated. Handoff and results only under
+`$STATE/jobs/<job-id>/`. Write kill switch plus `write_enabled: false` by default.
+
+## Residual, knowingly accepted
+
+- **Review is a probabilistic signal, not an authority boundary.** The same model
+  on the same diff with the same prompt returned `needs_changes` on one run and
+  `promote` on the next, documenting the same two real defects both times. Never
+  make it the only gate; the human merge decision stays upstream in atelier.
+- **Provider permission semantics can change upstream.** They are depth, not the
+  boundary — which is why the boundary is the kernel's.
+- **Not a uid boundary** (no user namespace): anything the invoking user can
+  write *and* that is visible inside the namespace is writable by the job.
+- **A hostile upstream** sees the prompts and the diff. Injection reaching the
+  prompt is a real risk; the containment limits what it can *do*, not what it can
+  *say*.
+- **Quota is unbounded.** Nothing consults remaining budget; a runaway job spends
+  until the upstream refuses. Open work.
 
 ## Install-time risk
 
-Installing over the live wrapper, live agent file, or live skill would
-change a running manager. This repo must not do that. See `INSTALL-MAP.md`.
+Installing over a live wrapper, agent file or skill would change a running
+manager. This repo must not do that. See `INSTALL-MAP.md`.
