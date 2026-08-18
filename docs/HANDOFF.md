@@ -231,11 +231,15 @@ Still open:
    `45676c7` (2026-08-18), so the pieces the spec leans on now exist in
    production: `createExecutionProfile` carries `executable {resolvedPath,
    version, digest}` with `digestPaths` — the content-digest pattern our
-   `execution-profile` / `launcherDigest` feeds. The lane is formally unblocked
-   but NOT yet scheduled: Wave-3 runs ATT-010 (break-glass) and ATT-008 (sandbox)
-   first, and the sandbox lane is where the atelier<->agent-ops convergence
-   decision is made, so the adapter lane most likely follows it. atelier owns
-   scheduling and will ping when it starts. **Open item for when it does:** check
+   `execution-profile` / `launcherDigest` feeds. ATT-009 and ATT-010 are merged;
+   ATT-008 (the sandbox lane where the atelier<->agent-ops convergence decision
+   is made) is STAGED but deliberately HELD for a fresh Codex window + Etienne's
+   explicit go, per atelier's safeguard posture. The adapter lane follows ATT-008.
+   atelier owns scheduling and will ping when it starts. Note two threads must
+   not be conflated: the atelier integration-owner thread (which specced the
+   adapter lane) is separate from the dogfooding session that exercised the rail
+   on real repos and reported the ambient-state bugs (fixed in commit 8bc0b3b).
+   Follow-ups on those bugs go to the dogfooding context-holder, not atelier. **Open item for when it does:** check
    our `execution-profile` field names against atelier's `executable`/`digestPaths`
    shape — do NOT rename preemptively; the adapter is atelier's to write and they
    will ask where our behaviour is ground truth.
