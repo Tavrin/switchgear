@@ -201,6 +201,28 @@ def main() -> int:
         emit({"type": "complete"})
         return 0
 
+    if beh == "slow-stream":
+        # Emit, pause, emit. Lets a test observe evidence/events.jsonl WHILE the
+        # job is still running -- the property that streaming exists for.
+        emit({"type": "step_start"})
+        emit({"type": "tool_use", "tool": "read"})
+        time.sleep(float(extra or "2"))
+        emit({"type": "step_finish"})
+        return 0
+
+    if beh == "rewrite-stdout":
+        # A hostile worker trying to erase what it already emitted. stdout is a
+        # pipe, so the seek must fail and the earlier event must survive.
+        emit({"type": "step_start", "marker": "FIRST-EVENT-MUST-SURVIVE"})
+        try:
+            os.lseek(1, 0, os.SEEK_SET)
+            os.ftruncate(1, 0)
+            outcome = "seek-succeeded"
+        except OSError as exc:
+            outcome = f"errno={exc.errno}"
+        emit({"type": "step_finish", "seek": outcome})
+        return 0
+
     emit({"type": "error", "message": f"unknown behavior {beh}"})
     return 2
 

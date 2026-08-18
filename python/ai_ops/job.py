@@ -244,18 +244,29 @@ def run_job(
         before_tree = identity.tree_digest(ident)
         before_fp = identity.dirty_fingerprints(ident)
         timeout = _timeout(policy)
-        result = process.run_sandboxed(bwrap_argv, env=env, timeout_s=timeout)
-        # process set is the bwrap pid ns; after return it is dead
-
-        # Persist evidence BEFORE the integrity asserts. Those asserts can raise
-        # (e.g. a worker that redirected .git), and a worker must not be able to
-        # erase the record of its own run by tripping one.
+        # Evidence is STREAMED, not written after the fact: the provider's stdout
+        # lands in evidence/events.jsonl as it arrives, so the record is readable
+        # while the job runs. That is the whole basis for observing a delegated
+        # agent mid-run -- previously there was literally nothing on disk until
+        # the process exited.
+        #
+        # It also strengthens the existing "persist before the integrity asserts"
+        # property rather than weakening it: those asserts can raise (a worker
+        # that redirected .git), and now the record is already durable no matter
+        # where the job dies, including a controller crash. The worker still
+        # cannot tamper with it -- the job dir is not bind-mounted into the
+        # sandbox, and stdout is a pipe, so the worker can append but never seek
+        # back over what it already emitted.
         ev_path = os.path.join(dirs["evidence"], "events.jsonl")
-        with open(ev_path, "wb") as fh:
-            fh.write(result.stdout)
         err_path = os.path.join(dirs["evidence"], "stderr")
-        with open(err_path, "wb") as fh:
-            fh.write(result.stderr)
+        result = process.run_sandboxed(
+            bwrap_argv,
+            env=env,
+            timeout_s=timeout,
+            stdout_path=ev_path,
+            stderr_path=err_path,
+        )
+        # process set is the bwrap pid ns; after return it is dead
 
         identity.assert_gitdir_pointer_intact(ident)
         after = identity.inspect_worktree(ident.realpath)

@@ -732,6 +732,89 @@ class RailTests(unittest.TestCase):
         finally:
             os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
 
+    def test_evidence_is_readable_while_the_job_is_still_running(self):
+        """The enabling property for observing a delegated agent mid-run.
+
+        Evidence used to be buffered in a controller tempfile and written only
+        after the process exited, so mid-run there was nothing on disk to look
+        at. Now stdout streams into evidence/events.jsonl as it arrives.
+
+        The assertion is deliberately TIMED, not just "the file has content while
+        the thread has not finished". The mock emits two events, sleeps SLEEP
+        seconds, then finishes; so streaming makes content appear almost
+        immediately, while write-after-exit cannot produce any until roughly
+        SLEEP. Merely checking "content exists and the runner has not returned"
+        passes either way, because the post-exit write also lands a beat before
+        the runner thread records completion -- that version of this test passed
+        against the very behaviour it was supposed to reject.
+        """
+        import threading
+
+        SLEEP = 6.0
+        done = []
+        proc_out = []
+
+        def _run():
+            proc_out.append(
+                run_cli(
+                    self.args("scout", str(self.primary), "look"),
+                    env={
+                        "AI_OPS_MOCK_BEHAVIOR": "slow-stream",
+                        "AI_OPS_MOCK_EXTRA": str(SLEEP),
+                    },
+                    timeout=90,
+                )
+            )
+            done.append(True)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        try:
+            started = time.time()
+            first_at = None
+            blob = b""
+            while time.time() - started < SLEEP * 3 and not done:
+                hits = list((self.state / "jobs").glob("*/evidence/events.jsonl"))
+                if hits and hits[0].stat().st_size > 0:
+                    first_at = time.time() - started
+                    blob = hits[0].read_bytes()
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(
+                first_at, "events.jsonl never had content while the job ran"
+            )
+            self.assertLess(
+                first_at,
+                SLEEP / 2,
+                f"evidence appeared only after {first_at:.2f}s of a {SLEEP}s job -- "
+                "that is a post-exit write, not a stream",
+            )
+            self.assertIn(b"step_start", blob)
+            self.assertNotIn(b"step_finish", blob)  # the job is genuinely mid-run
+        finally:
+            t.join(timeout=90)
+        self.assertEqual(proc_out[0].returncode, 0, proc_out[0].stderr)
+
+    def test_a_worker_cannot_seek_back_over_its_own_evidence(self):
+        """Streaming must not hand the worker its own record.
+
+        Writing the stream straight into the job's evidence directory is only
+        safe because stdout is a PIPE. A regular-file fd would be seekable, and
+        a worker could lseek to 0 and truncate away everything it had already
+        emitted -- erasing the record of its own run, which is exactly what the
+        persist-before-asserts rule exists to prevent.
+        """
+        p = run_cli(
+            self.args("scout", str(self.primary), "look"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "rewrite-stdout"},
+        )
+        hits = list((self.state / "jobs").glob("*/evidence/events.jsonl"))
+        self.assertTrue(hits, p.stderr)
+        blob = hits[0].read_bytes()
+        self.assertIn(b"FIRST-EVENT-MUST-SURVIVE", blob)
+        self.assertIn(b"errno=", blob)
+        self.assertNotIn(b"seek-succeeded", blob)
+
     def test_sandbox_env_suppresses_python_bytecode(self):
         """__pycache__ written by a worker would dirty that worker's own freeze.
 
