@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Any
 
 from . import identity, job, lease, state
@@ -250,11 +251,134 @@ def cmd_run(ns: argparse.Namespace) -> int:
     return cmd_run_like(ns, mode, env["role"], env["cwd"], env.get("goal") or "", env)
 
 
-def cmd_status(ns: argparse.Namespace) -> int:
+# --- projections over the one stream ------------------------------------------
+#
+# evidence/events.jsonl is the single record; everything below is a view of it.
+# The cheap views are the defaults, because the expensive one is unbounded and a
+# delegating agent that reads it once has flooded its own context. A convention
+# saying "please don't" would be violated, so the bounds are in the code.
+
+
+def _job_paths(ns) -> tuple[str, str, str]:
     root = StateRoot(_state_path(ns))
-    path = os.path.join(root.job_dir(ns.job), "result.json")
-    rec = read_json(path)
-    print(json.dumps(rec, indent=2))
+    jd = root.job_dir(ns.job)
+    return jd, os.path.join(jd, "evidence", "events.jsonl"), os.path.join(jd, "result.json")
+
+
+def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """(record-or-{}, normalized events) -- works on a RUNNING job.
+
+    Reads whatever the stream holds right now. result.json does not exist until
+    the job finishes, so anything that insists on it cannot answer the question
+    a poller is actually asking.
+    """
+    from .adapters import get_adapter, parse_lenient
+
+    jd, ev_path, res_path = _job_paths(ns)
+    rec: dict[str, Any] = {}
+    if os.path.isfile(res_path):
+        try:
+            rec = read_json(res_path)
+        except Exception:
+            rec = {}
+    raw = ""
+    if os.path.isfile(ev_path):
+        with open(ev_path, encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+    profile = load_profile(_profile_path(ns)) if getattr(ns, "profile", None) else {}
+    adapter = get_adapter((rec.get("provider") or profile.get("provider") or "opencode"))
+    parsed, _ = parse_lenient(raw)
+    return rec, adapter.normalize(parsed)
+
+
+def cmd_status(ns: argparse.Namespace) -> int:
+    """The polling answer: ~30 tokens, and valid while the job is still running.
+
+    This is the spinner equivalent. A parent agent should call this in a loop and
+    reach for `logs --digest` only when something looks wrong -- never
+    `logs --follow`, which is unbounded by construction.
+    """
+    if getattr(ns, "full", False):
+        jd, _, res_path = _job_paths(ns)
+        print(json.dumps(read_json(res_path), indent=2))
+        return 0
+
+    jd, ev_path, res_path = _job_paths(ns)
+    rec, norm = _projection(ns)
+    fin = next((n for n in norm if n["event"] == "finished"), {})
+    tools = [n for n in norm if n["event"] == "tool"]
+    sid = next((n["sessionId"] for n in norm if n["event"] == "status"), None)
+
+    if rec:
+        state = rec.get("status")
+    elif os.path.isdir(jd):
+        state = "running"
+    else:
+        state = "unknown"
+
+    started = None
+    marker = os.path.join(jd, "started_at")
+    if os.path.isfile(marker):
+        try:
+            started = float(open(marker, encoding="utf-8").read().strip())
+        except ValueError:
+            started = None
+    # For a finished job, freeze elapsed at the last write to the stream; for a
+    # running one, measure against now.
+    if rec:
+        ref = os.path.getmtime(ev_path) if os.path.isfile(ev_path) else None
+    else:
+        ref = time.time()
+    out = {
+        "job": ns.job,
+        "state": state,
+        "sessionId": sid,
+        "turns": fin.get("turns", 0),
+        "tools": len(tools),
+        "last_tool": (tools[-1]["name"] if tools else None),
+        "tokens": fin.get("tokens", 0),
+        "costUSD": fin.get("costUSD", 0.0),
+        "elapsed_s": round((ref - started), 1) if started and ref else None,
+    }
+    print(json.dumps(out, indent=2) if ns.json else "\n".join(f"{k}={v}" for k, v in out.items()))
+    return 0
+
+
+# A hard ceiling, enforced here rather than requested politely. 8 KiB is roughly
+# 2k tokens: enough to diagnose a failed job, small enough that reading one by
+# reflex cannot wreck a parent agent's context.
+DIGEST_MAX_BYTES = 8192
+
+
+def cmd_logs(ns: argparse.Namespace) -> int:
+    jd, ev_path, _ = _job_paths(ns)
+    if ns.format == "full":
+        # Explicit only -- there is deliberately no default that lands here.
+        if not os.path.isfile(ev_path):
+            _die(f"no evidence stream at {ev_path}")
+        with open(ev_path, "rb") as fh:
+            sys.stdout.buffer.write(fh.read())
+        return 0
+
+    _rec, norm = _projection(ns)
+    lines = [json.dumps(n, separators=(",", ":")) for n in norm]
+    blob = "\n".join(lines)
+    if len(blob.encode("utf-8")) > DIGEST_MAX_BYTES:
+        kept: list[str] = []
+        used = 0
+        for line in lines:
+            size = len(line.encode("utf-8")) + 1
+            if used + size > DIGEST_MAX_BYTES:
+                break
+            kept.append(line)
+            used += size
+        dropped = len(lines) - len(kept)
+        kept.append(
+            json.dumps({"event": "truncated", "dropped_events": dropped,
+                        "cap_bytes": DIGEST_MAX_BYTES})
+        )
+        blob = "\n".join(kept)
+    print(blob)
     return 0
 
 
@@ -327,8 +451,23 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--mode")
     ls.set_defaults(func=cmd_lease)
 
+    lg = sub.add_parser("logs")
+    lg.add_argument("job")
+    lg.add_argument(
+        "--format",
+        choices=["digest", "full"],
+        default="digest",
+        help="digest (bounded, default) or full (unbounded raw stream; never for agent context)",
+    )
+    lg.set_defaults(func=cmd_logs)
+
     st = sub.add_parser("status")
     st.add_argument("job")
+    st.add_argument(
+        "--full",
+        action="store_true",
+        help="print the whole persisted record (only exists once the job has finished)",
+    )
     st.set_defaults(func=cmd_status)
 
     pr = sub.add_parser("promote")

@@ -732,6 +732,84 @@ class RailTests(unittest.TestCase):
         finally:
             os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
 
+    def test_status_answers_while_the_job_is_still_running(self):
+        """status is the POLLING answer, so it must work before result.json exists.
+
+        The old status printed the whole persisted record, which (a) only exists
+        once the job is over and (b) is the opposite of cheap. A parent agent
+        polling in a loop needs state, elapsed, counters -- roughly 30 tokens --
+        and should reach for logs only when something looks wrong.
+        """
+        import threading
+
+        done = []
+
+        def _run():
+            run_cli(
+                self.args("scout", str(self.primary), "look"),
+                env={"AI_OPS_MOCK_BEHAVIOR": "slow-stream", "AI_OPS_MOCK_EXTRA": "6"},
+                timeout=90,
+            )
+            done.append(True)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        try:
+            job_id = None
+            deadline = time.time() + 20
+            while time.time() < deadline and not done:
+                dirs = [d for d in (self.state / "jobs").glob("*") if d.is_dir()]
+                if dirs and (dirs[0] / "evidence" / "events.jsonl").stat().st_size > 0:
+                    job_id = dirs[0].name
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(job_id, "no job stream appeared")
+            p = run_cli(self.args("--json", "status", job_id))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            out = json.loads(p.stdout)
+            self.assertEqual(out["state"], "running")
+            self.assertGreaterEqual(out["elapsed_s"], 0)
+            self.assertTrue(out["sessionId"], "no sessionId -- resume would be impossible")
+            self.assertLess(len(p.stdout), 600, "status must stay cheap")
+        finally:
+            t.join(timeout=90)
+
+    def test_logs_digest_is_capped_in_code_and_full_is_never_the_default(self):
+        """The bound is enforced, not requested.
+
+        A convention saying "please don't pipe the whole stream into your
+        context" gets violated. So digest has a hard byte cap that reports its
+        own truncation, and `full` is reachable only by asking for it.
+        """
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.cli import DIGEST_MAX_BYTES
+
+        p = run_cli(
+            self.args("scout", str(self.primary), "look"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "slow-stream", "AI_OPS_MOCK_EXTRA": "0"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = [d.name for d in (self.state / "jobs").glob("*") if d.is_dir()][0]
+
+        digest = run_cli(self.args("logs", job_id))
+        self.assertEqual(digest.returncode, 0, digest.stderr)
+        self.assertLessEqual(len(digest.stdout.encode()), DIGEST_MAX_BYTES + 200)
+        self.assertIn('"event":"finished"', digest.stdout)
+
+        full = run_cli(self.args("logs", job_id, "--format", "full"))
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertIn("step_finish", full.stdout)
+        # The raw stream must never be what you get by not choosing.
+        self.assertNotEqual(full.stdout, digest.stdout)
+        self.assertGreater(len(full.stdout), len(digest.stdout))
+
+    def test_logs_digest_truncates_loudly_rather_than_silently(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.cli import DIGEST_MAX_BYTES
+
+        self.assertGreater(DIGEST_MAX_BYTES, 1024)
+        self.assertLess(DIGEST_MAX_BYTES, 65536)
+
     def test_evidence_is_readable_while_the_job_is_still_running(self):
         """The enabling property for observing a delegated agent mid-run.
 

@@ -204,10 +204,24 @@ def main() -> int:
     if beh == "slow-stream":
         # Emit, pause, emit. Lets a test observe evidence/events.jsonl WHILE the
         # job is still running -- the property that streaming exists for.
-        emit({"type": "step_start"})
-        emit({"type": "tool_use", "tool": "read"})
+        #
+        # Shaped to match tests/fixtures/opencode-real-scout.jsonl, NOT invented.
+        # sessionID at top level on every event, part.tool for a tool call,
+        # part.reason/tokens/cost on the finish. The mock inventing its own
+        # vocabulary is this project's worst defect to date; a mock that streams
+        # events the normalizer cannot read is that bug in miniature.
+        sid = "ses_mock000000000000000000"
+        emit({"type": "step_start", "sessionID": sid,
+              "part": {"type": "step-start", "sessionID": sid}})
+        emit({"type": "tool_use", "sessionID": sid,
+              "part": {"type": "tool", "tool": "read", "sessionID": sid,
+                       "state": {"status": "completed", "input": {"filePath": "calc.py"}}}})
         time.sleep(float(extra or "2"))
-        emit({"type": "step_finish"})
+        emit({"type": "text", "sessionID": sid,
+              "part": {"type": "text", "text": "mock finished", "sessionID": sid}})
+        emit({"type": "step_finish", "sessionID": sid,
+              "part": {"type": "step-finish", "reason": "stop", "sessionID": sid,
+                       "tokens": {"total": 42}, "cost": 1.5e-05}})
         return 0
 
     if beh == "rewrite-stdout":

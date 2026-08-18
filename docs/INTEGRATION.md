@@ -24,12 +24,38 @@ ai-opencode --json [--profile P] [--state S] [--provider ABS] <command>
 | `run --envelope F [--token T]` | dispatch by envelope `mode`/`role`/`cwd` | as above |
 | `promote --subject J --review R` | atomic promotion under the worktree lock | `ok` or refusal |
 | `lease acquire\|release\|show --dir D` | worktree lease lifecycle | — |
-| `status <job-id>` | full persisted record | — |
+| `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | — |
+| `status <job-id> --full` | the whole persisted record (exists only once finished) | — |
+| `logs <job-id> [--format digest\|full]` | projections over `evidence/events.jsonl`; **digest is the default and is byte-capped in code** | — |
 
 `--json` prints a stable object: `job_id, status, mode, role, model, dir, exit,
 error, artifacts{events,stderr,handoff}, freeze, review, provider_calls`.
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
+
+### Observing a running job without flooding your context
+
+`evidence/events.jsonl` is written **as events arrive**, so a job can be watched
+while it runs. There is one stream and several projections over it, and the cheap
+ones are the defaults on purpose:
+
+- **poll `status`** in a loop. That is the spinner equivalent, roughly 30 tokens
+  a call, and it is the intended way for a delegating agent to follow a job.
+- **read `logs` (digest)** only when something looks wrong. It is normalized,
+  structured, and capped at 8 KiB in code; on truncation it emits a final
+  `{"event":"truncated","dropped_events":N}` rather than trimming silently.
+- **`logs --format full`** is the raw provider stream. It is unbounded and grows
+  with job length. It is for a human terminal, a TUI or a file tail — never for
+  an agent's context. There is deliberately no default that lands here.
+
+The digest speaks a provider-neutral vocabulary (`status`/`tool`/`text`/
+`finished`), so it reads the same whichever provider ran the job. `finished`
+carries `status` ∈ `completed` | `completed_empty` | `needs_input`, plus `turns`,
+`tokens`, `costUSD` and a bounded `exitSummary`. `sessionId` is surfaced because
+without it a resume cannot exist.
+
+Counters and parsed facts are the load-bearing part; model prose appears only as
+a bounded `exitSummary` and is a self-report, not evidence.
 
 Exit codes: `0` success · `1` refusal or provider error · `2` dirty (integrity
 changed) · `124` timeout.

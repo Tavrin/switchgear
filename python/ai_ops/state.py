@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -115,4 +116,10 @@ def create_job_dirs(root: StateRoot, job_id: str) -> dict[str, str]:
     os.makedirs(os.path.join(home, ".config", "opencode"), exist_ok=True)
     os.makedirs(os.path.join(home, ".cache"), exist_ok=True)
     os.makedirs(os.path.join(home, "tmp"), exist_ok=True)
+    # An explicit start marker. `status` must be able to report elapsed time for a
+    # RUNNING job, and result.json (which carries `started`) does not exist until
+    # the job is over. Directory mtimes are not a substitute: they move as files
+    # land in the job dir, which produced negative elapsed times.
+    with open(os.path.join(jd, "started_at"), "w", encoding="utf-8") as fh:
+        fh.write(f"{time.time():.3f}\n")
     return {"job": jd, "evidence": evidence, "home": home}
