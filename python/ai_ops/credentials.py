@@ -1,0 +1,246 @@
+"""Credential classes: what the controller holds so the sandbox never does.
+
+The broker was built around one shape -- an API key in an operator-owned file.
+But three of the four providers this rail targets (Grok, Codex/ChatGPT, Claude
+Code) authenticate with OAuth sessions instead. Measured 2026-08-18, all three
+store the same thing: a short-lived access token plus a long-lived refresh token
+in a mode-600 file the controller can read. So OAuth is not a special case per
+provider; it is one additional credential CLASS.
+
+    api-key   an operator-installed key            -> Bearer <key>
+    oauth     a CLI's own logged-in session file   -> Bearer <access token>
+
+Either way the sandbox receives a placeholder and a loopback URL, and the broker
+attaches the real value upstream. The containment story is unchanged.
+
+THE INVARIANT, and it is stronger than "do not forward it": the refresh token is
+NEVER READ. Not into a variable, not into a log, not into a header. An access
+token expires in about an hour; a refresh token is the whole subscription, and
+the cheapest way to guarantee it cannot leak is to never load it. The extractors
+below deliberately pull only the access token and the expiry, and a test asserts
+the refresh token's actual bytes appear nowhere in what this module returns.
+
+Consequence, accepted knowingly: an expired session refuses with an instruction
+to re-login rather than silently refreshing. Controller-side refresh is a real
+improvement and the structure is here for it, but it must be built against a
+measured token endpoint per provider -- writing three refresh flows from
+documentation is exactly the mistake this project keeps paying for.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import time
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from .errors import Refuse
+
+# Treat a token expiring within this window as already expired: a job that
+# starts with 20 seconds left will outlive its own credential mid-flight, and a
+# clear refusal now beats a 401 from inside the sandbox later.
+EXPIRY_SKEW_S = 120
+
+
+@dataclass
+class Credential:
+    """A usable credential plus how it was obtained. Never the refresh token."""
+
+    token: str
+    cls: str
+    source: str
+    expires_at: float | None = None
+
+    def authorization(self) -> str:
+        return f"Bearer {self.token}"
+
+    def seconds_remaining(self) -> float | None:
+        return None if self.expires_at is None else self.expires_at - time.time()
+
+    def describe(self) -> str:
+        """Safe for logs and errors: never includes the token."""
+        if self.expires_at is None:
+            return f"{self.cls} from {self.source}"
+        left = int(self.seconds_remaining() or 0)
+        return f"{self.cls} from {self.source} ({left}s remaining)"
+
+
+def _require_private(path: str) -> None:
+    st = os.stat(path)
+    if st.st_mode & 0o077:
+        raise Refuse(
+            f"credential file {path} is group/world accessible "
+            f"(mode {st.st_mode & 0o777:o}); chmod 600 it"
+        )
+
+
+def _iso_to_epoch(value: str) -> float | None:
+    """Parse the ISO-8601 stamps these CLIs write.
+
+    Grok and Codex emit nanosecond precision with a Z suffix
+    (`2026-08-18T07:46:34.587567321Z`), which fromisoformat rejects on older
+    Pythons and which no amount of guessing fixes -- so truncate the fraction to
+    microseconds and normalise the zone explicitly.
+    """
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    if "." in text:
+        head, _, tail = text.partition(".")
+        digits = ""
+        rest = ""
+        for i, ch in enumerate(tail):
+            if ch.isdigit():
+                digits += ch
+            else:
+                rest = tail[i:]
+                break
+        text = f"{head}.{digits[:6]}{rest}"
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _jwt_expiry(token: str) -> float | None:
+    """Read `exp` out of a JWT payload without verifying the signature.
+
+    Verification is the issuer's job and we are not the audience; this is only a
+    local "is it worth sending" check. Codex stores no expiry field of its own,
+    so its access token's own claim is the only measurement available.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode()))
+    except Exception:
+        return None
+    exp = claims.get("exp")
+    return float(exp) if isinstance(exp, (int, float)) else None
+
+
+# --- per-provider extractors, each written from an inspected real file --------
+#
+# Only the access token and the expiry are pulled out. `refresh_token` is
+# present in every one of these files and is deliberately never touched.
+
+
+def _extract_grok(doc: dict[str, Any]) -> tuple[str, float | None]:
+    """`{"<issuer>::<uuid>": {"key": <jwt>, "expires_at": <iso>, ...}}`"""
+    for key, entry in doc.items():
+        if not isinstance(entry, dict):
+            continue
+        token = entry.get("key")
+        if isinstance(token, str) and token:
+            exp = entry.get("expires_at")
+            return token, (_iso_to_epoch(exp) if isinstance(exp, str) else None)
+    raise Refuse("grok auth file has no session entry with a key")
+
+
+def _extract_codex(doc: dict[str, Any]) -> tuple[str, float | None]:
+    """`{"tokens": {"access_token": <jwt>, ...}, "OPENAI_API_KEY": null}`
+
+    An installed API key wins if present: it is the cleaner credential and the
+    file offers it first.
+    """
+    api_key = doc.get("OPENAI_API_KEY")
+    if isinstance(api_key, str) and api_key:
+        return api_key, None
+    tokens = doc.get("tokens")
+    if isinstance(tokens, dict):
+        token = tokens.get("access_token")
+        if isinstance(token, str) and token:
+            return token, _jwt_expiry(token)
+    raise Refuse("codex auth file has neither OPENAI_API_KEY nor tokens.access_token")
+
+
+def _extract_claude(doc: dict[str, Any]) -> tuple[str, float | None]:
+    """`{"claudeAiOauth": {"accessToken": ..., "expiresAt": <epoch ms>}}`"""
+    oauth = doc.get("claudeAiOauth")
+    if isinstance(oauth, dict):
+        token = oauth.get("accessToken")
+        if isinstance(token, str) and token:
+            exp = oauth.get("expiresAt")
+            # Milliseconds, not seconds -- measured. Treating it as seconds puts
+            # the expiry in 1970 and refuses every single job.
+            return token, (float(exp) / 1000.0 if isinstance(exp, (int, float)) else None)
+    raise Refuse("claude credentials file has no claudeAiOauth.accessToken")
+
+
+_EXTRACTORS: dict[str, Callable[[dict[str, Any]], tuple[str, float | None]]] = {
+    "grok-oidc": _extract_grok,
+    "codex-tokens": _extract_codex,
+    "claude-oauth": _extract_claude,
+}
+
+
+def load_oauth_credential(provider_id: str, prec: dict[str, Any]) -> Credential:
+    auth_file = prec.get("auth_file")
+    fmt = prec.get("auth_format")
+    if not auth_file or not fmt:
+        raise Refuse(
+            f"provider '{provider_id}' is credential_class oauth but the registry "
+            "gives no auth_file/auth_format"
+        )
+    extractor = _EXTRACTORS.get(fmt)
+    if extractor is None:
+        raise Refuse(
+            f"unknown auth_format {fmt!r} for provider '{provider_id}' "
+            f"(known: {sorted(_EXTRACTORS)})"
+        )
+    path = os.path.expanduser(auth_file)
+    if not os.path.isfile(path):
+        raise Refuse(
+            f"provider '{provider_id}' has no session at {path} -- log in with its own CLI first"
+        )
+    _require_private(path)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise Refuse(f"unreadable session file {path}: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise Refuse(f"session file {path} is not a JSON object")
+
+    token, expires_at = extractor(doc)
+    cred = Credential(token=token, cls="oauth", source=path, expires_at=expires_at)
+    remaining = cred.seconds_remaining()
+    if remaining is not None and remaining <= EXPIRY_SKEW_S:
+        raise Refuse(
+            f"provider '{provider_id}' session expired {-int(remaining)}s ago "
+            f"({path}); re-login with its own CLI. agent-ops deliberately does not "
+            "refresh: it never reads the refresh token"
+        )
+    return cred
+
+
+def load_credential(provider_id: str, prec: dict[str, Any]) -> Credential | None:
+    """Resolve a provider's credential by its registry-declared class.
+
+    Returns None only for a configured api-key provider with no key installed --
+    the fail-closed path job.run_job already refuses on. Every other failure is a
+    Refuse with the reason, because "no credential" and "your session expired"
+    need different actions from the operator.
+    """
+    cls = (prec.get("credential_class") or "api-key").strip().lower()
+    if cls == "oauth":
+        return load_oauth_credential(provider_id, prec)
+    if cls != "api-key":
+        raise Refuse(
+            f"provider '{provider_id}' has unknown credential_class {cls!r} "
+            "(known: api-key, oauth)"
+        )
+    from .provider import credential_path, load_provider_credential
+
+    name = prec.get("credential") or provider_id
+    value = load_provider_credential(name)
+    if not value:
+        return None
+    return Credential(token=value, cls="api-key", source=credential_path(name))

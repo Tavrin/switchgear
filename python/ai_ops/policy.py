@@ -40,7 +40,7 @@ class CompiledPolicy:
             raise Refuse(f"model '{mid}' is not allowed by the profile")
         return model_record(mid)
 
-    def agent_definition(self, role: str) -> str:
+    def agent_definition(self, role: str, attachment_dir: str | None = None) -> str:
         """The OpenCode agent file: frontmatter policy + the prompt body.
 
         Generated from this compiled policy so there is ONE source of truth.
@@ -69,6 +69,15 @@ class CompiledPolicy:
             "  todowrite: deny",
             "  skill: deny",
             "  external_directory:",
+        ]
+        if attachment_dir:
+            # The controller writes the material a job must read (the frozen
+            # review diff) OUTSIDE the worktree, because writing it into the
+            # worktree would mutate the very tree under review and break the
+            # freeze. So exactly one directory outside the worktree is readable,
+            # and the controller is its only writer.
+            head.append(f'    "{attachment_dir}/**": allow')
+        head += [
             '    "*": deny',
             "---",
             "",
@@ -96,7 +105,8 @@ class CompiledPolicy:
             ]
         elif role == "review":
             body = common + [
-                "The complete diff is given to you in the prompt. Review exactly that.",
+                "The complete diff is given to you as an ATTACHED FILE named in the",
+                "prompt. Read that file first, then review exactly that change.",
                 "You have no shell and no git: do not try to obtain the diff",
                 "yourself. Judge only whether the change is correct and safe.",
                 "",

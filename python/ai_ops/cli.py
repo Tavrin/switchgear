@@ -295,13 +295,37 @@ def cmd_review(ns: argparse.Namespace) -> int:
         files = identity.changed_files(ident)
     except Refuse:
         diff, files = "", []
+    attachments = None
     if diff:
+        # The diff is ATTACHED, not inlined. Concatenating it into the prompt
+        # made it one element of argv, and the kernel caps a single argument at
+        # 128KiB -- so every review of a repo with a real uncommitted change died
+        # at exec with E2BIG before the provider started.
+        #
+        # The file list is bounded here too. It deliberately includes untracked
+        # and ignored paths (that is the anti-hiding measure), which on a working
+        # repo means .idea/, .coverage and friends -- hundreds of entries that
+        # would crowd out the actual review instruction. The full list is in the
+        # attachment; the prompt shows a bounded sample and an honest count.
+        shown = files[:40]
+        more = len(files) - len(shown)
+        listing = ", ".join(shown) + (f"  [+{more} more, see the attachment]" if more else "")
+        header = (
+            f"# Changed files ({len(files)} total, tracked + untracked + ignored)\n"
+            + "".join(f"#   {f}\n" for f in files)
+            + "#\n# Complete uncommitted diff (git diff HEAD) follows.\n\n"
+        )
+        attachments = {"review-diff.patch": header + diff}
+        note = ""
+        if "[diff truncated]" in diff:
+            note = (
+                "\n\nWARNING: the diff was TRUNCATED at the controller's cap. You are\n"
+                "seeing part of the change. Say so in your findings and do not return\n"
+                "'promote' on the strength of a partial diff."
+            )
         prompt = (
             f"{prompt or 'Review this change.'}\n\n"
-            f"Changed files: {', '.join(files)}\n\n"
-            "The complete uncommitted diff follows. Review THIS; do not go looking\n"
-            "for it yourself.\n\n"
-            f"```diff\n{diff}\n```\n"
+            f"Changed files ({len(files)}): {listing}{note}"
         )
     rec = job.run_job(
         profile_path=_profile_path(ns),
@@ -313,6 +337,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
         provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
         envelope=env,
         job_id=os.environ.get("AI_OPS_JOB_ID") or None,
+        attachments=attachments,
     )
     _print_job(rec, getattr(ns, "json", False))
     parent = (env or {}).get("parent_job")

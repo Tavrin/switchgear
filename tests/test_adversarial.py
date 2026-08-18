@@ -746,6 +746,52 @@ class RailTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout)["state"]
 
+    def test_a_large_diff_does_not_blow_the_kernel_argv_limit(self):
+        """Found in real use on a large private repository, 2026-08-18.
+
+        The review verb concatenated the whole uncommitted diff into the prompt,
+        which is ONE element of argv. Linux caps a single argument at
+        MAX_ARG_STRLEN (128KiB), while worktree_diff caps at 200KB -- so the cap
+        itself guaranteed that any repo with a real uncommitted change died at
+        exec with `[Errno 7] Argument list too long` before the provider even
+        started. A clean fixture worktree has no diff, which is why the whole
+        hermetic suite passed over it.
+
+        The diff is now attached as a file. This test asserts the argv path stays
+        bounded no matter how large the change is.
+        """
+        big = "\n".join(f"line_{i} = {i}" for i in range(6000))
+        (self.primary / "big.py").write_text(big)
+        subprocess.run(["git", "-C", str(self.primary), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(self.primary), "-c", "user.email=a@b",
+                        "-c", "user.name=a", "commit", "-qm", "big"], check=True,
+                       capture_output=True)
+        (self.primary / "big.py").write_text(
+            "\n".join(f"CHANGED_{i} = {i}" for i in range(6000))
+        )
+        # Noise of the kind a real working repo carries, which changed_files
+        # deliberately reports (anti-hiding) and which used to crowd the prompt.
+        (self.primary / ".idea").mkdir(exist_ok=True)
+        (self.primary / ".idea" / "workspace.xml").write_text("noise")
+
+        raw = subprocess.run(["git", "-C", str(self.primary), "diff", "HEAD"],
+                             capture_output=True, text=True).stdout
+        self.assertGreater(len(raw), 131072, "fixture must exceed MAX_ARG_STRLEN")
+
+        p = run_cli(
+            self.args("--json", "review", str(self.primary), "review", "REVIEW THIS"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "review-promote"},
+            timeout=90,
+        )
+        self.assertNotIn("Argument list too long", p.stderr)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+        # And the diff really did reach the job, as a file rather than as argv.
+        job_id = json.loads(p.stdout)["job_id"]
+        events = (self.state / "jobs" / job_id / "evidence" / "events.jsonl").read_bytes()
+        self.assertTrue(events, "job produced no evidence")
+
     def test_atelier_workspace_token_is_not_special_cased(self):
         """Decision, recorded once (atelier ATT-007 asks for it explicitly).
 

@@ -33,6 +33,9 @@ from typing import Optional
 from .errors import Refuse
 
 DEFAULT_UPSTREAM = "https://opencode.ai/zen/go/v1"
+# OpenAI-shaped and Anthropic-shaped inference surfaces. Allowlisting only the
+# first silently denied legitimate traffic (qwen3.8-max -> "/messages").
+DEFAULT_ALLOWED_PATHS = ("/chat/completions", "/messages")
 MAX_BODY = 8 * 1024 * 1024
 
 
@@ -60,7 +63,7 @@ def _join_path(upstream: str, path: str) -> str:
     return path
 
 
-def _forward_headers(incoming, credential: str) -> dict:
+def _forward_headers(incoming, authorization: str) -> dict:
     """Relay the client's headers, swapping in the real credential.
 
     Forwarding matters beyond politeness: the upstream sits behind a CDN that
@@ -76,7 +79,7 @@ def _forward_headers(incoming, credential: str) -> dict:
         value = incoming.get(key)
         if value is not None:
             out[low] = value
-    out["authorization"] = f"Bearer {credential}"
+    out["authorization"] = authorization
     out.setdefault("content-type", "application/json")
     out.setdefault("accept", "application/json")
     return out
@@ -125,7 +128,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             b.upstream + _join_path(b.upstream, self.path),
             data=payload,
             method="POST",
-            headers=_forward_headers(self.headers, b.credential),
+            headers=_forward_headers(self.headers, b.authorization()),
         )
         try:
             with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
@@ -181,9 +184,14 @@ class CredentialBroker:
         timeout_s: int = 300,
         unix_socket: Optional[str] = None,
         max_calls: Optional[int] = None,
+        allowed_paths: Optional[tuple[str, ...]] = None,
     ) -> None:
         if not credential:
             raise Refuse("broker requires a credential")
+        # Accepts a credentials.Credential or a bare string. The object form
+        # carries its class and expiry for diagnostics; the header value is
+        # fetched per request so a future refreshing credential needs no change
+        # here.
         self.credential = credential
         self.upstream = upstream.rstrip("/")
         self.allowed_models = set(allowed_models or ())
@@ -192,7 +200,10 @@ class CredentialBroker:
         # Allowlisting only the first silently denied legitimate traffic
         # (qwen3.8-max -> "broker: path not allowed: /messages"). These two are
         # the inference surfaces; everything else stays refused.
-        self.allowed_paths = ("/chat/completions", "/messages")
+        # Per-provider now: chatgpt.com, api.x.ai and api.anthropic.com do not
+        # share one inference path, so a single hardcoded tuple would either deny
+        # legitimate traffic or be widened until it allowlists nothing.
+        self.allowed_paths = tuple(allowed_paths or DEFAULT_ALLOWED_PATHS)
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
         self.forwarded = 0
@@ -211,6 +222,16 @@ class CredentialBroker:
         self.denials: list[str] = []
         self._srv: Optional[http.server.ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
+
+    def authorization(self) -> str:
+        """The Authorization header value, resolved per request.
+
+        Per request rather than once at construction so that a credential which
+        learns to refresh itself needs no change in the request path -- and so a
+        long job cannot keep using a value that has since expired.
+        """
+        cred = self.credential
+        return cred.authorization() if hasattr(cred, "authorization") else f"Bearer {cred}"
 
     @property
     def base_url(self) -> str:

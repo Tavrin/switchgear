@@ -396,14 +396,28 @@ def changed_files(ident: WorktreeIdentity) -> list[str]:
     return sorted(set(tracked) | set(_nontracked_paths(ident, raw)))
 
 
-def worktree_diff(ident: WorktreeIdentity, max_bytes: int = 200_000) -> str:
+# The diff is delivered as a FILE the reviewer reads (and pages through), not as
+# an argv element, so the kernel's 128KiB MAX_ARG_STRLEN no longer bounds it.
+# The old 200KB cap was sized for the argv path and, being ABOVE that kernel
+# limit, managed to both crash large reviews AND truncate them. A live reviewer
+# on a 229KB diff reported the truncation as its principal finding, which is the
+# correct behaviour and also a waste of a review.
+MAX_DIFF_BYTES = int(os.environ.get("AI_OPS_MAX_DIFF_BYTES") or 5_000_000)
+
+
+def worktree_diff(ident: WorktreeIdentity, max_bytes: int | None = None) -> str:
     """The uncommitted change, as the controller computes it.
 
-    Handed to a reviewer in its prompt. The reviewer agent has no shell and no
+    Attached to a review job as a file. The reviewer agent has no shell and no
     git, so it cannot obtain a diff itself -- and it should not: reviewing the
     controller's own frozen diff is what binds the review to the change that will
     actually be promoted, rather than to whatever the model managed to scrape.
+
+    Still capped, because a pathological repo should not be able to fill the
+    state store; but the cap is now a backstop rather than a routine event, and
+    when it fires the reviewer is told so explicitly.
     """
+    max_bytes = MAX_DIFF_BYTES if max_bytes is None else max_bytes
     assert_gitdir_pointer_intact(ident)
     out = _git_pinned(ident, "diff", "--no-ext-diff", "--no-textconv", "HEAD", text=False)
     text = out.decode("utf-8", "replace")

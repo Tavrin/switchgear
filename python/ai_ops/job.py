@@ -83,6 +83,7 @@ def run_job(
     envelope: Optional[dict[str, Any]] = None,
     lease_token: Optional[str] = None,
     job_id: Optional[str] = None,
+    attachments: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     profile = load_profile(profile_path)
     profile_digest = sha256_json(profile)
@@ -148,10 +149,16 @@ def run_job(
         loopback URL and a placeholder key. See broker.py.
         """
         cred = None
+        prec: dict[str, Any] = {}
         provider_id = model.get("provider") or "opencode-go"
         if os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1":
+            from . import credentials as credmod
+
             prec = registry_provider(provider_id)
-            cred = provider.load_provider_credential(prec.get("credential") or provider_id)
+            # Resolved by the provider's declared credential class: an
+            # operator-installed API key, or the access token out of a CLI's own
+            # OAuth session. Either way it stays controller-side.
+            cred = credmod.load_credential(provider_id, prec)
             upstream = os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or prec["upstream"]
             if not cred:
                 # Fail closed. Falling through to the no-broker path here would
@@ -176,6 +183,7 @@ def run_job(
             allowed_models=wire_model_names(model["id"]),
             unix_socket=sock,
             max_calls=quotamod.max_provider_calls(),
+            allowed_paths=tuple(prec.get("allowed_paths") or ()) or None,
         ) as bk:
             return _execute(bk)
 
@@ -195,12 +203,48 @@ def run_job(
             if extra:
                 with open(os.path.join(dirs["home"], ".mock-extra"), "w", encoding="utf-8") as fh:
                     fh.write(extra)
+        # Material the job must READ but that cannot live in the worktree.
+        #
+        # The review diff used to be concatenated into the prompt, which is one
+        # element of argv. The kernel caps a SINGLE argument at MAX_ARG_STRLEN
+        # (128KiB), and worktree_diff caps at 200KB, so any real repo with a
+        # large uncommitted change failed at exec with E2BIG before the provider
+        # ever started -- measured on a large private repository, and reproduced here with a
+        # 229KB diff. A file has no such limit.
+        #
+        # It goes in the sandbox HOME rather than the worktree: writing it into
+        # the tree under review would mutate the very thing being frozen.
+        attach_dir = None
+        if attachments:
+            attach_dir = os.path.join(dirs["home"], "ai-ops")
+            os.makedirs(attach_dir, mode=0o700, exist_ok=True)
+            for name, content in attachments.items():
+                # Flat basenames only: an attachment name is controller-supplied
+                # today, and keeping it incapable of traversal means it stays
+                # safe if that ever changes.
+                safe = os.path.basename(name)
+                with open(os.path.join(attach_dir, safe), "w", encoding="utf-8") as fh:
+                    fh.write(content)
+
         agent_name = adapter.agent_name(mode)
         provider.write_agent_definition(
-            dirs["home"], agent_name, policy.agent_definition(role)
+            dirs["home"], agent_name, policy.agent_definition(role, attach_dir)
         )
         env = provider.isolation_env(dirs["home"], runtime)
         prov_argv, _live = provider.resolve_provider(provider_path)
+        job_prompt = prompt
+        if attach_dir:
+            lines = [prompt.rstrip(), "", "Attached files (read these first):"]
+            for name in sorted(attachments or {}):
+                safe = os.path.basename(name)
+                full = os.path.join(attach_dir, safe)
+                lines.append(f"  {full}  ({os.path.getsize(full)} bytes)")
+            lines += [
+                "",
+                "You have no shell and no git. Do not go looking for the change",
+                "yourself: the attached file IS the change under review.",
+            ]
+            job_prompt = "\n".join(lines)
         # Provider inside sandbox: mock gets dir via --dir
         inner = adapter.argv(
             provider_argv=list(prov_argv),
@@ -209,7 +253,7 @@ def run_job(
             agent=agent_name,
             role=role,
             job_id=job_id,
-            prompt=prompt,
+            prompt=job_prompt,
         )
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
