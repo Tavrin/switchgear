@@ -9,7 +9,7 @@ import sys
 import time
 from typing import Any
 
-from . import identity, job, lease, state
+from . import identity, job, jobstate, lease, state
 from .errors import RailError, Refuse
 from .profile import load_profile
 from .provider import resolve_provider
@@ -75,16 +75,43 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
     print(f"job={record['job_id']}")
 
 
-def _persist_review_report(state_path: str, job_id: str, report: dict) -> None:
+def _emit(payload: dict, ns, text=None) -> None:
+    """Print a result honouring --json, so every command answers the same way.
+
+    Added because the flag was handled ad hoc: `state`/`lease` never checked it,
+    while `cancel`/`promote` ignored it and printed JSON unconditionally. A tool
+    driven by agents cannot have per-command output conventions.
+    """
+    if getattr(ns, "json", False):
+        print(json.dumps(payload, indent=2))
+        return
+    if text is not None:
+        print(text(payload))
+        return
+    for key, value in payload.items():
+        print(f"{key}={value}")
+
+
+def _persist_review_report(
+    state_path: str, job_id: str, report: dict, review_of: str | None = None
+) -> None:
     """Write the reviewer's verdict onto its own result.json, durably.
 
     Read-modify-write under the same atomic writer the record uses. Kept
     non-fatal-adjacent: the caller decides the exit code; this just makes sure
     the outcome outlives the sandbox home.
+
+    `review_of` records WHICH subject was reviewed, on the reviewer's own record,
+    unconditionally -- before promotion is even attempted. Without it there is no
+    durable link from a review back to its subject unless promotion SUCCEEDED
+    (only the subject gets `review.reviewer_job`), so a review whose promotion
+    has not happened yet is indistinguishable on disk from a free-standing one.
+    Retention cannot protect an unpromoted chain it cannot see.
     """
     path = os.path.join(StateRoot(state_path).job_dir(job_id), "result.json")
     rec = read_json(path)
     rec["review"] = report
+    rec["review_of"] = review_of
     validate(rec, "result.schema.json")
     atomic_write_json(path, rec)
 
@@ -92,9 +119,12 @@ def _persist_review_report(state_path: str, job_id: str, report: dict) -> None:
 def cmd_state(ns: argparse.Namespace) -> int:
     if ns.action == "provision":
         path = state.provision(os.path.abspath(ns.dir))
-        print(f"state={path}")
+        _emit({"state": path}, ns, text=lambda d: f"state={d['state']}")
         return 0
-    _die("unknown state action")
+    # Unreachable: argparse `choices` rejects anything else first. Kept as
+    # defence in depth, but naming the valid actions so it is still actionable
+    # if it ever does fire.
+    _die("unknown state action (valid: provision)")
     return 1
 
 
@@ -239,20 +269,25 @@ def cmd_lease(ns: argparse.Namespace) -> int:
         owner = ns.owner or "controller"
         pid = int(ns.owner_pid or os.getppid())
         tok = lease.acquire(root, ident, owner, pid, ns.mode or "bounded-write")
-        print(f"lease={tok['lease_uuid']}")
-        print(f"file={os.path.join(root.leases, lease.identity_key(ident), 'token.json')}")
+        _emit(
+            {
+                "lease": tok["lease_uuid"],
+                "file": os.path.join(root.leases, lease.identity_key(ident), "token.json"),
+            },
+            ns,
+        )
         return 0
     if ns.action == "release":
         if not ns.token:
-            _die("release requires --token")
+            _die("release requires --token (the uuid printed by `lease acquire`)")
         lease.release(root, ident, ns.token, ns.owner or "controller")
-        print("released")
+        _emit({"released": True, "dir": ident.realpath}, ns,
+              text=lambda _d: "released")
         return 0
     if ns.action == "show":
-        tok = lease.load_token(root, ident)
-        print(json.dumps(tok, indent=2))
+        print(json.dumps(lease.load_token(root, ident), indent=2))
         return 0
-    _die("unknown lease action")
+    _die("unknown lease action (valid: acquire, release, show)")
     return 1
 
 
@@ -379,11 +414,7 @@ def cmd_resume(ns: argparse.Namespace) -> int:
         resumed_from=ns.job,
     )
     _print_job(rec, getattr(ns, "json", False))
-    if rec["status"] == "dirty":
-        return 2
-    if rec["status"] in {"timeout"}:
-        return 124
-    return 0 if rec["status"] in {"ok", "awaiting_review"} else 1
+    return jobstate.exit_code_for(rec["status"])
 
 
 def cmd_cancel(ns: argparse.Namespace) -> int:
@@ -398,7 +429,7 @@ def cmd_cancel(ns: argparse.Namespace) -> int:
     # pid + starttime + boot_id, not pid alone: pids are recycled, and killing
     # whatever now holds a recorded pid is how a cancel becomes an outage.
     if not _alive(pid, meta.get("starttime", ""), meta.get("boot_id", "")):
-        print(json.dumps({"job": ns.job, "state": "not_running"}, indent=2))
+        _emit({"job": ns.job, "state": "not_running"}, ns)
         return 0
 
     try:
@@ -415,7 +446,7 @@ def cmd_cancel(ns: argparse.Namespace) -> int:
             pass
     meta["cancelled"] = True
     atomic_write_json(meta_path, meta)
-    print(json.dumps({"job": ns.job, "state": "cancelled", "pid": pid}, indent=2))
+    _emit({"job": ns.job, "state": "cancelled", "pid": pid}, ns)
     return 0
 
 
@@ -435,13 +466,7 @@ def cmd_run_like(ns: argparse.Namespace, mode: str, role: str, directory: str, p
         job_id=os.environ.get("AI_OPS_JOB_ID") or None,
     )
     _print_job(rec, getattr(ns, "json", False))
-    if rec["status"] == "dirty":
-        return 2
-    if rec["status"] in {"timeout"}:
-        return 124
-    if rec["status"] in {"provider_error", "review_failed", "refused"}:
-        return 1
-    return 0
+    return jobstate.exit_code_for(rec["status"])
 
 
 def cmd_scout(ns: argparse.Namespace) -> int:
@@ -584,11 +609,11 @@ def cmd_review(ns: argparse.Namespace) -> int:
             # A review that produced no parseable verdict is a real failure, but
             # the record must SAY so rather than silently reading null.
             report = {"verdict": None, "error": str(exc)}
-            _persist_review_report(_state_path(ns), rec["job_id"], report)
+            _persist_review_report(_state_path(ns), rec["job_id"], report, parent)
             print(f"ai-opencode: reviewer produced no verdict: {exc}", file=sys.stderr)
             return 1
         report = {"verdict": verdict, "findings": findings, "reviewed_files": reviewed_files}
-        _persist_review_report(_state_path(ns), rec["job_id"], report)
+        _persist_review_report(_state_path(ns), rec["job_id"], report, parent)
         rec["review"] = report
         if parent:
             job.attach_review(
@@ -603,9 +628,9 @@ def cmd_review(ns: argparse.Namespace) -> int:
     # "review": null for a review that had in fact produced one, so the caller's
     # JSON disagreed with the record on disk.
     _print_job(rec, getattr(ns, "json", False))
-    if rec["status"] == "dirty":
-        return 2
-    return 0 if rec["status"] == "ok" else 1
+    # One shared mapping: this used to omit timeout->124, so `rc == 124` meant
+    # something different for `review` than for `scout`.
+    return jobstate.exit_code_for(rec["status"])
 
 
 def cmd_write(ns: argparse.Namespace) -> int:
@@ -856,50 +881,8 @@ def _require_known_job(ns, jd: str) -> None:
 
 
 def _live_state(ns, rec: dict, jd: str) -> str:
-    """What is this job doing right now?
-
-    result.json only exists once a job is over, so its absence cannot mean
-    "running" -- a job killed before it wrote one would poll as running forever,
-    which is the worst answer this command can give an orchestrator. The launch
-    record is the authority for a backgrounded job, and it is consulted even when
-    the job directory does not exist: a job killed early may never have created
-    one, and reporting "unknown" there loses the launch we know happened.
-    """
-    if rec:
-        return str(rec.get("status"))
-    from .lease import _alive
-
-    def _liveness(path: str) -> bool | None:
-        """True/False if we can tell, None if the record is unusable."""
-        if not os.path.isfile(path):
-            return None
-        try:
-            meta = read_json(path)
-            return _alive(int(meta["pid"]), meta.get("starttime", ""), meta.get("boot_id", ""))
-        except Exception:
-            return None
-
-    # A backgrounded job's launch record also carries cancellation INTENT, which
-    # the in-job runner record cannot know.
-    meta_path = os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")
-    launched = _liveness(meta_path)
-    if launched is False:
-        try:
-            if read_json(meta_path).get("cancelled"):
-                return "cancelled"
-        except Exception:
-            pass
-        return "died"
-    if launched is True:
-        return "running"
-
-    # Foreground jobs write the same triple into the job directory.
-    runner = _liveness(os.path.join(jd, "runner.json"))
-    if runner is True:
-        return "running"
-    if runner is False:
-        return "died"
-    return "unknown"
+    """Thin wrapper: the logic lives in jobstate so listings can reuse it."""
+    return jobstate.live_state(_state_path(ns), ns.job, rec, jd)
 
 
 def cmd_status(ns: argparse.Namespace) -> int:
@@ -1016,31 +999,39 @@ def cmd_promote(ns: argparse.Namespace) -> int:
         findings=findings,
         reviewed_files=reviewed_files,
     )
-    print(json.dumps({"status": rec["status"], "job": rec["job_id"]}, indent=2))
-    return 0 if rec["status"] == "ok" else 1
+    _emit({"status": rec["status"], "job": rec["job_id"]}, ns)
+    return jobstate.exit_code_for(rec["status"])
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="ai-opencode")
-    p.add_argument("--profile")
-    p.add_argument("--state")
-    p.add_argument("--provider")
+    p = argparse.ArgumentParser(
+        prog="ai-opencode",
+        description=(
+            "Run a coding agent inside a sandbox and keep evidence of what it did. "
+            "Every command takes --json for a stable machine-readable contract. "
+            "Exit codes: 0 ok, 1 refusal or error, 2 dirty worktree, 124 timeout. "
+            "Refusals print `ai-opencode: REFUSING — ...` on stderr and name a remedy."
+        ),
+    )
+    p.add_argument("--profile", help="project profile JSON (default: AI_OPS_PROFILE, then the bundled example)")
+    p.add_argument("--state", help="state root holding jobs, leases and evidence (default: AI_OPS_STATE)")
+    p.add_argument("--provider", help="absolute path to the provider binary; never a PATH lookup or a symlink")
     p.add_argument("--json", action="store_true", help="machine-readable output for programmatic callers")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("state")
-    s.add_argument("action", choices=["provision"])
-    s.add_argument("dir")
+    s = sub.add_parser("state", help="provision a state root")
+    s.add_argument("action", choices=["provision"], help="only `provision` today")
+    s.add_argument("dir", help="directory to provision; must NOT be inside a worktree you will run jobs on")
     s.set_defaults(func=cmd_state)
 
-    m = sub.add_parser("models")
+    m = sub.add_parser("models", help="models this profile allows, with family/vendor and reachability")
     m.add_argument("--live", action="store_true",
                    help="ask each installed provider what models it can actually serve")
     m.set_defaults(func=cmd_models)
 
-    sc = sub.add_parser("scout")
-    sc.add_argument("dir")
-    sc.add_argument("prompt")
+    sc = sub.add_parser("scout", help="read-only inspection of a worktree")
+    sc.add_argument("dir", help="worktree to inspect")
+    sc.add_argument("prompt", help="what to ask the agent")
     sc.add_argument(
         "--background",
         action="store_true",
@@ -1048,9 +1039,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sc.set_defaults(func=cmd_scout)
 
-    rv = sub.add_parser("review")
-    rv.add_argument("dir")
-    rv.add_argument("role")
+    rv = sub.add_parser("review", help="read-only review of a worktree's uncommitted change")
+    rv.add_argument("dir", help="worktree to review")
+    rv.add_argument("role", help="role name from the profile (its model and mode)")
     rv.add_argument("prompt", nargs="?")
     rv.add_argument("--envelope")
     rv.add_argument(
@@ -1060,9 +1051,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rv.set_defaults(func=cmd_review)
 
-    wr = sub.add_parser("write")
-    wr.add_argument("dir")
-    wr.add_argument("role")
+    wr = sub.add_parser("write", help="bounded write in a leased worktree (needs AI_OPS_WRITE=1)")
+    wr.add_argument("dir", help="leased worktree to write in")
+    wr.add_argument("role", help="role name from the profile (must be a bounded-write role)")
     wr.add_argument("--envelope", required=True)
     wr.add_argument("--token")
     wr.add_argument(
@@ -1072,7 +1063,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wr.set_defaults(func=cmd_write)
 
-    rn = sub.add_parser("run")
+    rn = sub.add_parser("run", help="dispatch by envelope; mode/role/cwd come from the envelope")
     rn.add_argument("--envelope", required=True)
     rn.add_argument("--token")
     rn.add_argument(
@@ -1082,7 +1073,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rn.set_defaults(func=cmd_run)
 
-    ls = sub.add_parser("lease")
+    ls = sub.add_parser("lease", help="worktree lease lifecycle: acquire, release, show")
     ls.add_argument("action", choices=["acquire", "release", "show"])
     ls.add_argument("--dir", required=True)
     ls.add_argument("--owner")
@@ -1091,19 +1082,19 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--mode")
     ls.set_defaults(func=cmd_lease)
 
-    pv = sub.add_parser("providers")
+    pv = sub.add_parser("providers", help="installed provider binaries and whether their build is verified")
     pv.add_argument("--provider")
     pv.add_argument("--verify", action="store_true",
                     help="check an unverified build against its adapter's CLI surface and record it")
     pv.set_defaults(func=cmd_providers)
 
-    ep = sub.add_parser("execution-profile")
+    ep = sub.add_parser("execution-profile", help="content digest of the launcher and package, for pinning")
     ep.set_defaults(func=cmd_execution_profile)
 
-    qt = sub.add_parser("quota")
+    qt = sub.add_parser("quota", help="measured spend, budget limits, and published provider quota")
     qt.set_defaults(func=cmd_quota)
 
-    rs = sub.add_parser("resume")
+    rs = sub.add_parser("resume", help="continue a job's provider session with a new message")
     rs.add_argument("job", help="the job whose provider session to continue")
     rs.add_argument("message", help="what to say to it")
     rs.add_argument("--token", help="lease token, required to resume a bounded-write job")
@@ -1113,11 +1104,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rs.set_defaults(func=cmd_resume)
 
-    cx = sub.add_parser("cancel")
+    cx = sub.add_parser("cancel", help="stop a backgrounded job")
     cx.add_argument("job")
     cx.set_defaults(func=cmd_cancel)
 
-    lg = sub.add_parser("logs")
+    lg = sub.add_parser("logs", help="projections over a job's evidence stream")
     lg.add_argument("job")
     lg.add_argument(
         "--format",
@@ -1127,7 +1118,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lg.set_defaults(func=cmd_logs)
 
-    st = sub.add_parser("status")
+    st = sub.add_parser("status", help="cheap poll of one job: state, counters, cost (~30 tokens)")
     st.add_argument("job")
     st.add_argument(
         "--full",
@@ -1136,7 +1127,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     st.set_defaults(func=cmd_status)
 
-    pr = sub.add_parser("promote")
+    pr = sub.add_parser("promote", help="promote a reviewed subject job under the worktree lock")
     pr.add_argument("--subject", required=True)
     pr.add_argument("--review", required=True)
     pr.set_defaults(func=cmd_promote)

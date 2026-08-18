@@ -1,0 +1,102 @@
+"""What a job is doing right now, and what counts as failure.
+
+Extracted from cli.py because three consumers need it for MANY jobs, not one:
+`status` (a single job), `jobs` (a listing) and provider health (an aggregate).
+The CLI version took an argparse Namespace purely to read `ns.job` and resolve
+the state path, which made it unusable anywhere else.
+
+The rule this module encodes was earned five separate times during dogfooding:
+**absence of a record is not evidence of a benign state.** A missing result.json
+was read as "running" for a cancelled job, a crashed background job, a foreground
+job whose process died, and a job id that never existed. Liveness is therefore
+recorded (pid + starttime + boot_id, since pids are recycled) and checked, never
+inferred from what is missing.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from .state import read_json
+
+# Terminal statuses that mean the job did NOT do its work. Shared so the exit-code
+# mapping, provider health and any future consumer cannot drift apart -- they had
+# already drifted once between cmd_run_like and cmd_review.
+FAILURE_STATUSES = frozenset(
+    {"provider_error", "timeout", "dirty", "refused", "review_failed"}
+)
+
+# States derived from liveness rather than from a persisted record.
+DERIVED_STATES = frozenset({"running", "died", "cancelled", "unknown"})
+
+
+def _liveness(path: str) -> bool | None:
+    """True/False if the record lets us tell, None if there is no usable record."""
+    from .lease import _alive
+
+    if not os.path.isfile(path):
+        return None
+    try:
+        meta = read_json(path)
+        return _alive(int(meta["pid"]), meta.get("starttime", ""), meta.get("boot_id", ""))
+    except Exception:
+        return None
+
+
+def launch_record_path(state_path: str, job_id: str) -> str:
+    return os.path.join(state_path, "launch", f"{job_id}.json")
+
+
+def live_state(state_path: str, job_id: str, rec: dict[str, Any], jd: str) -> str:
+    """The job's state now: a persisted status, or one derived from liveness.
+
+    `rec` is the parsed result.json (empty dict if absent) and `jd` the job
+    directory. A persisted status always wins -- it is the job's own account of
+    how it ended.
+    """
+    if rec:
+        return str(rec.get("status"))
+
+    # A backgrounded job's launch record also carries cancellation INTENT, which
+    # the in-job runner record cannot know.
+    meta_path = launch_record_path(state_path, job_id)
+    launched = _liveness(meta_path)
+    if launched is False:
+        try:
+            if read_json(meta_path).get("cancelled"):
+                return "cancelled"
+        except Exception:
+            pass
+        return "died"
+    if launched is True:
+        return "running"
+
+    # Foreground jobs write the same triple into the job directory.
+    runner = _liveness(os.path.join(jd, "runner.json"))
+    if runner is True:
+        return "running"
+    if runner is False:
+        return "died"
+    return "unknown"
+
+
+def exit_code_for(status: str) -> int:
+    """The one exit-code mapping, so callers can branch on it reliably.
+
+    It had already drifted: cmd_run_like mapped timeout->124 while cmd_review
+    silently did not, so `rc == 124` meant different things for `scout` and
+    `review`. One table, used everywhere.
+
+        0    the job did its work (ok, awaiting_review)
+        1    refusal or provider error
+        2    dirty -- worktree integrity changed during the job
+        124  timed out
+    """
+    if status == "dirty":
+        return 2
+    if status == "timeout":
+        return 124
+    if status in {"ok", "awaiting_review"}:
+        return 0
+    return 1

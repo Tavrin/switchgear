@@ -176,6 +176,13 @@
         }
       },
       "description": "Set when this job continued a prior provider session. A resumed job is new work with its own evidence, but its model already held context from the named job."
+    },
+    "review_of": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The subject job this review was of, recorded on the REVIEWER's record before promotion is attempted. Without it an unpromoted review chain is invisible to retention."
     }
   }
 }

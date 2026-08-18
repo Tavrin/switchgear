@@ -937,7 +937,10 @@ class RailTests(unittest.TestCase):
 
     def test_cancel_stops_a_background_job_and_status_says_so(self):
         info = self._launch("30")
-        p = run_cli(self.args("cancel", info["job_id"]))
+        # --json is now required for JSON: `cancel` used to print it regardless
+        # of the flag, which is exactly the per-command convention this contract
+        # removes.
+        p = run_cli(self.args("--json", "cancel", info["job_id"]))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(json.loads(p.stdout)["state"], "cancelled")
         self.assertEqual(self._state_of(info["job_id"]), "cancelled")
