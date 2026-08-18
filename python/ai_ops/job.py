@@ -112,7 +112,10 @@ def run_job(
     # A background launch picks the id in the PARENT so it can hand the caller a
     # job id and a log path immediately, before any work starts. create_job_dirs
     # still creates the directory exclusively, so a collision is still a failure.
+    from .adapters import get_adapter
     from . import quota as quotamod
+
+    adapter = get_adapter(profile.get("provider"))
 
     # Before any work, and before any job directory exists: a budget checked
     # after the spend is an audit, not a control.
@@ -192,29 +195,22 @@ def run_job(
             if extra:
                 with open(os.path.join(dirs["home"], ".mock-extra"), "w", encoding="utf-8") as fh:
                     fh.write(extra)
-        agent_name = "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        agent_name = adapter.agent_name(mode)
         provider.write_agent_definition(
             dirs["home"], agent_name, policy.agent_definition(role)
         )
         env = provider.isolation_env(dirs["home"], runtime)
         prov_argv, _live = provider.resolve_provider(provider_path)
-        agent = "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
         # Provider inside sandbox: mock gets dir via --dir
-        inner = list(prov_argv) + [
-            "run",
-            "--pure",
-            "--dir",
-            ident.realpath,
-            "--model",
-            model["id"],
-            "--agent",
-            agent,
-            "--format",
-            "json",
-            "--title",
-            f"ai-opencode {role} {job_id}",
-            prompt,
-        ]
+        inner = adapter.argv(
+            provider_argv=list(prov_argv),
+            worktree=ident.realpath,
+            model_id=model["id"],
+            agent=agent_name,
+            role=role,
+            job_id=job_id,
+            prompt=prompt,
+        )
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
         broker_sock = None
@@ -237,7 +233,7 @@ def run_job(
                     ident=ident,
                     policy=policy,
                     synth_home=dirs["home"],
-                    provider_argv=list(prov_argv) + ["--version"],
+                    provider_argv=adapter.version_argv(list(prov_argv)),
                     command_binds=extra_binds,
                 ),
                 env=env,

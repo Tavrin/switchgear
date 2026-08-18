@@ -92,6 +92,43 @@ class OpenCodeAdapter:
 
     name = "opencode"
 
+    # The invocation. Kept here rather than in job.py so that the OpenCode-shaped
+    # argv, the OPENCODE_* environment and the generated agent definition all sit
+    # behind the same seam as parse() -- otherwise the seam is nominal and the
+    # next provider still has to edit the job lifecycle.
+    def argv(
+        self,
+        *,
+        provider_argv: list[str],
+        worktree: str,
+        model_id: str,
+        agent: str,
+        role: str,
+        job_id: str,
+        prompt: str,
+    ) -> list[str]:
+        return list(provider_argv) + [
+            "run",
+            "--pure",
+            "--dir",
+            worktree,
+            "--model",
+            model_id,
+            "--agent",
+            agent,
+            "--format",
+            "json",
+            "--title",
+            f"ai-opencode {role} {job_id}",
+            prompt,
+        ]
+
+    def version_argv(self, provider_argv: list[str]) -> list[str]:
+        return list(provider_argv) + ["--version"]
+
+    def agent_name(self, mode: str) -> str:
+        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+
     # A step_finish carries the reason the step ended. "stop" ends the run;
     # "tool-calls" only ends a step and more will follow.
     TERMINAL_REASONS = {"stop", "length", "content-filter"}
