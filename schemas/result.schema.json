@@ -213,6 +213,10 @@
           }
         }
       }
+    },
+    "queued_s": {
+      "type": "number",
+      "description": "seconds spent waiting for a concurrency slot (0 when unlimited)"
     }
   }
 }

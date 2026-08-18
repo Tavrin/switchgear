@@ -198,6 +198,15 @@ def run_job(
     # after the spend is an audit, not a control.
     quotamod.assert_within_budget(root.path)
     job_id = job_id or new_job_id()
+
+    # ONE enforcement point, so --background is covered automatically (it just
+    # re-execs this CLI) rather than special-cased per command.
+    from . import concurrency
+
+    queued_s = concurrency.acquire(
+        root.path, job_id,
+        wait=os.environ.get("AI_OPS_BACKGROUND_CHILD") == "1",
+    )
     dirs = state.create_job_dirs(root, job_id)
     # Liveness record for EVERY job, not just backgrounded ones. Without it a
     # FOREGROUND job whose process died left a directory with no result.json,
@@ -574,6 +583,10 @@ def run_job(
             # asked for -- null means no effort was sent, which is the honest
             # record when a role declares none.
             "effort": effort,
+            # Time spent waiting for a concurrency slot. Recorded separately so
+            # queueing shows up as queueing rather than silently inflating the
+            # job's apparent duration.
+            "queued_s": queued_s,
             "dir": ident.realpath,
             "exit": result.returncode,
             "started": _now(),
@@ -696,10 +709,16 @@ def run_job(
         _reclaim_sandbox_home(dirs["home"])
         return record
 
-    if lock_cm:
-        with lock_cm:
-            return _execute_with_broker()
-    return _execute_with_broker()
+    try:
+        if lock_cm:
+            with lock_cm:
+                return _execute_with_broker()
+        return _execute_with_broker()
+    finally:
+        # The slot goes back however the job ended. A crashed job's marker is
+        # also reclaimed by the liveness check, so this is belt and braces
+        # rather than the only path.
+        concurrency.release(root.path, job_id)
 
 
 def attach_review(

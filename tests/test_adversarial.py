@@ -1358,6 +1358,119 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- concurrency cap ----------------------------------------------------
+
+    def _budget(self, **fields):
+        path = self.tmp / "budget.json"
+        path.write_text(json.dumps(fields))
+        return {"AI_OPS_BUDGET_FILE": str(path)}
+
+    def test_absent_config_means_unlimited(self):
+        """This is the only step that changes existing behaviour, so an operator
+        who has not opted in must see nothing at all."""
+        from ai_ops import concurrency
+
+        env = self._budget()  # no max_concurrent_jobs key
+        os.environ["AI_OPS_BUDGET_FILE"] = env["AI_OPS_BUDGET_FILE"]
+        try:
+            self.assertIsNone(concurrency.limit())
+            self.assertEqual(concurrency.acquire(str(self.state), "j1", wait=False), 0.0)
+            # No marker directory is even created when unlimited.
+            self.assertFalse((self.state / "running").exists())
+        finally:
+            os.environ.pop("AI_OPS_BUDGET_FILE", None)
+
+    def test_a_full_queue_refuses_a_foreground_job_at_once(self):
+        """A caller at a terminal wants to be told, not stalled."""
+        env = self._budget(max_concurrent_jobs=1)
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look",
+                              "--background"),
+                    env={**env, "AI_OPS_MOCK_BEHAVIOR": "slow-stream",
+                         "AI_OPS_MOCK_EXTRA": "8"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        first = json.loads(p.stdout)["job_id"]
+
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if (self.state / "running").is_dir() and list((self.state / "running").iterdir()):
+                break
+            time.sleep(0.2)
+
+        started = time.time()
+        p2 = run_cli(self.args("scout", str(self.primary), "look"), env=env)
+        elapsed = time.time() - started
+        self.assertNotEqual(p2.returncode, 0, "second job was allowed past the cap")
+        self.assertIn("concurrency limit", p2.stderr)
+        self.assertLess(elapsed, 8, "a foreground job waited instead of refusing")
+        run_cli(self.args("cancel", first))
+
+    def test_the_refusal_names_every_way_out(self):
+        from ai_ops import concurrency
+        from ai_ops.errors import Refuse
+
+        os.environ["AI_OPS_BUDGET_FILE"] = self._budget(
+            max_concurrent_jobs=1)["AI_OPS_BUDGET_FILE"]
+        try:
+            concurrency.acquire(str(self.state), "held", wait=False)
+            with self.assertRaises(Refuse) as ctx:
+                concurrency.acquire(str(self.state), "next", wait=False)
+            msg = str(ctx.exception)
+            self.assertIn("max_concurrent_jobs", msg)
+            self.assertIn("--background", msg)
+            self.assertIn("1 of 1", msg)
+        finally:
+            os.environ.pop("AI_OPS_BUDGET_FILE", None)
+
+    def test_a_crashed_job_does_not_hold_a_slot_forever(self):
+        """The failure mode a concurrency cap must not introduce. A stale marker
+        is reclaimed by the same liveness check used everywhere else."""
+        from ai_ops import concurrency
+
+        os.environ["AI_OPS_BUDGET_FILE"] = self._budget(
+            max_concurrent_jobs=1)["AI_OPS_BUDGET_FILE"]
+        try:
+            rd = self.state / "running"
+            rd.mkdir(mode=0o700, exist_ok=True)
+            (rd / "ghost.json").write_text(json.dumps(
+                {"pid": 2 ** 22, "starttime": "1", "boot_id": "gone", "since": 0}))
+            self.assertEqual(concurrency.running(str(self.state)), [],
+                             "a dead job's marker still counted")
+            self.assertFalse((rd / "ghost.json").exists(),
+                             "the stale marker was not reclaimed")
+            concurrency.acquire(str(self.state), "new", wait=False)  # must not raise
+        finally:
+            os.environ.pop("AI_OPS_BUDGET_FILE", None)
+
+    def test_an_unreadable_marker_does_not_hold_a_slot(self):
+        from ai_ops import concurrency
+
+        os.environ["AI_OPS_BUDGET_FILE"] = self._budget(
+            max_concurrent_jobs=1)["AI_OPS_BUDGET_FILE"]
+        try:
+            rd = self.state / "running"
+            rd.mkdir(mode=0o700, exist_ok=True)
+            (rd / "junk.json").write_text("{not json")
+            self.assertEqual(concurrency.running(str(self.state)), [])
+        finally:
+            os.environ.pop("AI_OPS_BUDGET_FILE", None)
+
+    def test_the_slot_is_returned_when_a_job_finishes(self):
+        env = self._budget(max_concurrent_jobs=1)
+        for _ in range(3):
+            p = run_cli(self.args("--json", "scout", str(self.primary), "look"), env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(
+            [f for f in os.listdir(self.state / "running")] if (self.state / "running").is_dir() else [],
+            [], "a finished job kept its slot")
+
+    def test_queue_time_is_recorded_not_hidden_in_elapsed(self):
+        env = self._budget(max_concurrent_jobs=2)
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"), env=env)
+        job_id = json.loads(p.stdout)["job_id"]
+        rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+        self.assertIn("queued_s", rec)
+        self.assertIsInstance(rec["queued_s"], (int, float))
+
     # --- gc: what must SURVIVE ----------------------------------------------
 
     def _aged_job(self, job_id, age_s, status="ok", **extra):

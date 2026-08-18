@@ -199,6 +199,28 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Concurrency
+
+Operator-owned, in the same budget file as `daily_usd`, and **absent means
+unlimited** — nothing changes for anyone who has not opted in:
+
+```json
+{"daily_usd": 5.00, "max_concurrent_jobs": 3}
+```
+
+A **foreground** job over the cap refuses immediately: a caller at a terminal
+wants to be told, not stalled. A **`--background`** job waits for a slot, bounded
+by `AI_OPS_CONCURRENCY_WAIT_S` (default 600) and then refuses — an unbounded wait
+turns a full queue into a hang with no diagnosis. Time spent waiting is recorded
+as `queued_s` on the job, so queueing shows up as queueing instead of silently
+inflating the job's apparent duration.
+
+Slots are counted from markers in `<state>/running/`, each carrying the same
+`{pid, starttime, boot_id}` triple as `runner.json`. Counting is therefore
+proportional to jobs *currently* running rather than to the state root's whole
+history, and a crashed job's stale marker is reclaimed by the same liveness check
+used everywhere else — a crash cannot permanently consume a slot.
+
 ### Provider health, and where the money went
 
 `models` carries a `health` block per allowlisted model, aggregated from past job

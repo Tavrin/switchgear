@@ -361,6 +361,11 @@ def launch_background(ns: argparse.Namespace) -> int:
     argv = [a for a in sys.argv[1:] if a != "--background"]
     child_env = dict(os.environ)
     child_env["AI_OPS_JOB_ID"] = job_id
+    # The child re-execs this CLI without --background, so it cannot otherwise
+    # tell it was launched detached. That distinction decides whether a full
+    # concurrency queue refuses immediately (foreground: a caller at a terminal
+    # wants to be told, not stalled) or waits for a slot.
+    child_env["AI_OPS_BACKGROUND_CHILD"] = "1"
 
     with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
         proc = subprocess.Popen(
