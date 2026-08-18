@@ -57,7 +57,16 @@ def promote(
     expected_files: list[str] | None = None,
     blocking_severities: tuple[str, ...] = BLOCKING_SEVERITIES,
     generation: int,
+    reviewed_content: str | None = None,
 ) -> dict[str, Any]:
+    """Promote a reviewed subject, or refuse with the reason.
+
+    `reviewed_content` is the material the reviewer actually read — the frozen
+    diff. It is scanned for content addressed at a reviewing agent, because the
+    verdict is the ONE load-bearing input here that comes from a model's
+    judgement rather than from a digest, and a diff that talks to the reviewer
+    makes that judgement untrustworthy. See injection.py.
+    """
     validate(review_artifact, "review.schema.json")
     subject = read_json(subject_path)
     if subject.get("generation", 0) != generation:
@@ -87,6 +96,27 @@ def promote(
         raise Refuse("worktree changed after review")
     if review_artifact["verdict"] != "promote":
         raise Refuse(f"verdict {review_artifact['verdict']} cannot promote")
+
+    # Everything checked above is model-free: digests, identity, the generation
+    # CAS, independence. The verdict is the single place a model's judgement is
+    # load-bearing, which makes it the thing worth attacking -- steer the
+    # implementer, have it write text into the diff aimed at the reviewer, and
+    # the gate approves itself.
+    #
+    # So the promotion path fails CLOSED when the reviewed material is addressed
+    # at a reviewing agent. This does not detect prompt injection; nothing does.
+    # It refuses to let a model's word carry a promotion when the input it read
+    # was trying to produce that word.
+    if reviewed_content:
+        from .injection import blocks_promotion, scan, summarize
+
+        found = scan(reviewed_content, "reviewed diff")
+        if blocks_promotion(found):
+            raise Refuse(
+                summarize(found)
+                + " Read the diff yourself and promote by hand if it is genuinely "
+                "benign, or reject it."
+            )
 
     # The reviewer must name the change it is approving. This does not prove
     # semantic review -- a hostile reviewer inside the sandbox can read the tree

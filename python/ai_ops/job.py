@@ -755,6 +755,20 @@ def run_job(
                 record["secrets_suspected"] = found
                 print(f"ai-opencode: WARNING — {secretscan.summarize(found)}",
                       file=sys.stderr)
+
+            from . import injection as injectionmod
+
+            # Advisory HERE, blocking at the promote gate. A scout reading a repo
+            # that talks to agents is worth knowing about even when nothing is
+            # being promoted.
+            addressed = injectionmod.scan(
+                open(ev_path, encoding="utf-8", errors="replace").read(2_000_000),
+                "evidence/events.jsonl",
+            )
+            if addressed:
+                record["agent_directed_content"] = addressed
+                print(f"ai-opencode: WARNING — {injectionmod.summarize(addressed)}",
+                      file=sys.stderr)
         except Exception:
             # Advisory only. A scanner that could fail the job would turn a
             # completed, already-paid-for run into a loss.
@@ -846,7 +860,21 @@ def attach_review(
     with lease.PromotionLock(root, live):
         live_tree = identity.tree_digest(live)
         artifact["reviewed_files"] = reviewed_files
+
+        # The material the reviewer actually read, recomputed here rather than
+        # threaded through the CLI. Safe to recompute because promote refuses if
+        # the tree moved since the review, so this IS what was reviewed -- and
+        # deriving it from the tree means a caller cannot pass a sanitised copy.
+        try:
+            reviewed_content = identity.worktree_diff(live)[:2_000_000]
+        except Exception:
+            # Never lose a promotion to the scan's own failure; but an
+            # unavailable diff means the scan proves nothing, so say so rather
+            # than passing an empty string that reads as "clean".
+            reviewed_content = None
+
         return review.promote(
+            reviewed_content=reviewed_content,
             subject_path=subject_path,
             review_artifact=artifact,
             live_head=live.head,

@@ -33,6 +33,9 @@ echo "== uid boundary (the worker is not you) =="
 echo "== guarded recursive deletes =="
 /usr/bin/python3 "$ROOT/tests/test_safe_delete.py"
 
+echo "== agent-directed content (injection at the review gate) =="
+/usr/bin/python3 "$ROOT/tests/test_injection.py"
+
 echo "== secret scanning of worker output =="
 /usr/bin/python3 "$ROOT/tests/test_secrets.py"
 

@@ -92,6 +92,19 @@ provider JSON is never evaluated. Handoff and results only under
 - **A hostile upstream** sees the prompts and the diff. Injection reaching the
   prompt is a real risk; the containment limits what it can *do*, not what it can
   *say*.
+- **Prompt injection is not solved, and cannot be by this rail.** What is bounded
+  is its reach into the one gate that depends on a model's judgement. Everything
+  else in `promote` is model-free — tree digests, worktree identity, the
+  generation CAS, independence — and none of it can be forged without changing
+  the tree, which invalidates the digest. The verdict is the exception, so the
+  promotion path now fails CLOSED when the reviewed diff contains content
+  addressed at a reviewing agent, or forging this rail's own handoff/review
+  blocks. That is a refusal to let a model's word carry a promotion when the
+  input it read was trying to produce that word — not a detector, and it does not
+  claim to catch a careful attacker. A human decides instead.
+- **Exfiltration through the legitimate channel is unbounded.** The broker
+  restricts which HOST a job may reach, not what it sends there. A secret the
+  worker reads can leave inside a normal model call. Open.
 - **Spend is bounded before a job, not during one.** `daily_usd` in the
   operator-owned budget file refuses to START a job once the day's measured spend
   reaches it, and the broker's `max_provider_calls_per_job` denies past a per-job

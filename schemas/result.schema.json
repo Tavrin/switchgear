@@ -221,6 +221,13 @@
     "provider": {
       "type": "string",
       "description": "adapter that ran this job (the provider BINARY, not the model pool)"
+    },
+    "agent_directed_content": {
+      "type": "array",
+      "description": "advisory: content in this job's stream is shaped like instructions addressed at an agent. Blocks automatic promotion at the gate.",
+      "items": {
+        "type": "object"
+      }
     }
   }
 }
