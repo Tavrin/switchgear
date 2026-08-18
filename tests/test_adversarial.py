@@ -732,6 +732,32 @@ class RailTests(unittest.TestCase):
         finally:
             os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
 
+    def test_models_listing_reports_reachability(self):
+        """The registry catalogues what the rail KNOWS, not what it can REACH.
+
+        openrouter/* ids are listed but no OpenRouter key is installed here. A
+        caller choosing a model should learn that from the listing, not from a
+        failed job -- otherwise the registry silently over-promises.
+        """
+        p = run_cli(
+            self.args("models"),
+            env={"AI_OPS_PROVIDER_CREDENTIAL_FILE": str(self.tmp / "no-such-credential")},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("UNREACHABLE", p.stdout)
+        self.assertIn("mode 600", p.stdout)
+
+        cred = self.tmp / "cred"
+        cred.write_text("secret\n")
+        cred.chmod(0o600)
+        p = run_cli(
+            self.args("models"),
+            env={"AI_OPS_PROVIDER_CREDENTIAL_FILE": str(cred)},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("reachable", p.stdout)
+        self.assertNotIn("UNREACHABLE", p.stdout)
+
     def test_live_without_a_credential_refuses_rather_than_dropping_the_namespace(self):
         """A job that asks for a live provider but has no credential must refuse.
 

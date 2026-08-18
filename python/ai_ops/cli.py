@@ -74,12 +74,48 @@ def cmd_state(ns: argparse.Namespace) -> int:
     return 1
 
 
+def _reachability(provider_id: str, _cache: dict[str, str] = {}) -> str:
+    """Whether a provider's credential is actually installed on this machine.
+
+    The registry is a catalogue of what the rail KNOWS, which is not the same as
+    what it can REACH -- ids can be listed for a provider whose key was never
+    installed here. Reporting that at listing time beats discovering it at job
+    time, and keeps the registry honest without pruning entries that are correct
+    but unprovisioned.
+    """
+    if provider_id in _cache:
+        return _cache[provider_id]
+    from . import provider as provmod
+    from .registry import provider_record
+
+    try:
+        prec = provider_record(provider_id)
+        name = prec.get("credential") or provider_id
+        if provmod.load_provider_credential(name):
+            verdict = "reachable"
+        else:
+            # Name where a credential SHOULD go, not where lookup ended up:
+            # credential_path() falls back to the legacy single-file path when
+            # the per-provider file is absent, which is exactly the case here,
+            # so reporting it would tell the operator to install the key in the
+            # one place that cannot hold a second provider.
+            want = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE") or os.path.join(
+                provmod.CREDENTIAL_DIR, name
+            )
+            verdict = f"UNREACHABLE (install a credential at {want}, mode 600)"
+    except Refuse as exc:
+        verdict = f"UNREACHABLE ({exc})"
+    _cache[provider_id] = verdict
+    return verdict
+
+
 def cmd_models(ns: argparse.Namespace) -> int:
     profile = load_profile(_profile_path(ns))
     print("profile allowlist:")
     for m in (profile.get("models") or {}).get("allow") or []:
         rec = model_record(m)
-        print(f"  {m}  family={rec.get('model_family')}")
+        reach = _reachability(rec.get("provider") or "")
+        print(f"  {m}  family={rec.get('model_family')}  {reach}")
     return 0
 
 
