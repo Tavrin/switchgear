@@ -21,6 +21,30 @@
       "allowed_get_paths": [
         "/models"
       ]
+    },
+    "codex": {
+      "upstream": "https://chatgpt.com/backend-api/codex",
+      "credential": "codex",
+      "credential_class": "oauth",
+      "auth_file": "~/.codex/auth.json",
+      "auth_format": "codex-tokens",
+      "allowed_paths": [
+        "/responses"
+      ],
+      "_note": "ChatGPT subscription path. Needs a ChatGPT-Account-ID header (chatgpt_account_id claim). No adapter/pin yet -> cannot run live. Capture a real stream first."
+    },
+    "claude": {
+      "upstream": "https://api.anthropic.com",
+      "credential": "claude",
+      "credential_class": "oauth",
+      "auth_file": "~/.claude/.credentials.json",
+      "auth_format": "claude-oauth",
+      "auth_header": "authorization",
+      "auth_scheme": "Bearer",
+      "allowed_paths": [
+        "/v1/messages"
+      ],
+      "_note": "Claude subscription (OAuth) path uses Authorization: Bearer, set via ANTHROPIC_AUTH_TOKEN. No adapter/pin yet -> cannot run live."
     }
   },
   "models": {

@@ -277,6 +277,50 @@ Open:
    rather than written from documentation. Until then an expired session refuses
    with an instruction to re-login, and the refresh token stays unread.
 
+## Prior art (researched 2026-08-18) — the pattern is proven, with two corrections
+
+Searching for how others do this settled the "needs real spend" plumbing
+question and corrected two endpoint/header facts I would otherwise have guessed.
+Multiple shipping tools already route subscription CLIs through a local
+OpenAI-/Anthropic-compatible proxy on exactly this pattern: LiteLLM's Claude Code
+Max support, CLIProxyAPI, codex-proxy, codex-openai-proxy. So the subscription
+OAuth token IS accepted by these backends through a proxy — the open question was
+never "does it work", only the exact wiring.
+
+**Correction 1 — Claude Code OAuth uses `Authorization: Bearer`, not `x-api-key`.**
+My probe saw `x-api-key` only because I set `ANTHROPIC_API_KEY`, which selects the
+BYOK path. The subscription path is the `Authorization` header, set via
+`ANTHROPIC_AUTH_TOKEN`. LiteLLM distinguishes exactly these two: `x-api-key`
+forwarded as-is (user's own key) vs. `Authorization` forwarded as-is (OAuth/Max).
+So a Claude Code adapter sets `ANTHROPIC_AUTH_TOKEN=<placeholder>` and the broker
+injects the real OAuth access token in `Authorization: Bearer` — the
+`authorization` default, not the `x-api-key` override. (The x-api-key broker
+support still stands and is still needed for a BYOK Anthropic provider.)
+
+**Correction 2 — Codex's ChatGPT subscription does NOT use `api.openai.com`.**
+It talks to `https://chatgpt.com/backend-api/codex`, and the request must carry a
+`ChatGPT-Account-ID` header whose value is the `chatgpt_account_id` claim inside
+the access token (confirmed present in the local token). So the registry upstream
+for the ChatGPT-subscription path is chatgpt.com, not the OpenAI API host, and the
+broker needs a per-provider derived header (account id read from the token, like
+the token itself — never the refresh token). My earlier probe pointed a
+`model_providers.*.base_url` at loopback and saw `Bearer <placeholder>` go to
+`/v1/responses`; that is the API-KEY shape, and the subscription shape is
+different. Worth a real capture before the adapter.
+
+**The security thesis is validated, and agent-ops goes further.** Every one of
+these proxies carries the same warning — bind to localhost, because anyone who
+reaches the endpoint bills your subscription — and LiteLLM shipped
+credential-stealing malware in two PyPI releases (1.82.7/1.82.8). That is exactly
+the threat agent-ops answers by construction: the credential never enters the
+sandbox, the broker listens on a per-job unix socket (not a shared localhost
+port), the path is allowlisted, the model is pinned, and the refresh token is
+never even read. A compromised provider or a co-tenant process cannot spend the
+subscription the way a plain localhost proxy allows.
+
+Sources: LiteLLM Claude Code Max subscription docs and PR #14821; CLIProxyAPI
+write-up; codex-proxy and codex-openai-proxy; Codex CLI auth reference.
+
 ## What every new adapter must do
 
 1. Pin an absolute, interpreter-free binary. Never a PATH lookup, never a shim.
