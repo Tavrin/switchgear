@@ -115,6 +115,15 @@ class OpenCodeAdapter:
         """
         return ["run", "--pure", "--dir", "--model", "--agent", "--format"]
 
+    def list_models_argv(self, provider_argv: list[str]) -> list[str] | None:
+        """How to ask this CLI what models it can actually serve.
+
+        None means it offers no such command -- reported honestly rather
+        than guessed, since a stale hardcoded list is the problem this
+        exists to avoid.
+        """
+        return list(provider_argv) + ["models"]
+
     def argv(
         self,
         *,
@@ -329,6 +338,15 @@ class GrokAdapter:
         costs nothing, so it can run on every self-update.
         """
         return ["--output-format", "--model", "--always-approve"]
+
+    def list_models_argv(self, provider_argv: list[str]) -> list[str] | None:
+        """How to ask this CLI what models it can actually serve.
+
+        None means it offers no such command -- reported honestly rather
+        than guessed, since a stale hardcoded list is the problem this
+        exists to avoid.
+        """
+        return list(provider_argv) + ["models"]
 
     def argv(
         self,
@@ -582,6 +600,15 @@ class ClaudeCodeAdapter:
         costs nothing, so it can run on every self-update.
         """
         return ["--print", "--output-format", "--verbose", "--model", "--permission-mode"]
+
+    def list_models_argv(self, provider_argv: list[str]) -> list[str] | None:
+        """How to ask this CLI what models it can actually serve.
+
+        None means it offers no such command -- reported honestly rather
+        than guessed, since a stale hardcoded list is the problem this
+        exists to avoid.
+        """
+        return None
 
     def argv(
         self,
@@ -856,6 +883,15 @@ class CodexAdapter:
         costs nothing, so it can run on every self-update.
         """
         return ["exec", "--json", "--sandbox", "--model", "--skip-git-repo-check"]
+
+    def list_models_argv(self, provider_argv: list[str]) -> list[str] | None:
+        """How to ask this CLI what models it can actually serve.
+
+        None means it offers no such command -- reported honestly rather
+        than guessed, since a stale hardcoded list is the problem this
+        exists to avoid.
+        """
+        return None
 
     def argv(
         self,

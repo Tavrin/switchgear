@@ -557,6 +557,74 @@ class WriteLane(unittest.TestCase):
                          get_adapter("grok").argv(agent="ai-ops-readonly", **common))
 
 
+class ModelIdentityDerivation(unittest.TestCase):
+    """Identity is DERIVED from controller-owned rules, not hand-listed.
+
+    Model versions churn weekly -- `opencode models` reported 26 ids where the
+    registry had hand-listed 18 across every provider -- so a curated list is
+    stale the day after it is written. What must NOT move is who owns the
+    metadata: reviewer independence rests on family/vendor, so the rules live in
+    the controller and a project profile can still only NAME ids.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def test_new_model_versions_classify_without_a_code_change(self):
+        from ai_ops.registry import model_record
+
+        for mid, family, vendor in [
+            ("opencode-go/kimi-k2.7-code", "kimi", "moonshot"),
+            ("opencode-go/qwen3.7-max", "qwen", "alibaba"),
+            ("opencode-go/minimax-m3", "minimax", "minimax"),
+            ("grok/grok-5.0", "grok", "xai"),
+            ("codex/gpt-6", "gpt", "openai"),
+            ("claude/claude-haiku-4-5", "claude", "anthropic"),
+        ]:
+            rec = model_record(mid)
+            self.assertEqual(rec["model_family"], family, mid)
+            self.assertEqual(rec["vendor_family"], vendor, mid)
+            self.assertEqual(rec["identity_source"], "derived", mid)
+
+    def test_a_curated_entry_still_wins(self):
+        """Derivation is a default, not an override: a curated entry is how a
+        family the rules get wrong gets fixed."""
+        from ai_ops.registry import model_record
+
+        rec = model_record("opencode-go/deepseek-v4-flash")
+        self.assertEqual(rec["identity_source"], "registry")
+
+    def test_the_single_vendor_provider_settles_the_vendor(self):
+        """A model served by the Grok CLI is xAI's whatever it is called."""
+        from ai_ops.registry import model_record
+
+        self.assertEqual(model_record("grok/some-unreleased-thing")["vendor_family"], "xai")
+
+    def test_a_vendor_segment_in_the_id_is_honoured(self):
+        from ai_ops.registry import model_record
+
+        rec = model_record("openrouter/anthropic/claude-sonnet-9")
+        self.assertEqual(rec["vendor_family"], "anthropic")
+
+    def test_an_unknown_provider_still_refuses(self):
+        """Derivation loosened MODELS, not providers: an unknown provider has no
+        upstream and no credential, so it cannot be reached at all."""
+        from ai_ops.errors import Refuse
+        from ai_ops.registry import model_record
+
+        with self.assertRaises(Refuse):
+            model_record("not-a-provider/some-model")
+
+    def test_the_deny_list_still_applies_to_derived_models(self):
+        """A profile must not reach a denied model just because nobody curated
+        an entry for it."""
+        from ai_ops.errors import Refuse
+        from ai_ops.registry import model_record
+
+        with self.assertRaises(Refuse):
+            model_record("openai/gpt-4")
+
+
 class ExecutionPinning(unittest.TestCase):
     """Content pin, not path pin (atelier ATT-006, owner ruling)."""
 

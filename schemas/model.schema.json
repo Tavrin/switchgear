@@ -2,22 +2,62 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Model metadata",
   "type": "object",
-  "required": ["id", "provider"],
+  "required": [
+    "id",
+    "provider"
+  ],
   "additionalProperties": false,
   "properties": {
-    "id": { "type": "string", "minLength": 1 },
-    "provider": { "type": "string", "minLength": 1 },
-    "model_family": { "type": "string", "minLength": 1 },
-    "vendor_family": { "type": "string", "minLength": 1 },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_family": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vendor_family": {
+      "type": "string",
+      "minLength": 1
+    },
     "capabilities": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
-    "cost_class": { "type": "integer", "minimum": 0 },
-    "context_class": { "type": "string", "enum": ["small", "medium", "large"] },
+    "cost_class": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "context_class": {
+      "type": "string",
+      "enum": [
+        "small",
+        "medium",
+        "large"
+      ]
+    },
     "trust_stage": {
       "type": "string",
-      "enum": ["unknown", "review-proven", "write-proven"]
+      "enum": [
+        "unknown",
+        "review-proven",
+        "write-proven"
+      ]
+    },
+    "identity_source": {
+      "type": "string",
+      "enum": [
+        "registry",
+        "derived"
+      ],
+      "description": "Whether family/vendor came from a curated registry entry or from controller-owned derivation rules. Recorded so an auditor can tell a derived classification from a curated one."
     }
   }
 }

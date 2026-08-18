@@ -131,12 +131,101 @@ def _reachability(provider_id: str, _cache: dict[str, str] = {}) -> str:
 
 
 def cmd_models(ns: argparse.Namespace) -> int:
+    """What this profile may use, and -- with --live -- what actually exists.
+
+    The registry curates identity (family/vendor), never availability. Model
+    versions churn weekly, so asking the provider is the only way to know what
+    can be called today; a hand-maintained list is stale the day after it is
+    written.
+    """
     profile = load_profile(_profile_path(ns))
+    allow = (profile.get("models") or {}).get("allow") or []
+
+    if getattr(ns, "live", False):
+        import subprocess
+
+        from .adapters import get_adapter
+        from .compat import PINNED_PROVIDERS
+        from .sandbox import build_credential_refresh_argv
+
+        rows = []
+        for pname, prec in sorted(PINNED_PROVIDERS.items()):
+            adapter = get_adapter(pname)
+            binary = prec.get("path")
+            if not binary or not os.path.exists(binary):
+                continue
+            argv = adapter.list_models_argv([binary]) if hasattr(adapter, "list_models_argv") else None
+            if not argv:
+                rows.append({"provider": pname, "listable": False,
+                             "note": "this CLI offers no model-list command"})
+                continue
+            import tempfile
+
+            home = tempfile.mkdtemp(prefix="aiops-models-")
+            auth = os.path.expanduser(f"~/.{pname}")
+            try:
+                full = build_credential_refresh_argv(
+                    auth_dir=auth if os.path.isdir(auth) else home,
+                    synth_home=home, provider_argv=argv,
+                )
+                out = subprocess.run(
+                    full, env={"PATH": "/usr/bin:/bin", "HOME": home,
+                               "LANG": "C.UTF-8", "TERM": "dumb"},
+                    capture_output=True, text=True, timeout=60,
+                    stdin=subprocess.DEVNULL,
+                ).stdout or ""
+            except Exception as exc:
+                rows.append({"provider": pname, "listable": True,
+                             "error": type(exc).__name__})
+                continue
+            found = []
+            for line in out.splitlines():
+                tok = line.strip().lstrip("*-").strip().split()[0] if line.strip() else ""
+                if "/" in tok or (tok and pname == "grok" and tok.startswith("grok")):
+                    found.append(tok if "/" in tok else f"{pname}/{tok}")
+            detail = []
+            for m in sorted(set(found)):
+                try:
+                    rec = model_record(m)
+                    detail.append({"id": m, "model_family": rec["model_family"],
+                                   "vendor_family": rec["vendor_family"],
+                                   "identity_source": rec["identity_source"],
+                                   "in_profile_allowlist": m in allow})
+                except Refuse as exc:
+                    detail.append({"id": m, "usable": False, "reason": str(exc)})
+            rows.append({"provider": pname, "listable": True, "models": detail})
+        note = (
+            "discovery runs credential-free inside the sandbox, so pools that need "
+            "a key to enumerate (e.g. opencode-go) may be under-reported; the rail "
+            "keeps the credential controller-side by design"
+        )
+        if ns.json:
+            print(json.dumps({"note": note, "providers": rows}, indent=2))
+        else:
+            for r in rows:
+                if not r.get("listable"):
+                    print(f"{r['provider']}: {r.get('note')}")
+                    continue
+                models = r.get("models") or []
+                print(f"{r['provider']}: {len(models)} models available")
+                for entry in models:
+                    if not entry.get("usable", True):
+                        ident = f"UNUSABLE ({entry.get('reason')})"
+                    else:
+                        ident = (f"family={entry['model_family']:9} "
+                                 f"vendor={entry['vendor_family']:10} "
+                                 f"{entry['identity_source']}")
+                    mark = "" if entry.get("in_profile_allowlist") else "  (not in allowlist)"
+                    print(f"  {entry['id']:34} {ident}{mark}")
+            print(f"\nnote: {note}")
+        return 0
+
     print("profile allowlist:")
-    for m in (profile.get("models") or {}).get("allow") or []:
+    for m in allow:
         rec = model_record(m)
         reach = _reachability(rec.get("provider") or "")
-        print(f"  {m}  family={rec.get('model_family')}  {reach}")
+        print(f"  {m}  family={rec.get('model_family')}  "
+              f"vendor={rec.get('vendor_family')}  [{rec.get('identity_source')}]  {reach}")
     return 0
 
 
@@ -837,6 +926,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_state)
 
     m = sub.add_parser("models")
+    m.add_argument("--live", action="store_true",
+                   help="ask each installed provider what models it can actually serve")
     m.set_defaults(func=cmd_models)
 
     sc = sub.add_parser("scout")

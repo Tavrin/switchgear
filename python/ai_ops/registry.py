@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,72 @@ def registry_digest() -> str:
     return sha256_bytes(path.read_bytes())
 
 
+# Family -> vendor. This is the ONLY hardcoded identity table, and it is
+# deliberately the slowest-moving fact available: model VERSIONS churn weekly
+# (qwen3.7-max, qwen3.8-max, kimi-k2.6, kimi-k3 ...) while a family's owner
+# essentially never changes. Listing individual model ids meant the registry was
+# stale the day after it was written -- `opencode models` reports 26 ids where
+# this file had hand-listed 18 across every provider.
+FAMILY_VENDOR = {
+    "claude": "anthropic",
+    "gpt": "openai",
+    "grok": "xai",
+    "deepseek": "deepseek",
+    "glm": "zhipu",
+    "kimi": "moonshot",
+    "qwen": "alibaba",
+    "minimax": "minimax",
+    "mimo": "xiaomi",
+    "nemotron": "nvidia",
+    "llama": "meta",
+    "mistral": "mistralai",
+    "gemini": "google",
+    "hy": "tencent",
+}
+
+# Single-vendor CLIs: the provider itself settles the vendor, whatever the model
+# is called. Multi-vendor pools (opencode-go, openrouter) are absent on purpose.
+PROVIDER_VENDOR = {
+    "grok": "xai",
+    "codex": "openai",
+    "claude": "anthropic",
+}
+
+
+def derive_identity(model_id: str, provider: str) -> dict[str, str]:
+    """Work out family and vendor from the id, by controller-owned RULES.
+
+    This is what lets a model released tomorrow work without a code change,
+    while keeping the property the registry exists for: a project profile may
+    NAME a model, it may never say what family that model belongs to. Reviewer
+    independence rests on this metadata, so it stays derived here, in the
+    controller, from rules the project cannot influence.
+
+    Heuristic, and honest about it: `identity_source` is recorded on every record
+    so an auditor can tell a derived classification from a curated one.
+    """
+    name = model_id.split("/")[-1].lower()
+    # Family: the leading alphabetic run. qwen3.8-max -> qwen, glm-5.3 -> glm,
+    # claude-sonnet-5 -> claude, deepseek-v4-flash -> deepseek.
+    match = re.match(r"[a-z]+", name)
+    family = match.group(0) if match else name
+
+    # Vendor: the provider wins when it serves exactly one; then an explicit
+    # vendor segment in the id (openrouter/anthropic/claude-...); then family.
+    vendor = PROVIDER_VENDOR.get(provider)
+    if not vendor:
+        parts = model_id.split("/")
+        if len(parts) >= 3 and parts[1] in FAMILY_VENDOR.values():
+            vendor = parts[1]
+    if not vendor:
+        vendor = FAMILY_VENDOR.get(family)
+    return {
+        "model_family": family,
+        "vendor_family": vendor or family,
+        "identity_source": "derived",
+    }
+
+
 def model_record(model_id: str) -> dict[str, Any]:
     reg = load_models()
     deny = reg.get("deny") or []
@@ -39,12 +106,24 @@ def model_record(model_id: str) -> dict[str, Any]:
             raise Refuse(f"model '{model_id}' is denied by controller registry")
         if model_id == pat:
             raise Refuse(f"model '{model_id}' is denied by controller registry")
+    provider = model_id.split("/", 1)[0] if "/" in model_id else "opencode"
+    if provider not in (reg.get("providers") or {}):
+        raise Refuse(
+            f"model '{model_id}' names provider '{provider}', which is not in the "
+            "controller registry"
+        )
     rec = (reg.get("models") or {}).get(model_id)
-    if not rec:
-        raise Refuse(f"model '{model_id}' is not in the controller registry")
-    out = dict(rec)
+    if rec:
+        # A curated entry wins: it is how a family the rules get wrong is fixed.
+        out = dict(rec)
+        out.setdefault("identity_source", "registry")
+    else:
+        # Not curated is not unknown. Model versions churn far faster than anyone
+        # edits this file, so identity is DERIVED rather than refused -- the
+        # profile allowlist and the deny list still decide what may be used.
+        out = derive_identity(model_id, provider)
     out["id"] = model_id
-    out.setdefault("provider", model_id.split("/", 1)[0] if "/" in model_id else "opencode")
+    out.setdefault("provider", provider)
     return out
 
 
