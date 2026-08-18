@@ -52,7 +52,7 @@ def observe(state_path: str, scan: int = DEFAULT_SCAN) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = {}
     for row in rows:
         state = row.get("state")
-        if state in ("running", "unknown"):
+        if state in ("running", "queued", "unknown"):
             continue
         model = row.get("model")
         if not model:

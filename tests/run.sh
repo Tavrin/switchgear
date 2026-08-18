@@ -53,3 +53,4 @@ echo "== OpenCode config probe (no model) =="
 
 echo
 echo "ALL HERMETIC/ADVERSARIAL TESTS PASSED"
+echo "(soak test is opt-in and takes minutes: bash tests/soak.sh)"

@@ -1363,6 +1363,68 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- wait: one call instead of a polling loop -----------------------------
+
+    def test_wait_blocks_and_answers_like_a_foreground_run(self):
+        """Without this the only way to learn a backgrounded job had finished was
+        to poll `status` in a loop — which for an agent means arming a monitor,
+        or sleep-and-retry, repeatedly, and guessing an interval."""
+        info = self._launch(extra="3")
+        p = run_cli(self.args("--json", "wait", info["job_id"]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = json.loads(p.stdout)
+        self.assertEqual(rec["job_id"], info["job_id"])
+        self.assertEqual(rec["status"], "ok")
+        # The SAME record shape a foreground run prints, so a caller does not
+        # have to special-case having backgrounded it.
+        for key in ("status", "mode", "role", "model", "dir", "artifacts"):
+            self.assertIn(key, rec)
+
+    def test_wait_returns_the_jobs_own_exit_code(self):
+        """`write --background` + `wait` must be indistinguishable from a
+        foreground `write`, or the two paths mean different things."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look",
+                              "--background"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "error"})
+        job_id = json.loads(p.stdout)["job_id"]
+        w = run_cli(self.args("--json", "wait", job_id))
+        self.assertNotEqual(w.returncode, 0, "a failed job must not wait to 0")
+
+    def test_waiting_out_is_not_reported_as_the_job_failing(self):
+        """Exit 124 means the JOB timed out. A waiter giving up on a job that is
+        still perfectly alive is a different fact, and reporting it as the job's
+        failure would make a caller cancel or retry work that is progressing."""
+        info = self._launch(extra="10")
+        p = run_cli(self.args("--json", "wait", info["job_id"], "--timeout", "1"))
+        self.assertEqual(p.returncode, 1, "must not be 124 (the job did not time out)")
+        out = json.loads(p.stdout)
+        self.assertTrue(out["waited_out"])
+        self.assertIn(out["state"], ("running", "queued"))
+        self.assertIn("was NOT cancelled", p.stderr)
+        # And the job really is still alive.
+        self.assertIn(self._state_of(info["job_id"]), ("running", "queued"))
+        run_cli(self.args("cancel", info["job_id"]))
+
+    def test_waiting_on_a_dead_job_answers_rather_than_hanging(self):
+        """The failure this must not have: waiting forever on something that
+        will never finish."""
+        job_id = "00000000-0000-4000-8000-0000000000da"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time()))
+        (jd / "runner.json").write_text(json.dumps(
+            {"pid": 2 ** 22, "starttime": "1", "boot_id": "gone"}))
+        started = time.time()
+        p = run_cli(self.args("--json", "wait", job_id, "--timeout", "30"))
+        self.assertLess(time.time() - started, 10, "hung on a job that is gone")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(json.loads(p.stdout)["state"], "died")
+
+    def test_waiting_on_a_nonexistent_job_refuses(self):
+        p = run_cli(self.args("wait", "00000000-0000-4000-8000-0000000000ff"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("ai-opencode: REFUSING", p.stderr)
+
     # --- worktree exclusivity and job detachment -----------------------------
 
     def test_two_write_jobs_cannot_share_one_worktree(self):

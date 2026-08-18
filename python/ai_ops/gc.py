@@ -62,7 +62,9 @@ def _dir_bytes(path: str) -> int:
 
 
 def _alive(state_path: str, job_id: str, jd: str) -> bool:
-    return jobstate.live_state(state_path, job_id, {}, jd) == "running"
+    # `queued` is alive too -- waiting for a concurrency slot, not finished.
+    # Deleting one would destroy a job that is about to start.
+    return jobstate.live_state(state_path, job_id, {}, jd) in ("running", "queued")
 
 
 def plan(
@@ -179,7 +181,7 @@ def _orphan_launch_records(root: StateRoot, known_jobs: set[str]) -> list[str]:
         job_id = name[: -len(".json")]
         if os.path.isdir(os.path.join(root.jobs, job_id)):
             continue
-        if jobstate.live_state(root.path, job_id, {}, os.path.join(root.jobs, job_id)) == "running":
+        if jobstate.live_state(root.path, job_id, {}, os.path.join(root.jobs, job_id)) in ("running", "queued"):
             continue
         out.append(os.path.join(launch, name))
     return out

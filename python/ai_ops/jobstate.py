@@ -28,7 +28,7 @@ FAILURE_STATUSES = frozenset(
 )
 
 # States derived from liveness rather than from a persisted record.
-DERIVED_STATES = frozenset({"running", "died", "cancelled", "unknown"})
+DERIVED_STATES = frozenset({"running", "queued", "died", "cancelled", "unknown"})
 
 
 def _liveness(path: str) -> bool | None:
@@ -46,6 +46,27 @@ def _liveness(path: str) -> bool | None:
 
 def launch_record_path(state_path: str, job_id: str) -> str:
     return os.path.join(state_path, "launch", f"{job_id}.json")
+
+
+def _running_or_queued(state_path: str, job_id: str) -> str:
+    """Executing, or alive but waiting for a concurrency slot.
+
+    A soak run made the difference matter: 12 jobs against a cap of 2 reported
+    ELEVEN as `running`, because "its process is alive" was being read as "it is
+    doing work". The cap was holding perfectly -- only two were ever executing --
+    but an orchestrator polling for running jobs would have seen a number that
+    was true of nothing.
+
+    The concurrency marker is the ground truth: a job holds one for exactly as
+    long as it occupies a slot. With no cap configured there are no markers and
+    nothing to wait for, so every live job is running.
+    """
+    from . import concurrency
+
+    if concurrency.limit() is None:
+        return "running"
+    marker = os.path.join(state_path, "running", f"{job_id}.json")
+    return "running" if os.path.isfile(marker) else "queued"
 
 
 def live_state(state_path: str, job_id: str, rec: dict[str, Any], jd: str) -> str:
@@ -70,12 +91,12 @@ def live_state(state_path: str, job_id: str, rec: dict[str, Any], jd: str) -> st
             pass
         return "died"
     if launched is True:
-        return "running"
+        return _running_or_queued(state_path, job_id)
 
     # Foreground jobs write the same triple into the job directory.
     runner = _liveness(os.path.join(jd, "runner.json"))
     if runner is True:
-        return "running"
+        return _running_or_queued(state_path, job_id)
     if runner is False:
         return "died"
     return "unknown"

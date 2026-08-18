@@ -430,6 +430,49 @@ one job. `--all` removes the cap. Filters: `--state-filter`, `--since 30m|24h|7d
 It is deliberately cheap: it reads each job's result record and start marker and
 never opens `evidence/events.jsonl`. Use `logs` when you want the stream.
 
+### Knowing when a job is done
+
+Three shapes, in order of how much machinery they need:
+
+**1. Foreground — no polling at all.** `scout`, `write`, `review` and `run` block
+until the job is finished, print the whole record and return the job's exit code
+(`0` ok · `1` refusal/error · `2` dirty · `124` timeout). One call, definitive
+answer. This is the right default for an agent driving the tool.
+
+**2. `--background` + `wait` — the same answer, later.**
+
+```
+job=$(ai-opencode --json scout . "..." --background | jq -r .job_id)
+# ... launch others, do other work ...
+ai-opencode --json wait "$job"
+```
+
+`wait` blocks until the job reaches a terminal state, then prints the **same
+record shape** and returns the **same exit code** a foreground run would — so
+`--background` + `wait` is indistinguishable from a foreground run except that
+you got the id immediately and could launch others meanwhile. No polling loop, no
+guessed interval, no monitor to arm.
+
+It is bounded (`--timeout`, default 3600s) because an unbounded wait turns a
+stuck job into a hang with no diagnosis. Giving up **does not cancel the job**,
+and it does **not** exit `124` — that code means the *job* timed out, which is a
+different fact from the waiter giving up on a job that is still running fine.
+It exits `1` with `waited_out: true` and the job's current state.
+
+It also answers rather than hanging when there is nothing to wait for: a job
+whose process is gone reports `died` immediately, and one with no liveness record
+is refused rather than waited on.
+
+**3. `status` — for watching, not for finishing.** A ~30-token poll that is valid
+*while* the job runs (state, turns, tool count, last tool, tokens, cost,
+sessionId). Use it to show progress, not to detect completion — that is what
+`wait` is for.
+
+Whichever you use, "did it actually finish" is a normalized fact rather than an
+inference: `finished.sawTerminal` is false when the stream ended without the
+provider closing it, and such a run **never** reports `completed`, however much
+assistant text it emitted first.
+
 ### Observing a running job without flooding your context
 
 `evidence/events.jsonl` is written **as events arrive**, so a job can be watched

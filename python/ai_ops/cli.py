@@ -463,6 +463,81 @@ def cmd_resume(ns: argparse.Namespace) -> int:
     return jobstate.exit_code_for(rec["status"])
 
 
+def cmd_wait(ns: argparse.Namespace) -> int:
+    """Block until a job reaches a terminal state, then answer as if it had run
+    in the foreground.
+
+    Without this, the only way to learn that a backgrounded job had finished was
+    to poll `status` in a loop — which for an agent means arming a monitor, or a
+    sleep-and-retry cycle, repeatedly, and guessing an interval. One call that
+    returns when there is something to say replaces all of it.
+
+    The exit code is the JOB's, from the same table `scout`/`write` use, so
+    `write --background` + `wait` is indistinguishable from a foreground `write`
+    except that you got the id immediately and could launch others meanwhile.
+    """
+    state_path = _state_path(ns)
+    jd, _ev, res_path = _job_paths(ns)
+    _require_known_job(ns, jd)
+
+    deadline = time.time() + max(1, int(ns.timeout))
+    # Backoff: a short job answers almost immediately, a long one does not spin.
+    # Bounded at 5s so a finished job is never sat on for long.
+    delay = 0.25
+    while True:
+        rec: dict[str, Any] = {}
+        if os.path.isfile(res_path):
+            try:
+                rec = read_json(res_path)
+            except Exception:
+                rec = {}
+        state = jobstate.live_state(state_path, ns.job, rec, jd)
+
+        if state not in jobstate.DERIVED_STATES:
+            # A persisted status: the job's own account of how it ended.
+            if ns.json:
+                _print_job(rec, True)
+            else:
+                print(f"state={state}")
+            return jobstate.exit_code_for(state)
+
+        if state in ("died", "cancelled"):
+            # Terminal, but the job never wrote a record — so there is no status
+            # to report and no exit code of its own. Say which, and fail.
+            _emit({"job": ns.job, "state": state,
+                   "detail": ("the process is gone and no result was written; "
+                              "`ai-opencode logs " + ns.job + "` has whatever "
+                              "evidence it produced")}, ns,
+                  text=lambda d: f"state={d['state']}")
+            return 1
+
+        if state == "unknown":
+            _die(
+                f"job {ns.job} has no liveness record, so whether it is running "
+                "cannot be established — waiting would be waiting on nothing. "
+                "This is normal only for jobs written before liveness records "
+                "existed; check `ai-opencode logs` for what it produced."
+            )
+
+        if time.time() >= deadline:
+            # NOT exit 124: that means the JOB timed out. This is the waiter
+            # giving up on a job that is still perfectly alive, which is a
+            # different fact and must not be reported as the job's failure.
+            _emit({"job": ns.job, "state": state, "waited_out": True,
+                   "timeout_s": int(ns.timeout)}, ns,
+                  text=lambda d: f"state={d['state']} waited_out=true")
+            print(
+                f"ai-opencode: REFUSING — stopped waiting after {int(ns.timeout)}s; "
+                f"job {ns.job} is still {state}. Raise --timeout, or poll "
+                f"`ai-opencode status {ns.job}` instead. The job was NOT cancelled.",
+                file=sys.stderr,
+            )
+            return 1
+
+        time.sleep(min(delay, max(0.0, deadline - time.time())))
+        delay = min(delay * 1.6, 5.0)
+
+
 def cmd_cancel(ns: argparse.Namespace) -> int:
     state_path = _state_path(ns)
     meta_path = os.path.join(_launch_dir(state_path), f"{ns.job}.json")
@@ -1461,6 +1536,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="launch detached; print the job id at once and poll with `status`",
     )
     rs.set_defaults(func=cmd_resume)
+
+    wt = sub.add_parser("wait",
+                        help="block until a job finishes, then answer like a foreground run")
+    wt.add_argument("job", help="job id to wait for")
+    wt.add_argument("--timeout", type=int, default=3600,
+                    help="seconds to wait before giving up (default 3600). "
+                         "Giving up does NOT cancel the job")
+    wt.set_defaults(func=cmd_wait)
 
     cx = sub.add_parser("cancel", help="stop a backgrounded job")
     cx.add_argument("job")
