@@ -805,6 +805,48 @@ def cmd_execution_profile(ns: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_jobs(ns: argparse.Namespace) -> int:
+    """List jobs in a state root with their live state.
+
+    Bounded by default: an agent must not be made to read 500 rows to find the
+    one it cares about. `--all` removes the cap deliberately.
+    """
+    from . import joblist
+
+    states = None
+    if getattr(ns, "state_filter", None):
+        states = {s.strip() for s in ns.state_filter.split(",") if s.strip()}
+    since_s = joblist.parse_duration(ns.since) if getattr(ns, "since", None) else None
+    limit = None if getattr(ns, "all", False) else ns.limit
+
+    out = joblist.enumerate_jobs(
+        _state_path(ns),
+        states=states,
+        since_s=since_s,
+        worktree=getattr(ns, "worktree", None),
+        limit=limit,
+    )
+    if ns.json:
+        print(json.dumps(out, indent=2))
+        return 0
+
+    if not out["jobs"]:
+        print("no jobs match")
+        return 0
+    for row in out["jobs"]:
+        cost = f"${row['cost_usd']:.4f}" if row.get("cost_usd") else "—"
+        elapsed = f"{row['elapsed_s']:.0f}s" if row.get("elapsed_s") is not None else "—"
+        where = os.path.basename(row["dir"]) if row.get("dir") else "—"
+        flag = " [resumed]" if row.get("resumed_from") else ""
+        print(
+            f"{row['job_id'][:8]}  {str(row['state']):16} {str(row['role'] or '—'):10} "
+            f"{str(row['model'] or '—'):34} {elapsed:>7} {cost:>9}  {where}{flag}"
+        )
+    if out["truncated"]:
+        print(f"... {out['total'] - len(out['jobs'])} more (--all to show, --limit N to change)")
+    return 0
+
+
 def cmd_quota(ns: argparse.Namespace) -> int:
     """What is left, and what we have spent.
 
@@ -1090,6 +1132,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     ep = sub.add_parser("execution-profile", help="content digest of the launcher and package, for pinning")
     ep.set_defaults(func=cmd_execution_profile)
+
+    jb = sub.add_parser("jobs", help="list jobs in the state root with their live state")
+    jb.add_argument("--state-filter", dest="state_filter",
+                    help="comma-separated states to include, e.g. running,awaiting_review,died")
+    jb.add_argument("--since", help="only jobs started within this window, e.g. 30m, 24h, 7d")
+    jb.add_argument("--worktree", help="only jobs whose worktree resolves to this path")
+    jb.add_argument("--limit", type=int, default=20, help="max rows, newest first (default 20)")
+    jb.add_argument("--all", action="store_true", help="remove the row cap")
+    jb.set_defaults(func=cmd_jobs)
 
     qt = sub.add_parser("quota", help="measured spend, budget limits, and published provider quota")
     qt.set_defaults(func=cmd_quota)

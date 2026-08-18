@@ -1358,6 +1358,109 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- `jobs` listing -------------------------------------------------
+    # A state root's contents were entirely unlistable before this command.
+    def _run_scout_job(self):
+        p = run_cli(self.args("--json", "scout", str(self.primary), "hello"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)["job_id"]
+
+    def test_lists_a_completed_job(self):
+        job_id = self._run_scout_job()
+        p = run_cli(["--state", str(self.state), "--json", "jobs"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        row = next(r for r in out["jobs"] if r["job_id"] == job_id)
+        self.assertEqual(row["state"], "ok")
+        self.assertEqual(row["role"], "scout")
+        self.assertFalse(row["awaiting_review"])
+        self.assertIsNotNone(row["elapsed_s"])
+
+    def test_crashed_job_reads_died_not_running(self):
+        """The bug this command exists for: a job whose process is gone but
+        which never wrote a result was previously indistinguishable from a
+        healthy running job."""
+        job_id = "00000000-0000-4000-8000-00000000dead"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 300))
+        # A pid that is certainly not alive, with the same triple a real runner
+        # writes, so liveness is decided by the record and not by its absence.
+        (jd / "runner.json").write_text(json.dumps(
+            {"pid": 2 ** 22, "starttime": "1", "boot_id": "nope"}))
+        p = run_cli(["--state", str(self.state), "--json", "jobs"])
+        out = json.loads(p.stdout)
+        row = next(r for r in out["jobs"] if r["job_id"] == job_id)
+        self.assertEqual(row["state"], "died")
+
+    def test_dead_job_elapsed_is_frozen_not_wall_clock(self):
+        """A job dead for an hour must not report an hour of runtime."""
+        job_id = "00000000-0000-4000-8000-0000000001d0"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        started = time.time() - 3600
+        (jd / "started_at").write_text(str(started))
+        (jd / "runner.json").write_text(json.dumps(
+            {"pid": 2 ** 22, "starttime": "1", "boot_id": "nope"}))
+        os.utime(jd / "runner.json", (started + 5, started + 5))
+        p = run_cli(["--state", str(self.state), "--json", "jobs"])
+        row = next(r for r in json.loads(p.stdout)["jobs"] if r["job_id"] == job_id)
+        self.assertLess(row["elapsed_s"], 60, "dead job measured against now")
+
+    def test_filters_and_limit(self):
+        job_id = self._run_scout_job()
+        p = run_cli(["--state", str(self.state), "--json", "jobs",
+                     "--state-filter", "died"])
+        self.assertEqual(json.loads(p.stdout)["jobs"], [])
+
+        p = run_cli(["--state", str(self.state), "--json", "jobs",
+                     "--worktree", str(self.primary)])
+        self.assertIn(job_id, [r["job_id"] for r in json.loads(p.stdout)["jobs"]])
+
+        p = run_cli(["--state", str(self.state), "--json", "jobs",
+                     "--worktree", str(self.sibling)])
+        self.assertEqual(json.loads(p.stdout)["jobs"], [])
+
+        # An aged job is excluded by a window that does not reach it, and
+        # included by one that does.
+        old_id = "00000000-0000-4000-8000-0000000ac1d0"
+        jd = self.state / "jobs" / old_id
+        jd.mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 7200))
+        (jd / "result.json").write_text(json.dumps({"status": "ok", "role": "scout"}))
+
+        ids = lambda window: [
+            r["job_id"] for r in json.loads(
+                run_cli(["--state", str(self.state), "--json", "jobs",
+                         "--since", window]).stdout)["jobs"]
+        ]
+        self.assertNotIn(old_id, ids("1h"))
+        self.assertIn(old_id, ids("24h"))
+        self.assertIn(job_id, ids("24h"))
+
+    def test_truncation_is_declared(self):
+        for _ in range(3):
+            self._run_scout_job()
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--limit", "1"])
+        out = json.loads(p.stdout)
+        self.assertEqual(len(out["jobs"]), 1)
+        self.assertTrue(out["truncated"])
+        self.assertGreaterEqual(out["total"], 3)
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertFalse(json.loads(p.stdout)["truncated"])
+
+    def test_empty_listing_is_not_an_error(self):
+        p = run_cli(["--state", str(self.state), "--json", "jobs"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout)["jobs"], [])
+
+    def test_bad_duration_is_refused_by_name(self):
+        p = run_cli(["--state", str(self.state), "jobs", "--since", "yesterday"])
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("yesterday", p.stderr)
+        self.assertIn("30m", p.stderr, "refusal must name the accepted form")
+
+
 class PathUnit(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(ROOT / "python"))

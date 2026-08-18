@@ -199,6 +199,30 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Finding jobs you have lost track of
+
+`status` answers about one job you already know the id of. `jobs` answers what a
+state root contains at all:
+
+```
+ai-opencode --state <root> --json jobs --state-filter awaiting_review
+```
+
+Every row carries the job's **live** state, not merely what it last wrote — a job
+whose process is gone but which never persisted a result reads `died`, and one
+whose liveness cannot be established at all reads `unknown`. Those are different
+facts and the listing keeps them apart; neither is ever rendered as `running`.
+`awaiting_review` is surfaced as its own boolean so a poller does not have to
+know how the status is spelled.
+
+The listing is bounded by default (20 rows, newest first, `truncated` and `total`
+in the JSON), because an agent should not have to read a whole history to find
+one job. `--all` removes the cap. Filters: `--state-filter`, `--since 30m|24h|7d`,
+`--worktree <path>`, `--limit N`.
+
+It is deliberately cheap: it reads each job's result record and start marker and
+never opens `evidence/events.jsonl`. Use `logs` when you want the stream.
+
 ### Observing a running job without flooding your context
 
 `evidence/events.jsonl` is written **as events arrive**, so a job can be watched
