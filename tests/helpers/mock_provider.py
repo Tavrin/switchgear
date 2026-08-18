@@ -224,6 +224,44 @@ def main() -> int:
                        "tokens": {"total": 42}, "cost": 1.5e-05}})
         return 0
 
+    if beh == "spawn-orphan":
+        # A provider that leaves a long-lived child behind, which is exactly what
+        # Codex does: every job spawns an app-server, which spawns the MCP
+        # servers from its config, and upstream reaps neither. Measured on
+        # another project: 114 app-servers, 754 processes, 15.4GB, swap
+        # exhausted.
+        #
+        # The child announces itself with a HEARTBEAT FILE in the synthetic HOME,
+        # which the host can see, rather than by a process name the host could
+        # grep for. That is deliberate: process matching is how the same project
+        # fooled itself three separate times -- `pgrep -f` matched the operator's
+        # own shell command and reported a dead job as running. A heartbeat that
+        # stops is unambiguous; a pattern that matches is not.
+        import subprocess as _sp
+
+        beat = os.path.join(home, "orphan-heartbeat")
+        devnull = os.open(os.devnull, os.O_RDWR)
+        _sp.Popen(
+            ["/usr/bin/python3", "-c",
+             "import time\n"
+             "while True:\n"
+             f"    open({beat!r}, 'w').write(str(time.time()))\n"
+             "    time.sleep(0.2)\n"],
+            stdin=devnull, stdout=devnull, stderr=devnull,
+            start_new_session=True, close_fds=True,
+        )
+        os.close(devnull)
+        emit({"type": "step_start", "sessionID": "ses_mock000000000000000000"})
+        # Stay alive briefly so the test can watch the heartbeat WHILE the job
+        # runs. Without that the test would pass just as happily against a mock
+        # that never spawned anything.
+        time.sleep(float(os.environ.get("AI_OPS_MOCK_HOLD") or "4"))
+        emit({"type": "step_finish", "sessionID": "ses_mock000000000000000000",
+              "part": {"type": "step-finish", "reason": "stop",
+                       "sessionID": "ses_mock000000000000000000",
+                       "tokens": {"total": 1}, "cost": 0.0}})
+        return 0
+
     if beh == "leak-secret":
         # A worker that prints something secret-shaped into its own output --
         # cat of a .env, an echoed header, a key pasted into reasoning. The rail

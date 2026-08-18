@@ -117,6 +117,71 @@ def require_disjoint(a: str, b: str, label_a: str, label_b: str) -> None:
         )
 
 
+# Roots nothing in this rail may ever recursively delete, however the path was
+# constructed. Belt and braces on top of the containment check below.
+_NEVER_DELETE = frozenset({
+    "/", "/home", "/root", "/etc", "/usr", "/bin", "/var", "/tmp", "/mnt", "/opt",
+})
+
+
+def safe_rmtree(path: str, *, must_be_under: str, label: str = "path") -> bool:
+    """Recursively delete `path`, but only if it is strictly inside `must_be_under`.
+
+    Every recursive delete in this rail interpolates a variable — the job's
+    sandbox home, a session store, a temp copy of a credential directory.
+    Nothing prevented a mistake except those variables happening to be correct
+    every time, which is not a property, it is a run of luck. An unset variable
+    turns `rmtree(home)` into `rmtree("")`, and a wrong join turns a job sweep
+    into a sweep of somewhere else.
+
+    This is the same guard another project arrived at after the same exposure was
+    pointed out, and for the same reason: the check has to live at the delete,
+    not in the discipline of whoever calls it.
+
+    Refuses, rather than deletes:
+      * anything not strictly below `must_be_under` (the root ITSELF included —
+        a caller that means to empty a root must name its children)
+      * an empty or relative path, or one containing `..`
+      * a small set of system roots, whatever the containment check says
+      * a path whose real location differs from where it appeared to be, since a
+        symlinked component can be repointed between the check and the delete
+
+    Returns True if something was removed, False if there was nothing there.
+    Raises Refuse when the path is not one this rail may delete — never silently
+    skips, because a delete that quietly did nothing reads as success.
+    """
+    import shutil
+
+    if not path or not os.path.isabs(path):
+        raise Refuse(f"refusing to delete {label}: {path!r} is not an absolute path")
+    if ".." in path.split(os.sep):
+        raise Refuse(f"refusing to delete {label}: {path!r} contains '..'")
+    if not must_be_under or not os.path.isabs(must_be_under):
+        raise Refuse(
+            f"refusing to delete {label}: no absolute containing root was given"
+        )
+
+    real = os.path.realpath(path)
+    root = os.path.realpath(must_be_under)
+    if real in _NEVER_DELETE or root in _NEVER_DELETE and real == root:
+        raise Refuse(f"refusing to delete {label}: {real} is a system root")
+    if real == root:
+        raise Refuse(
+            f"refusing to delete {label}: {real} IS the containing root; only "
+            "paths strictly below it may be removed"
+        )
+    if not real.startswith(root.rstrip(os.sep) + os.sep):
+        raise Refuse(
+            f"refusing to delete {label}: {real} is outside {root}. This is the "
+            "guard that stops a wrong or empty variable from deleting something "
+            "the rail does not own."
+        )
+    if not os.path.exists(real):
+        return False
+    shutil.rmtree(real, ignore_errors=False)
+    return True
+
+
 def stat_identity(path: str) -> tuple[int, int]:
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):

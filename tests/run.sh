@@ -21,6 +21,9 @@ echo "== adapters / normalized vocabulary (real captured stream) =="
 echo "== credential classes (api-key + oauth) =="
 /usr/bin/python3 "$ROOT/tests/test_credentials.py"
 
+echo "== guarded recursive deletes =="
+/usr/bin/python3 "$ROOT/tests/test_safe_delete.py"
+
 echo "== secret scanning of worker output =="
 /usr/bin/python3 "$ROOT/tests/test_secrets.py"
 

@@ -1358,6 +1358,81 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- process containment ------------------------------------------------
+
+    def test_a_providers_orphaned_children_die_with_the_job(self):
+        """Measured on another project running Codex without a pid namespace:
+        every job spawned an app-server which spawned MCP servers, upstream
+        reaped neither, and it reached 114 app-servers / 754 processes / 15.4GB
+        with swap exhausted. Attribution was unsolvable there — the worker is a
+        SIBLING of its app-server, not a descendant, so no process-tree walk
+        could separate a live lane's servers from a dead one's.
+
+        --unshare-pid makes the question moot: the sandbox is pid 1 of its own
+        namespace and the kernel reaps whatever is left in it.
+
+        Detection is a HEARTBEAT, not process matching. The same project fooled
+        itself three times with `pgrep -f` — once matching the operator's own
+        shell command — and I reproduced that exact failure writing this test
+        before switching to a heartbeat. A heartbeat that stops advancing is
+        unambiguous; a pattern that matches something is not.
+        """
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look",
+                              "--background"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "spawn-orphan",
+                         "AI_OPS_MOCK_HOLD": "6",
+                         "AI_OPS_KEEP_SANDBOX_HOME": "1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = json.loads(p.stdout)["job_id"]
+        beat = self.state / "jobs" / job_id / "sandbox-home" / "orphan-heartbeat"
+
+        # 1. The child must actually exist, or the test proves nothing.
+        deadline = time.time() + 20
+        while time.time() < deadline and not beat.exists():
+            time.sleep(0.2)
+        self.assertTrue(beat.exists(),
+                        "the mock never spawned a child; the test would be vacuous")
+        first = beat.read_text()
+        deadline = time.time() + 10
+        while time.time() < deadline and beat.read_text() == first:
+            time.sleep(0.2)
+        self.assertNotEqual(beat.read_text(), first,
+                            "the child never advanced its heartbeat; not alive")
+
+        # 2. Once the job is over, that heartbeat must stop.
+        deadline = time.time() + 60
+        while time.time() < deadline and self._state_of(job_id) == "running":
+            time.sleep(0.5)
+        time.sleep(2.0)  # let the kernel reap, then watch for any further beat
+        settled = beat.read_text()
+        time.sleep(2.0)
+        self.assertEqual(
+            beat.read_text(), settled,
+            "a sandboxed provider's child outlived its job and is still running "
+            "— the pid namespace is not containing it, and this is the 15.4GB "
+            "leak class")
+
+    def test_the_sandbox_declares_the_flags_that_make_that_true(self):
+        """--unshare-pid without --die-with-parent leaks when the controller
+        dies; --die-with-parent without --unshare-pid leaks when the provider
+        forks. Both are load-bearing, so both are pinned."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity, sandbox
+        from ai_ops.policy import compile_policy
+        from ai_ops.profile import load_profile
+
+        argv = sandbox.build_bwrap_argv(
+            ident=identity.inspect_worktree(str(self.primary)),
+            policy=compile_policy(load_profile(str(self.profile)), "readonly"),
+            synth_home=str(self.tmp / "home"),
+            provider_argv=["/bin/true"],
+            command_binds=[],
+            broker_socket=None,
+            session_binds=[],
+        )
+        for flag in ("--unshare-pid", "--die-with-parent", "--new-session"):
+            self.assertIn(flag, argv, f"{flag} is load-bearing for containment")
+
     # --- logs --json --------------------------------------------------------
 
     def test_logs_json_wraps_the_digest_with_its_truncation_state(self):

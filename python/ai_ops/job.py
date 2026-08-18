@@ -112,18 +112,25 @@ def _resolve_effort(requested: str | None, adapter, model: dict) -> str | None:
     return requested
 
 
-def _reclaim_sandbox_home(home: str) -> None:
+def _reclaim_sandbox_home(home: str, state_root: str) -> None:
     """Delete the per-job synthetic HOME once the record is written.
 
     A live provider populates it with ~150MB of npm cache and node_modules per
     job; it is never reused and nothing else ever reads it, so retaining it grew
     the state store without bound. Evidence and result.json are kept.
     """
-    import shutil
-
     if os.environ.get("AI_OPS_KEEP_SANDBOX_HOME") == "1":
         return
-    shutil.rmtree(home, ignore_errors=True)
+    from .paths import safe_rmtree
+
+    # Guarded rather than bare: `home` is interpolated, and nothing but luck
+    # stopped an empty or wrong value from pointing somewhere the rail does not
+    # own. Reclaiming a home is best-effort, so a genuine failure is swallowed —
+    # but a REFUSAL is not, because that means the path was wrong.
+    try:
+        safe_rmtree(home, must_be_under=state_root, label="sandbox home")
+    except OSError:
+        pass
 
 
 CREDENTIAL_NAMES = ("auth.json", "credentials.json", ".credentials.json", "token.json")
@@ -717,7 +724,7 @@ def run_job(
             record.pop("error", None)
         validate(record, "result.schema.json")
         atomic_write_json(os.path.join(dirs["job"], "result.json"), record)
-        _reclaim_sandbox_home(dirs["home"])
+        _reclaim_sandbox_home(dirs["home"], root.path)
         return record
 
     try:

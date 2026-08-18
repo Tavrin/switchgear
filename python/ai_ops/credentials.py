@@ -40,6 +40,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -336,7 +337,16 @@ def refresh_via_own_cli(
         os.replace(tmp, path)  # atomic
         return True
     finally:
-        shutil.rmtree(home, ignore_errors=True)
+        # Guarded. This one deletes a COPY of a real credential directory, and
+        # a wrong value here would delete the original — the failure that
+        # destroyed a live login on this machine once already.
+        from .paths import safe_rmtree
+
+        try:
+            safe_rmtree(home, must_be_under=tempfile.gettempdir(),
+                        label="credential refresh workspace")
+        except Exception:
+            pass
         try:
             fcntl.flock(lock_fh, fcntl.LOCK_UN)
             lock_fh.close()

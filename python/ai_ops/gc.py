@@ -20,12 +20,12 @@ kind of guess that tests clean and deletes a real pending review in production.
 from __future__ import annotations
 
 import os
-import shutil
 import time
 from typing import Any
 
 from . import jobstate
 from .errors import Refuse
+from .paths import safe_rmtree
 from .state import StateRoot, read_json
 
 # A floor UNDER the caller's selector, never a substitute for it. Rule 3 below
@@ -258,8 +258,10 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
         try:
-            shutil.rmtree(jd)
-        except OSError as exc:
+            # Guarded: the job id is validated, but the guard belongs at the
+            # delete rather than in the discipline of whoever assembled the path.
+            safe_rmtree(jd, must_be_under=root.jobs, label=f"job {job_id}")
+        except (OSError, Refuse) as exc:
             kept.append({"job_id": job_id, "reason": f"could not remove: {exc}"})
             continue
         freed += cand.get("bytes", 0)
@@ -272,10 +274,12 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
             continue
 
     sessions_removed = []
+    sessions_root = os.path.join(root.path, "sessions")
     for store in planned.get("sessions", []):
         try:
-            shutil.rmtree(store["path"])
-        except OSError:
+            safe_rmtree(store["path"], must_be_under=sessions_root,
+                        label=f"session store {store['key']}")
+        except (OSError, Refuse):
             continue
         freed += store.get("bytes", 0)
         sessions_removed.append(store["key"])
