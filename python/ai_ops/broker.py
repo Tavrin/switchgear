@@ -36,6 +36,11 @@ DEFAULT_UPSTREAM = "https://opencode.ai/zen/go/v1"
 # OpenAI-shaped and Anthropic-shaped inference surfaces. Allowlisting only the
 # first silently denied legitimate traffic (qwen3.8-max -> "/messages").
 DEFAULT_ALLOWED_PATHS = ("/chat/completions", "/messages")
+# GET is denied by default and opened per provider, because a GET surface is a
+# read of the account, not inference. Measured need: the Grok CLI issues
+# `GET /models` before it will run any inference at all, and denying it makes the
+# provider unusable rather than merely restricted.
+DEFAULT_ALLOWED_GET_PATHS: tuple[str, ...] = ()
 MAX_BODY = 8 * 1024 * 1024
 
 
@@ -152,7 +157,39 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._deny(502, f"upstream error: {type(exc).__name__}")
 
     def do_GET(self) -> None:  # noqa: N802
-        self._deny(403, "GET not proxied")
+        b = self.broker
+        if not any(self.path.endswith(p) for p in b.allowed_get_paths):
+            self._deny(403, f"GET not proxied: {self.path}")
+            return
+        if b.max_calls is not None and b.attempts >= b.max_calls:
+            self._deny(429, f"provider call ceiling reached ({b.max_calls} per job)")
+            return
+        b.attempts += 1
+        req = urllib.request.Request(
+            b.upstream + _join_path(b.upstream, self.path),
+            method="GET",
+            headers=_forward_headers(self.headers, b.authorization()),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=b.timeout_s) as resp:
+                data = resp.read()
+                self.send_response(resp.status)
+                if resp.headers.get("content-type"):
+                    self.send_header("content-type", resp.headers["content-type"])
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                b.forwarded += 1
+        except urllib.error.HTTPError as exc:
+            data = exc.read()
+            self.send_response(exc.code)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            b.forwarded += 1
+        except Exception as exc:
+            self._deny(502, f"upstream error: {type(exc).__name__}")
 
     def log_message(self, *args) -> None:
         # Never log request lines: they can carry prompt content.
@@ -185,6 +222,7 @@ class CredentialBroker:
         unix_socket: Optional[str] = None,
         max_calls: Optional[int] = None,
         allowed_paths: Optional[tuple[str, ...]] = None,
+        allowed_get_paths: Optional[tuple[str, ...]] = None,
     ) -> None:
         if not credential:
             raise Refuse("broker requires a credential")
@@ -204,6 +242,7 @@ class CredentialBroker:
         # share one inference path, so a single hardcoded tuple would either deny
         # legitimate traffic or be widened until it allowlists nothing.
         self.allowed_paths = tuple(allowed_paths or DEFAULT_ALLOWED_PATHS)
+        self.allowed_get_paths = tuple(allowed_get_paths or DEFAULT_ALLOWED_GET_PATHS)
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
         self.forwarded = 0

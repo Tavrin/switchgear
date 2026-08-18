@@ -184,6 +184,7 @@ def run_job(
             unix_socket=sock,
             max_calls=quotamod.max_provider_calls(),
             allowed_paths=tuple(prec.get("allowed_paths") or ()) or None,
+            allowed_get_paths=tuple(prec.get("allowed_get_paths") or ()) or None,
         ) as bk:
             return _execute(bk)
 

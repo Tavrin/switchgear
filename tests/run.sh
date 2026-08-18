@@ -18,6 +18,9 @@ echo "== adversarial (absolute mock) =="
 echo "== adapters / normalized vocabulary (real captured stream) =="
 /usr/bin/python3 "$ROOT/tests/test_adapters.py"
 
+echo "== credential classes (api-key + oauth) =="
+/usr/bin/python3 "$ROOT/tests/test_credentials.py"
+
 echo "== quota / budget =="
 /usr/bin/python3 "$ROOT/tests/test_quota.py"
 

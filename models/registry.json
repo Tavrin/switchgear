@@ -9,8 +9,18 @@
       "credential": "openrouter"
     },
     "grok": {
-      "upstream": "https://api.x.ai",
-      "credential": "grok"
+      "upstream": "https://api.x.ai/v1",
+      "credential": "grok",
+      "credential_class": "oauth",
+      "auth_file": "~/.grok/auth.json",
+      "auth_format": "grok-oidc",
+      "allowed_paths": [
+        "/chat/completions",
+        "/responses"
+      ],
+      "allowed_get_paths": [
+        "/models"
+      ]
     }
   },
   "models": {
@@ -84,7 +94,7 @@
       "model_family": "qwen",
       "vendor_family": "alibaba"
     },
-    "grok/grok-4.6-build": {
+    "grok/grok-4.6": {
       "provider": "grok",
       "model_family": "grok",
       "vendor_family": "xai"
@@ -115,9 +125,12 @@
     "vendor_family is what makes cross-vendor review independence meaningful.",
     "Two openrouter models from the same vendor are NOT independent reviewers.",
     "",
-    "grok/* reaches the native Grok CLI (~/.grok/bin/grok). Its stream",
-    "vocabulary is captured (tests/fixtures/grok-real-scout.jsonl) and its",
-    "sandbox isolation proven, but its credential is an OAuth session, so it",
-    "stays UNREACHABLE until the OAuth-aware broker lands (PROVIDERS.md)."
+    "",
+    "grok/* reaches the native Grok CLI. Everything about it below is MEASURED:",
+    "the id is the WIRE name the CLI puts in the request body (grok-4.6), not the",
+    "grok-4.6-build that its own modelUsage reports -- pinning the reported name",
+    "would have made the broker deny every request. Its paths came from pointing",
+    "GROK_CLI_BASE_URL at a recording server: POST /chat/completions, POST",
+    "/responses, and GET /models, which the CLI calls before any inference."
   ]
 }
