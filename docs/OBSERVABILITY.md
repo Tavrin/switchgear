@@ -108,6 +108,9 @@ output. Straw man:
 ```
 started  {job, provider, model, mode, role}
 status   {sessionId}                 # REQUIRED: without it resume cannot exist
+                                     # NB: the SOURCE field is `sessionID` (capital
+                                     # ID) and appears on EVERY provider event, not
+                                     # on a dedicated status event -- see below
 tool     {name, target}              # rendered as text by atelier; keep minimal
 text     {content}                   # truncate at write time (atelier uses 400 chars)
 finished {status, exit, exitSummary, turns, costUSD, tokens}
@@ -173,7 +176,7 @@ The straw man was missing fields atelier actually consumes
 
 | Field | Why |
 |---|---|
-| `sessionId` on a status event | captured for resume; **without it, reply-by-restart cannot work at all** |
+| `sessionID` — see correction below | captured for resume; **without it, reply-by-restart cannot work at all** |
 | `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
 | terminal `status` ∈ `completed` / `completed_empty` / `needs_input` | `needs_input` is load-bearing: it parks the ticket back to the operator |
 | `exitSummary` text | shown on the record |
@@ -185,6 +188,35 @@ finalization (ATT-002) and validates the landed tree against it at merge
 (ATT-004). Keep it for our own viewer if useful; atelier will ignore it.
 
 `tool{name,target}` is rendered only as text there — keep it minimal.
+
+### Correction: the vocabulary was wrong until it was measured
+
+Step 2 could not be written from this document. No real provider stream existed
+anywhere in the repo — the mock was the only evidence of the vocabulary, and the
+mock is exactly what invented a fiction that 64 tests then validated. So
+`agent-ops-opus-2` captured a live run and committed it as
+`tests/fixtures/opencode-real-scout.jsonl`. Verified against that fixture:
+
+| I wrote | Reality |
+|---|---|
+| `sessionId` | **`sessionID`** — capital ID |
+| on a dedicated `status` event | on **every** event, at top level |
+| terminal = `step_finish` | terminal = `step_finish` **with `reason: "stop"`**; `"tool-calls"` only ends a step (the fixture has 3 `step_finish`, 1 terminal) |
+| read `turns` / `costUSD` | neither field exists. Cost and tokens are **per-step and must be summed**; `turns` is derived from the `step_start` count |
+
+The first row is the one that mattered: a normalizer written from this doc would
+have looked for `sessionId`, found nothing, and silently produced no session
+identifier — on the single field without which resume cannot exist. It would have
+passed every test that did not check the value.
+
+The fixture now carries a tripwire asserting the real type set and the **absence**
+of `complete`, so the mock's fiction cannot be re-adopted as truth. The mock had
+already drifted a second time — its slow-stream behaviour emitted events the
+normalizer could not read — and is now shaped from the fixture.
+
+**Rule for the next provider:** capture a real stream and commit it as a fixture
+*before* writing the normalizer. Never derive a wire format from a mock, and
+never from a design note — including this one.
 
 ### Mid-run steering is NOT required
 
