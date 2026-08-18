@@ -746,6 +746,36 @@ class RailTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout)["state"]
 
+    def test_atelier_workspace_token_is_not_special_cased(self):
+        """Decision, recorded once (atelier ATT-007 asks for it explicitly).
+
+        atelier writes `.atelier-workspace.json` at the worktree root during
+        dispatch. agent-ops does NOT exclude that filename from its integrity
+        digest, and must not: excluding a name creates a hiding place, which is
+        precisely the finding that put untracked and ignored content into the
+        digest in the first place.
+
+        No special case is needed, because the per-job delta is before-vs-after
+        fingerprints. A token written BEFORE the job has the same fingerprint
+        after, so it is never attributed to the job -- while a worker that
+        modifies it does show up, which is exactly what atelier refuses at merge.
+        """
+        token = self.primary / ".atelier-workspace.json"
+        token.write_text(json.dumps({"workspaceId": "att-007-token"}))
+
+        p = run_cli(
+            self.args("--json", "scout", str(self.primary), "look"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "slow-stream", "AI_OPS_MOCK_EXTRA": "0"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        # Present before the job, untouched by it: not this job's delta.
+        job_id = json.loads(p.stdout)["job_id"]
+        rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+        changed = (rec.get("freeze") or {}).get("changed_files") or []
+        self.assertNotIn(".atelier-workspace.json", changed)
+        # And it is still there -- the rail did not eat the orchestrator's token.
+        self.assertTrue(token.exists())
+
     def test_background_launch_returns_a_job_id_without_waiting(self):
         """The rail used to block for the whole job, so every long run had to be
         hand-backgrounded by its caller."""

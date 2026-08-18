@@ -36,6 +36,62 @@ cost_usd`.
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
 
+### The atelier lane contract
+
+Spec: `atelier:specs/wave-3/agent-ops-adapter.md` (owner-confirmed, atelier main
+`04a3f07`). agent-ops's side of it:
+
+- **Capabilities** the lane declares: `canResume: true` (sessionId-based),
+  `commitsOwnWork: false` (the git dir is a read-only mount, so atelier's
+  finalizer commits), `liveInput: false` (no stdin into the sandbox; replies are
+  cold resumes), `liveStream: true` (the events file is tailable),
+  `reportsCost: true`.
+- **`finished.status`** maps 1:1 onto atelier's outcome states — except
+  `sawTerminal: false`, which is **never** `completed`. A run that ended without
+  the provider closing its stream reports `failed` with a truncation
+  `exitSummary`, however much assistant text it emitted first. "Claims done,
+  evidence truncated" is the suspicious case, and over-reporting truncation is
+  the right default.
+- **A running job emits no `finished` event at all**, only `progress` with the
+  counters. The same partial stream means "still working" during a job and
+  "truncated" after one, so the normalizer takes that fact from the caller rather
+  than guessing — an adapter tailing for `finished` must not transition early.
+- **`turns` and `costUSD` are totals**, not deltas.
+- **`status.fence`** publishes the launch record's pid identity as
+  `linux-proc-start:<bootId>:<startTime>` — atelier's own process-fence shape. A
+  pid alone is not an identity, and it cannot be re-derived once the process is
+  gone.
+
+### Execution profile pinning
+
+`ai-opencode execution-profile` returns the content pin an orchestrator records
+at first spawn and enforces on resume:
+
+```json
+{"launcher": "...", "package": "...", "file_count": 27, "launcherDigest": "..."}
+```
+
+`launcherDigest` is sha256 over the resolved launcher **plus a deterministic walk
+of `python/ai_ops/`** — sorted relative paths, per-file digest, digest of the
+digest list, `__pycache__` excluded. Pinning by resolved path would be worthless
+here: `~/.local/bin/ai-opencode` is a stable path that symlinks into the working
+tree, so it always resolves while its content changes with every edit. And the
+launcher alone is an 11-line stub, so digesting only the executable freezes the
+one file that never changes. Digesting the digest list rather than the bytes
+means a rename moves the pin too.
+
+### `.atelier-workspace.json`
+
+atelier writes its workspace identity token at the worktree root during dispatch.
+**agent-ops does not exclude that filename from its integrity digest, and must
+not.** Excluding a name creates a hiding place — precisely the finding that put
+untracked and ignored content into the digest to begin with.
+
+No special case is needed. The per-job delta is before-vs-after fingerprints, so
+a token written before the job has the same fingerprint after and is never
+attributed to the job, while a worker that *modifies* it does appear in the
+delta — which is exactly what atelier refuses at merge.
+
 ### Quota and budget
 
 `quota` reports two things and deliberately does not blend them:

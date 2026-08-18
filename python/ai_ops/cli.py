@@ -397,7 +397,25 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     profile = load_profile(_profile_path(ns)) if getattr(ns, "profile", None) else {}
     adapter = get_adapter((rec.get("provider") or profile.get("provider") or "opencode"))
     parsed, _ = parse_lenient(raw)
-    return rec, adapter.normalize(parsed)
+    # The record exists only once the job is over, so its presence IS the
+    # "run_ended" fact the normalizer cannot get from the stream itself.
+    return rec, adapter.normalize(parsed, run_ended=bool(rec))
+
+
+def cmd_execution_profile(ns: argparse.Namespace) -> int:
+    """The content pin an orchestrator records at first spawn.
+
+    Published rather than left to the caller to compute: the caller cannot see
+    which package this launcher execs without resolving the symlink itself, and
+    a pin derived from a different walk than the one that actually runs is worse
+    than no pin.
+    """
+    from .pinning import execution_profile
+
+    prof = execution_profile()
+    print(json.dumps(prof, indent=2) if ns.json
+          else "\n".join(f"{k}={v}" for k, v in prof.items()))
+    return 0
 
 
 def cmd_quota(ns: argparse.Namespace) -> int:
@@ -442,6 +460,23 @@ def cmd_quota(ns: argparse.Namespace) -> int:
     return 0
 
 
+def _fence_identity(ns) -> str | None:
+    """pid identity as `linux-proc-start:<bootId>:<startTime>`.
+
+    A pid alone is not an identity -- pids are recycled, which is why the launch
+    record carries starttime and boot_id too. This is exactly the shape atelier's
+    process fencing uses, so it is published rather than left to be rebuilt.
+    """
+    meta_path = os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")
+    if not os.path.isfile(meta_path):
+        return None
+    try:
+        meta = read_json(meta_path)
+        return f"linux-proc-start:{meta['boot_id']}:{meta['starttime']}"
+    except Exception:
+        return None
+
+
 def _live_state(ns, rec: dict, jd: str) -> str:
     """What is this job doing right now?
 
@@ -482,7 +517,9 @@ def cmd_status(ns: argparse.Namespace) -> int:
 
     jd, ev_path, res_path = _job_paths(ns)
     rec, norm = _projection(ns)
-    fin = next((n for n in norm if n["event"] == "finished"), {})
+    # Counters come from whichever summary event is present: `progress` while the
+    # job runs, `finished` once it is over.
+    fin = next((n for n in norm if n["event"] in ("finished", "progress")), {})
     tools = [n for n in norm if n["event"] == "tool"]
     sid = next((n["sessionId"] for n in norm if n["event"] == "status"), None)
 
@@ -511,6 +548,10 @@ def cmd_status(ns: argparse.Namespace) -> int:
         "tokens": fin.get("tokens", 0),
         "costUSD": fin.get("costUSD", 0.0),
         "elapsed_s": round((ref - started), 1) if started and ref else None,
+        # atelier's process-fence identity shape. It already has this triple in
+        # the launch record; handing it over beats having the adapter re-derive
+        # it, and re-derivation after the process is gone is impossible.
+        "fence": _fence_identity(ns),
     }
     print(json.dumps(out, indent=2) if ns.json else "\n".join(f"{k}={v}" for k, v in out.items()))
     return 0
@@ -642,6 +683,9 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--token")
     ls.add_argument("--mode")
     ls.set_defaults(func=cmd_lease)
+
+    ep = sub.add_parser("execution-profile")
+    ep.set_defaults(func=cmd_execution_profile)
 
     qt = sub.add_parser("quota")
     qt.set_defaults(func=cmd_quota)

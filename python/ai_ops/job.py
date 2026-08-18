@@ -412,7 +412,9 @@ def run_job(
 
             parsed, _ = parse_lenient(result.stdout.decode("utf-8", "replace"))
             fin = next(
-                (n for n in get_adapter(profile.get("provider")).normalize(parsed)
+                (n for n in get_adapter(profile.get("provider")).normalize(
+                    parsed, run_ended=True
+                 )
                  if n["event"] == "finished"),
                 {},
             )

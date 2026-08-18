@@ -23,6 +23,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "opencode-real-scout.jsonl"
 from ai_ops.adapters import (  # noqa: E402
     TERMINAL_COMPLETED,
     TERMINAL_EMPTY,
+    TERMINAL_FAILED,
     get_adapter,
     parse_lenient,
 )
@@ -112,6 +113,57 @@ class Vocabulary(unittest.TestCase):
         text = [n for n in norm if n["event"] == "text"][0]
         self.assertLess(len(text["content"]), 500)
 
+    def test_a_truncated_stream_never_reports_completed(self):
+        """"Claims done, evidence truncated" is the suspicious case.
+
+        A run that ended without the provider closing its stream has produced no
+        evidence of completion, however much assistant text it emitted first.
+        Reporting `completed` there is what atelier's tripwires exist to catch,
+        and over-reporting truncation is the right default.
+        """
+        evs = [
+            {"type": "step_start", "sessionID": "ses_x", "part": {}},
+            {"type": "text", "sessionID": "ses_x", "part": {"text": "All done, tests pass!"}},
+            # no step_finish: the stream was cut off
+        ]
+        fin = [
+            n for n in self.adapter.normalize(evs, run_ended=True) if n["event"] == "finished"
+        ][0]
+        self.assertEqual(fin["status"], TERMINAL_FAILED)
+        self.assertFalse(fin["sawTerminal"])
+        self.assertIn("truncated", fin["exitSummary"])
+        self.assertNotIn("All done", fin["exitSummary"])
+
+    def test_a_running_job_emits_no_terminal_event_at_all(self):
+        """An adapter tails this stream for `finished` to transition the record.
+
+        The same partial stream means "still working" during a job and
+        "truncated" after one, so the normalizer takes run_ended from the caller
+        rather than guessing. While the job runs it emits counters as `progress`
+        -- emitting `finished` would transition the record early, every time.
+        """
+        evs = [
+            {"type": "step_start", "sessionID": "ses_x", "part": {}},
+            {"type": "text", "sessionID": "ses_x", "part": {"text": "working"}},
+        ]
+        norm = self.adapter.normalize(evs, run_ended=False)
+        kinds = {n["event"] for n in norm}
+        self.assertNotIn("finished", kinds)
+        self.assertIn("progress", kinds)
+        prog = [n for n in norm if n["event"] == "progress"][0]
+        self.assertEqual(prog["turns"], 1)
+
+    def test_a_terminal_stream_is_finished_even_if_the_caller_says_otherwise(self):
+        """run_ended only ADDS knowledge; a real terminal event still finishes."""
+        evs = [
+            {"type": "step_start", "sessionID": "ses_x", "part": {}},
+            {"type": "text", "sessionID": "ses_x", "part": {"text": "done"}},
+            {"type": "step_finish", "sessionID": "ses_x", "part": {"reason": "stop"}},
+        ]
+        norm = self.adapter.normalize(evs, run_ended=False)
+        fin = [n for n in norm if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+
     def test_unknown_provider_refuses_rather_than_guessing(self):
         with self.assertRaises(Refuse):
             get_adapter("grok")
@@ -122,6 +174,51 @@ class Vocabulary(unittest.TestCase):
         second pool appears behind one CLI, which is already the case."""
         with self.assertRaises(Refuse):
             get_adapter("opencode-go")
+
+
+class ExecutionPinning(unittest.TestCase):
+    """Content pin, not path pin (atelier ATT-006, owner ruling)."""
+
+    def test_digest_covers_the_package_not_just_the_launcher(self):
+        """The launcher is an 11-line stub that execs the package.
+
+        A resolved-path pin freezes the one file that never changes; a digest of
+        only the launcher file does the same thing one step later. Editing any
+        package source must move the digest.
+        """
+        import tempfile
+
+        from ai_ops import pinning
+
+        pkg = Path(tempfile.mkdtemp(prefix="pin-")) / "ai_ops"
+        pkg.mkdir()
+        (pkg / "a.py").write_text("x = 1\n")
+        launcher = pkg.parent / "launch.sh"
+        launcher.write_text("#!/bin/sh\n")
+
+        first = pinning.launcher_digest(str(launcher), str(pkg))
+        (pkg / "a.py").write_text("x = 2\n")
+        self.assertNotEqual(first, pinning.launcher_digest(str(launcher), str(pkg)))
+
+        (pkg / "a.py").write_text("x = 1\n")
+        self.assertEqual(first, pinning.launcher_digest(str(launcher), str(pkg)))
+
+        # A rename with identical bytes must also move it, which digesting
+        # concatenated content would miss.
+        (pkg / "a.py").rename(pkg / "b.py")
+        self.assertNotEqual(first, pinning.launcher_digest(str(launcher), str(pkg)))
+
+    def test_bytecode_is_excluded_so_the_digest_does_not_depend_on_imports(self):
+        import tempfile
+
+        from ai_ops import pinning
+
+        pkg = Path(tempfile.mkdtemp(prefix="pin2-")) / "ai_ops"
+        (pkg / "__pycache__").mkdir(parents=True)
+        (pkg / "a.py").write_text("x = 1\n")
+        before = pinning.launcher_digest("/nonexistent-launcher", str(pkg))
+        (pkg / "__pycache__" / "a.cpython-312.pyc").write_bytes(b"\x00compiled")
+        self.assertEqual(before, pinning.launcher_digest("/nonexistent-launcher", str(pkg)))
 
 
 if __name__ == "__main__":

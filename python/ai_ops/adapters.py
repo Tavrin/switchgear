@@ -41,6 +41,11 @@ TEXT_LIMIT = 400
 TERMINAL_COMPLETED = "completed"
 TERMINAL_EMPTY = "completed_empty"
 TERMINAL_NEEDS_INPUT = "needs_input"
+# Not one of atelier's three success outcomes. A stream that stopped without a
+# terminal event is the "claims done, evidence truncated" case, which their
+# tripwires treat as suspicious -- over-reporting truncation is the right
+# default, so this never reports as completed.
+TERMINAL_FAILED = "failed"
 
 
 def parse_lenient(text: str) -> tuple[list[dict[str, Any]], int]:
@@ -143,7 +148,16 @@ class OpenCodeAdapter:
                 return part["sessionID"]
         return None
 
-    def normalize(self, events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    def normalize(
+        self, events: Iterable[dict[str, Any]], *, run_ended: bool = False
+    ) -> list[dict[str, Any]]:
+        """Project a raw stream onto the normalized vocabulary.
+
+        `run_ended` is the caller's knowledge, not the stream's: the same partial
+        stream means "still working" during a job and "truncated" after one. A
+        normalizer that guessed would either alarm on every healthy mid-run poll
+        or stay silent on a genuinely cut-off run.
+        """
         events = list(events)
         out: list[dict[str, Any]] = []
         sid = self.session_id(events)
@@ -186,12 +200,33 @@ class OpenCodeAdapter:
                 # The committed mock's vocabulary. Real OpenCode never emits it.
                 saw_terminal = True
 
+        counters = {
+            "turns": turns,
+            "costUSD": round(cost, 8),
+            "tokens": tokens,
+        }
+
+        if not (saw_terminal or run_ended):
+            # Still working. Emit counters WITHOUT a terminal event: an adapter
+            # tailing the stream for `finished` must not see one while the job is
+            # merely mid-flight, or it transitions the record early.
+            out.append({"event": "progress", **counters})
+            return out
+
         if errored is not None:
-            status = TERMINAL_NEEDS_INPUT if _is_input_request(errored) else TERMINAL_COMPLETED
+            status = TERMINAL_NEEDS_INPUT if _is_input_request(errored) else TERMINAL_FAILED
             summary = errored
+        elif not saw_terminal:
+            # The run is over and the provider never closed its stream. Claiming
+            # completed here is precisely the shape atelier tripwires on.
+            status = TERMINAL_FAILED
+            summary = (
+                "stream truncated: the run ended without a terminal provider event, "
+                "so this result is not evidence of completion"
+            )
         elif not last_text.strip():
-            # A run that produced no assistant text is not a success to report as
-            # one -- it is the shape atelier calls completed_empty.
+            # Produced no assistant text. Not a success to report as one -- it is
+            # the shape atelier calls completed_empty.
             status = TERMINAL_EMPTY
             summary = ""
         else:
@@ -202,9 +237,7 @@ class OpenCodeAdapter:
             {
                 "event": "finished",
                 "status": status,
-                "turns": turns,
-                "costUSD": round(cost, 8),
-                "tokens": tokens,
+                **counters,
                 "exitSummary": summary,
                 "sawTerminal": saw_terminal,
             }
