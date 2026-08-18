@@ -225,9 +225,20 @@ Still open:
    The ordered engineering list is at the end of that section — note item 2:
    `resolve_provider` currently classifies any non-OpenCode binary as a *mock*,
    which is fail-closed but wrong, and must become per-provider pinning first.
-2. **The atelier adapter lane.** atelier will spec it against their real
-   capabilities/executionEnv test contracts once Etienne confirms in their own
-   session — they correctly declined a green-light relayed through a peer.
+2. **The atelier adapter lane.** Spec written and owner-confirmed
+   (`atelier:specs/wave-3/agent-ops-adapter.md`); agent-ops's side is built (see
+   `docs/INTEGRATION.md` "atelier lane contract"). ATT-009 merged to atelier main
+   `45676c7` (2026-08-18), so the pieces the spec leans on now exist in
+   production: `createExecutionProfile` carries `executable {resolvedPath,
+   version, digest}` with `digestPaths` — the content-digest pattern our
+   `execution-profile` / `launcherDigest` feeds. The lane is formally unblocked
+   but NOT yet scheduled: Wave-3 runs ATT-010 (break-glass) and ATT-008 (sandbox)
+   first, and the sandbox lane is where the atelier<->agent-ops convergence
+   decision is made, so the adapter lane most likely follows it. atelier owns
+   scheduling and will ping when it starts. **Open item for when it does:** check
+   our `execution-profile` field names against atelier's `executable`/`digestPaths`
+   shape — do NOT rename preemptively; the adapter is atelier's to write and they
+   will ask where our behaviour is ground truth.
 3. **Launcher pinning (ATT-006).** Recommendation given: keep the symlink, pin by
    CONTENT digest, and digest `python/ai_ops/` too — the launcher is an 11-line
    stub, so digesting the resolved executable alone pins the one file that never
