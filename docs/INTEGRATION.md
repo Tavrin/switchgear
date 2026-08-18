@@ -92,6 +92,15 @@ a token written before the job has the same fingerprint after and is never
 attributed to the job, while a worker that *modifies* it does appear in the
 delta — which is exactly what atelier refuses at merge.
 
+This depends on atelier writing the token **before** invoking agent-ops.
+Confirmed in their code, not assumed: the token is written at worktree
+preparation (`dispatch.mjs:6205`) strictly before `agent.launch` (`:6279`), on
+every path — verify, post-merge and merge-scratch checkouts all write it at
+creation. Recorded as a contract on their side, with the undertaking that
+agent-ops is told first if that ordering ever changes. If it ever lands
+mid-dispatch, the token would read as worker-caused and this decision needs
+revisiting.
+
 ### Quota and budget
 
 `quota` reports two things and deliberately does not blend them:
