@@ -204,15 +204,28 @@ network" was true of every path anyone had run and false of one nobody had.
 
 Still open:
 
-1. **Background jobs.** agent-ops blocks for the whole job. Needs
-   launch/poll/result/cancel with job ids -- `the old Codex wrapper` is the model to copy.
-2. **Quota awareness.** None. Read `~/.cache/ai-quota/{claude,codex}.json`; route
-   or refuse on remaining budget.
-3. **Multi-provider adapters.** See section 5 -- the seam is `registry.provider_record`,
-   and every adapter must be proven against the real binary with a no-model probe
-   inside the real sandbox before it is trusted.
-4. Model availability now lives in `models/registry.json`'s `_note`, measured
-   2026-08-18, rather than only in this document.
+1. **A second provider.** Isolation is now PROVEN for both Codex and Grok by
+   no-model probe (`docs/PROVIDERS.md`), and the adapter seam is real rather than
+   nominal. What remains is not design:
+   - **Grok** needs only a captured event stream (`-p --output-format
+     streaming-json`) committed as a fixture. Small credit spend. It is the
+     better target: headless mode, structured NDJSON, allow/deny rules.
+   - **Codex** is blocked on a decision, not on work: its auth is ChatGPT OAuth,
+     not an API key, and does not fit the broker. Three options with costs are
+     written up in `PROVIDERS.md`.
+2. **The atelier adapter lane.** atelier will spec it against their real
+   capabilities/executionEnv test contracts once Etienne confirms in their own
+   session — they correctly declined a green-light relayed through a peer.
+3. **Launcher pinning (ATT-006).** Recommendation given: keep the symlink, pin by
+   CONTENT digest, and digest `python/ai_ops/` too — the launcher is an 11-line
+   stub, so digesting the resolved executable alone pins the one file that never
+   changes. A released copy becomes right when the lab-only constraint lifts.
+4. **The verify side-effect allowlist.** Joint ruling with atelier: integrity
+   keeps covering untracked + ignored content; out-of-tree cache env vars are
+   first-line (`PYTHONDONTWRITEBYTECODE` is done); the escape hatch is an
+   operator-owned, registry-level allowlist. The "never project-declared" half is
+   load-bearing — a project that can allowlist its own hiding place has none. The
+   test to write is that a project-supplied entry is IGNORED, not merged.
 
 ## 8. Orientation
 
