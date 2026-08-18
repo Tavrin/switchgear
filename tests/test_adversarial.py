@@ -732,6 +732,19 @@ class RailTests(unittest.TestCase):
         finally:
             os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
 
+    def test_sandbox_env_suppresses_python_bytecode(self):
+        """__pycache__ written by a worker would dirty that worker's own freeze.
+
+        The digest covers ignored files on purpose (a worker cannot stage, and
+        .gitignore is worker-writable), so bytecode counts as a change. Suppress
+        it at the source rather than carving an exception into the digest.
+        """
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.env import allowlisted_env
+
+        env = allowlisted_env(home="/tmp/synth")
+        self.assertEqual(env.get("PYTHONDONTWRITEBYTECODE"), "1")
+
     def test_models_listing_reports_reachability(self):
         """The registry catalogues what the rail KNOWS, not what it can REACH.
 

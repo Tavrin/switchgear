@@ -171,36 +171,42 @@ Every one of these was earned by a specific bug. Breaking one silently re-opens 
 
 ## 7. Unfinished work, in priority order
 
-1. **`tests/live.sh` is uncommitted and incomplete.** It runs the full live cycle
-   and asserts real outcomes (`forwarded >= 1`, review call count <= 6, cross-worktree
-   refusal). It needs **retry-on-transport-failure**: the upstream is genuinely
-   flaky (glm-5.3 dead, qwen intermittent, sporadic "Unexpected server error"),
-   and a randomly-failing smoke test trains you to ignore it. The principled rule:
-   retry only when `forwarded == 0` (never reached a model — infrastructure);
-   never retry when `forwarded > 0` (the model answered and our handling broke —
-   that is real). My edit adding this was interrupted; redo it.
-2. **Doc drift.** `unshare-net`, `openrouter`, `provider_calls` appear in **zero**
-   docs outside `INTEGRATION.md`. `THREAT-MODEL.md` and `CONTAINMENT.md` still
-   state the network is open and no credential is present — both were true this
-   morning, neither is now.
-3. **Dead artifacts** shipped and referenced by nothing:
-   `adapters/opencode/agents/*.md`, `adapters/opencode/runtime-*.json`,
-   `policies/*.json`. Agent definitions are now generated from the compiled
-   policy (`CompiledPolicy.agent_definition`). Static copies are drift traps —
-   exactly the F20 pattern.
-4. **`openrouter/*` models are unreachable** — there is no OpenRouter credential
-   on this machine. I added 8 of them on an assumption I never checked. They fail
-   closed, so they are harmless, but the registry over-promises. Either get a key
-   or mark them clearly.
-5. **Verify-mutates-worktree.** Running a project's test suite creates
-   `__pycache__`, which breaks the freeze. Atelier's verify step runs the real
-   suite, so this fires on every dispatch. Fix belongs in the adapter (verify on a
-   copy, or `PYTHONDONTWRITEBYTECODE=1`), **not** in the digest — including
-   ignored files is a deliberate anti-hiding measure.
-6. Model availability, measured: `deepseek-v4-flash` ok, `deepseek-v4-pro` ok,
-   `kimi-k3` ok, `glm-5.3` fails upstream (`forwarded: 0`), `qwen3.8-max` flaky.
+**Closed 2026-08-18 by `agent-ops-opus-2`** (items 1-5 of the original list):
 
----
+1. `tests/live.sh` retry-on-transport-failure was **already complete** -- the
+   fear that the edit was cut mid-write was unfounded. Verified by running it,
+   not reading it, and the harness that verified it is now a committed hermetic
+   test (`tests/test_live_retry.sh`): it extracts `live_job()` verbatim and
+   drives it with a stub CLI, so the rule cannot rot into "retry until green".
+2. Doc drift closed. `THREAT-MODEL.md` and `CONTAINMENT.md` rewritten from the
+   code. Grounding them turned up a real defect (below).
+3. Dead artifacts deleted (`adapters/*`, `policies/*`), completing F20. They had
+   drifted **weaker** than the generated config: a `/tmp/opencode/**` hole in
+   `external_directory` and no `plugin: []`.
+4. `openrouter/*` marked clearly. `ai-opencode models` now reports each id as
+   reachable or UNREACHABLE with the path where its credential belongs.
+5. Verify-mutates-worktree: `PYTHONDONTWRITEBYTECODE=1` in the sandbox env, so an
+   agent-ops job cannot dirty its own freeze with `__pycache__`. The atelier-side
+   half (its verify step runs the real suite *outside* this sandbox) is still
+   atelier's adapter to fix.
+
+**Found while doing the above** -- a live job with `AI_OPS_ALLOW_LIVE_PROVIDER=1`
+and no credential fell through to the unbrokered path, and since `--unshare-net`
+is requested only when there is a broker socket to bind, it ran the provider on
+the **host network**. Now refuses. Same lesson as the six: "the sandbox has no
+network" was true of every path anyone had run and false of one nobody had.
+
+Still open:
+
+1. **Background jobs.** agent-ops blocks for the whole job. Needs
+   launch/poll/result/cancel with job ids -- `the old Codex wrapper` is the model to copy.
+2. **Quota awareness.** None. Read `~/.cache/ai-quota/{claude,codex}.json`; route
+   or refuse on remaining budget.
+3. **Multi-provider adapters.** See section 5 -- the seam is `registry.provider_record`,
+   and every adapter must be proven against the real binary with a no-model probe
+   inside the real sandbox before it is trusted.
+4. Model availability now lives in `models/registry.json`'s `_note`, measured
+   2026-08-18, rather than only in this document.
 
 ## 8. Orientation
 

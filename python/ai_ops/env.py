@@ -47,6 +47,12 @@ def allowlisted_env(
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "PYTHONNOUSERSITE": "1",
+        # A worker that runs any Python scatters __pycache__ through the
+        # worktree, which dirties its OWN freeze: the digest deliberately covers
+        # ignored files (a worker cannot stage, and .gitignore is worker-
+        # writable, so excluding them would be a hiding place). Suppressing the
+        # bytecode is the right place to fix that -- weakening the digest is not.
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
     if extra:
         env.update(extra)
