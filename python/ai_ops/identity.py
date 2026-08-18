@@ -338,9 +338,23 @@ def _content_fingerprint(abs_path: str, budget: list[int] | None = None) -> byte
     # Mode is part of the content story: making an existing dirty file
     # executable changes nothing byte-wise but changes what it IS (luna-3).
     h.update(b"MODE:%o\0" % stat.S_IMODE(st.st_mode))
-    with open(abs_path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
+    try:
+        with open(abs_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError as exc:
+        # A file the CONTROLLER cannot read (root-owned data dirs, mode 000 --
+        # measured on a large private repository's meilisearch store) must not crash the whole
+        # audit and make the platform unauditable. It also must not vanish
+        # silently. Fingerprint it from the metadata we CAN see (size, mode,
+        # mtime) under an UNREADABLE marker: the digest still moves if the file
+        # changes size or mode, and the anti-hiding property is intact because a
+        # same-uid worker cannot create a file the same-uid controller cannot
+        # read -- such files are pre-existing and ambient, never worker output.
+        h.update(
+            b"UNREADABLE:%d:%d:%d:%s"
+            % (st.st_size, stat.S_IMODE(st.st_mode), int(st.st_mtime), type(exc).__name__.encode())
+        )
     return h.digest()
 
 
@@ -403,6 +417,39 @@ def changed_files(ident: WorktreeIdentity) -> list[str]:
 # on a 229KB diff reported the truncation as its principal finding, which is the
 # correct behaviour and also a waste of a review.
 MAX_DIFF_BYTES = int(os.environ.get("AI_OPS_MAX_DIFF_BYTES") or 5_000_000)
+
+
+def review_manifest(ident: WorktreeIdentity) -> tuple[list[str], list[str]]:
+    """Files split for REVIEW, which is a different consumer from the DIGEST.
+
+    Returns (changed, ignored). `changed` is tracked-modified plus new
+    NON-ignored untracked files -- the actual change a reviewer should read.
+    `ignored` is the ignored matches: ambient .venv/.idea/__pycache__/caches,
+    which are environment, not the change under review.
+
+    The integrity digest (tree_digest) still covers BOTH, unchanged -- the
+    anti-hiding property lives there and at the promote gate. This split only
+    shapes what the reviewer is ASKED to read. Without it, a repo with a
+    populated .venv put 42,205 filenames (3.7MB) in the review attachment and a
+    reviewer burned its whole timeout paging through ambient noise (measured on
+    a large private repository, kimi-k3, $1.05). Review is a quality signal, not the boundary,
+    so trimming what it reads costs no security.
+    """
+    raw = _status_entries_raw(ident)
+    entries = _parse_status(raw)
+    tracked = [p for code, p in entries if code[0] not in {"?", "!"} and p]
+    # Ignored entries as git reports them: exact files, or directory prefixes.
+    ignored_files = {p for code, p in entries if code[0] == "!" and not p.endswith("/")}
+    ignored_prefixes = tuple(p for code, p in entries if code[0] == "!" and p.endswith("/"))
+
+    def _is_ignored(path: str) -> bool:
+        return path in ignored_files or path.startswith(ignored_prefixes)
+
+    ignored: list[str] = []
+    new: list[str] = []
+    for path in _nontracked_paths(ident, raw):
+        (ignored if _is_ignored(path) else new).append(path)
+    return sorted(set(tracked) | set(new)), sorted(ignored)
 
 
 def worktree_diff(ident: WorktreeIdentity, max_bytes: int | None = None) -> str:

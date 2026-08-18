@@ -72,6 +72,20 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
     print(f"job={record['job_id']}")
 
 
+def _persist_review_report(state_path: str, job_id: str, report: dict) -> None:
+    """Write the reviewer's verdict onto its own result.json, durably.
+
+    Read-modify-write under the same atomic writer the record uses. Kept
+    non-fatal-adjacent: the caller decides the exit code; this just makes sure
+    the outcome outlives the sandbox home.
+    """
+    path = os.path.join(StateRoot(state_path).job_dir(job_id), "result.json")
+    rec = read_json(path)
+    rec["review"] = report
+    validate(rec, "result.schema.json")
+    atomic_write_json(path, rec)
+
+
 def cmd_state(ns: argparse.Namespace) -> int:
     if ns.action == "provision":
         path = state.provision(os.path.abspath(ns.dir))
@@ -292,29 +306,33 @@ def cmd_review(ns: argparse.Namespace) -> int:
     try:
         ident = identity.inspect_worktree(review_dir)
         diff = identity.worktree_diff(ident)
-        files = identity.changed_files(ident)
+        changed, ignored = identity.review_manifest(ident)
     except Refuse:
-        diff, files = "", []
+        diff, changed, ignored = "", [], []
     attachments = None
-    if diff:
-        # The diff is ATTACHED, not inlined. Concatenating it into the prompt
-        # made it one element of argv, and the kernel caps a single argument at
-        # 128KiB -- so every review of a repo with a real uncommitted change died
-        # at exec with E2BIG before the provider started.
+    if diff or changed:
+        # The diff is ATTACHED (a file the reviewer reads), never inlined into
+        # argv -- one argv element is capped at 128KiB (MAX_ARG_STRLEN).
         #
-        # The file list is bounded here too. It deliberately includes untracked
-        # and ignored paths (that is the anti-hiding measure), which on a working
-        # repo means .idea/, .coverage and friends -- hundreds of entries that
-        # would crowd out the actual review instruction. The full list is in the
-        # attachment; the prompt shows a bounded sample and an honest count.
-        shown = files[:40]
-        more = len(files) - len(shown)
-        listing = ", ".join(shown) + (f"  [+{more} more, see the attachment]" if more else "")
-        header = (
-            f"# Changed files ({len(files)} total, tracked + untracked + ignored)\n"
-            + "".join(f"#   {f}\n" for f in files)
-            + "#\n# Complete uncommitted diff (git diff HEAD) follows.\n\n"
-        )
+        # Only the ACTUAL change is listed: tracked-modified plus new non-ignored
+        # untracked files. Ambient ignored files (.venv, .idea, __pycache__) are
+        # reported as a COUNT with a small sample, never dumped -- dumping all of
+        # them put 42,205 paths / 3.7MB in front of a reviewer that then burned
+        # its whole timeout on noise. The integrity digest still covers them; the
+        # reviewer just is not asked to read the environment.
+        CHANGED_LIST_CAP = 500
+        listed = changed[:CHANGED_LIST_CAP]
+        header_lines = [f"# Changed files ({len(changed)} tracked + new source)"]
+        header_lines += [f"#   {f}" for f in listed]
+        if len(changed) > len(listed):
+            header_lines.append(f"#   [+{len(changed) - len(listed)} more]")
+        if ignored:
+            sample = ", ".join(ignored[:15])
+            header_lines.append(
+                f"# ({len(ignored)} ignored/ambient files NOT shown: {sample}"
+                + (", ..." if len(ignored) > 15 else "") + ")"
+            )
+        header = "\n".join(header_lines) + "\n#\n# Uncommitted diff (git diff HEAD) follows.\n\n"
         attachments = {"review-diff.patch": header + diff}
         note = ""
         if "[diff truncated]" in diff:
@@ -323,9 +341,12 @@ def cmd_review(ns: argparse.Namespace) -> int:
                 "seeing part of the change. Say so in your findings and do not return\n"
                 "'promote' on the strength of a partial diff."
             )
+        shown = ", ".join(changed[:40]) or "(no tracked change; see attachment)"
+        more = len(changed) - min(len(changed), 40)
         prompt = (
             f"{prompt or 'Review this change.'}\n\n"
-            f"Changed files ({len(files)}): {listing}{note}"
+            f"Changed files ({len(changed)}): {shown}"
+            + (f"  [+{more} more]" if more > 0 else "") + note
         )
     rec = job.run_job(
         profile_path=_profile_path(ns),
@@ -341,23 +362,38 @@ def cmd_review(ns: argparse.Namespace) -> int:
     )
     _print_job(rec, getattr(ns, "json", False))
     parent = (env or {}).get("parent_job")
-    if parent and rec["status"] == "ok":
-        ev = open(rec["artifacts"]["events"], "rb").read()
+    if rec["status"] == "ok":
+        # Persist the reviewer's OWN verdict onto its OWN record, ALWAYS -- not
+        # only when a parent is being promoted. Bug #3: a standalone review left
+        # review:null on disk, so the report existed only inside events.jsonl and
+        # the human-readable outcome was lost once the sandbox home was reclaimed
+        # (the workaround was AI_OPS_KEEP_SANDBOX_HOME). The verdict belongs on
+        # the record so `status <job> --full` shows it.
         from . import events as evmod
 
+        ev = open(rec["artifacts"]["events"], "rb").read()
         try:
             verdict, findings, reviewed_files = evmod.extract_review_verdict(ev)
         except Exception as exc:
-            print(f"ai-opencode: review not attachable: {exc}", file=sys.stderr)
+            # A review that produced no parseable verdict is a real failure, but
+            # the record must SAY so rather than silently reading null.
+            report = {"verdict": None, "error": str(exc)}
+            _persist_review_report(_state_path(ns), rec["job_id"], report)
+            print(f"ai-opencode: reviewer produced no verdict: {exc}", file=sys.stderr)
             return 1
-        job.attach_review(
-            state_path=_state_path(ns),
-            subject_job=parent,
-            reviewer_record=rec,
-            verdict=verdict,
-            findings=findings,
-            reviewed_files=reviewed_files,
+        _persist_review_report(
+            _state_path(ns), rec["job_id"],
+            {"verdict": verdict, "findings": findings, "reviewed_files": reviewed_files},
         )
+        if parent:
+            job.attach_review(
+                state_path=_state_path(ns),
+                subject_job=parent,
+                reviewer_record=rec,
+                verdict=verdict,
+                findings=findings,
+                reviewed_files=reviewed_files,
+            )
     if rec["status"] == "dirty":
         return 2
     return 0 if rec["status"] == "ok" else 1

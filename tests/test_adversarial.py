@@ -289,6 +289,25 @@ class RailTests(unittest.TestCase):
         st = json.loads((self.state / "jobs" / job / "result.json").read_text())
         self.assertEqual(st["status"], "ok")
 
+    def test_standalone_review_persists_its_verdict_on_its_own_record(self):
+        """Bug #3: a review with no parent left review:null on disk. The verdict
+        lived only in events.jsonl and was lost once the sandbox home was
+        reclaimed (workaround: AI_OPS_KEEP_SANDBOX_HOME). It must land on the
+        reviewer's own result record, home purged or not."""
+        (self.primary / "app.py").write_text("changed = 1\n")
+        p = run_cli(
+            self.args("--json", "review", str(self.primary), "review", "Review this"),
+            env={"AI_OPS_MOCK_BEHAVIOR": "review-promote"},  # no KEEP_SANDBOX_HOME
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = json.loads(p.stdout)["job_id"]
+        home = self.state / "jobs" / job_id / "sandbox-home"
+        self.assertFalse(home.exists(), "home should be reclaimed by default")
+        rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+        self.assertIsNotNone(rec["review"], "verdict must be persisted, not null")
+        self.assertEqual(rec["review"]["verdict"], "promote")
+        self.assertIn("app.py", rec["review"]["reviewed_files"])
+
     def test_review_reject_cannot_promote(self):
         token = self._acquire()
         envf = self.tmp / "e.json"
@@ -745,6 +764,52 @@ class RailTests(unittest.TestCase):
         p = run_cli(self.args("--json", "status", job_id))
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout)["state"]
+
+    def test_an_unreadable_file_does_not_crash_the_audit(self):
+        """Bug #2, found dogfooding on a large private repository: a mode-000 / root-owned file
+        (a meilisearch data dir) crashed tree_digest with PermissionError, making
+        the whole platform unauditable. It must fingerprint from metadata under
+        an UNREADABLE marker instead -- never crash, never silently vanish."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        secret = self.primary / "unreadable.bin"
+        secret.write_text("data")
+        os.chmod(secret, 0o000)
+        try:
+            digest = identity.tree_digest(identity.inspect_worktree(str(self.primary)))
+            self.assertTrue(digest)
+            # And the digest is sensitive to a metadata change on that file.
+            os.chmod(secret, 0o004)
+            digest2 = identity.tree_digest(identity.inspect_worktree(str(self.primary)))
+            self.assertNotEqual(digest, digest2, "mode change on unreadable file must move digest")
+        finally:
+            os.chmod(secret, 0o644)
+
+    def test_review_manifest_separates_change_from_ambient_ignored(self):
+        """Bug #4: a populated .venv put 42,205 paths (3.7MB) in the review
+        attachment and a reviewer burned its timeout on ambient noise. The
+        integrity digest must still cover everything (anti-hiding), but the
+        review manifest must surface only the real change."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity
+
+        (self.primary / "real_change.py").write_text("x = 1\n")  # new source
+        (self.primary / ".gitignore").write_text(".venv/\n")
+        venv = self.primary / ".venv" / "lib"
+        venv.mkdir(parents=True)
+        for n in range(200):
+            (venv / f"f{n}.py").write_text(f"x={n}\n")
+
+        ident = identity.inspect_worktree(str(self.primary))
+        # Integrity still sees all of it: anti-hiding intact.
+        self.assertGreater(len(identity.changed_files(ident)), 200)
+        changed, ignored = identity.review_manifest(ident)
+        # Review sees the real change, not the 200 ambient files.
+        self.assertIn("real_change.py", changed)
+        self.assertGreaterEqual(len(ignored), 200)
+        self.assertNotIn(".venv/lib/f0.py", changed)
+        self.assertTrue(all(".venv" not in c for c in changed))
 
     def test_a_large_diff_does_not_blow_the_kernel_argv_limit(self):
         """Found in real use on a large private repository, 2026-08-18.
