@@ -204,14 +204,16 @@ network" was true of every path anyone had run and false of one nobody had.
 
 Still open:
 
-0. **DECISION NEEDED — the Grok credential tier** (`docs/PROVIDERS.md`). The
-   broker's OAuth half is built and the redirect is proven, but Grok's CLI
-   refuses any placeholder credential: four approaches probed, all
-   `Not signed in`, three of them without making a single request. It validates
-   its session locally before any network call. So Grok can only run at the
-   FALLBACK tier -- real access token inside the sandbox, refresh token stripped,
-   --unshare-net and the brokered upstream retained. That is a deliberate posture
-   change and is NOT implemented; a live Grok job currently fails closed.
+0. **DECISIONS NEEDED — OAuth tiers** (`docs/ADDING-A-PROVIDER.md` has the full
+   measured fleet table). The broker's OAuth plumbing is built and the redirect
+   is proven for THREE of the four target CLIs: Codex sends `Bearer <placeholder>`
+   and Claude Code sends `x-api-key: <placeholder>` to their redirected
+   endpoints, so both can reach the FULL tier (credential never in the sandbox).
+   Only Grok validates its session locally and is limited to the FALLBACK tier
+   (real access token in the sandbox). Two calls for Etienne:
+   (a) accept the fallback tier for Grok, or leave it fail-closed;
+   (b) spend ~$0.01 per backend to confirm each honours its OAuth access token
+       as the API bearer — the one fact the free probes cannot settle.
 
 1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
    confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex
