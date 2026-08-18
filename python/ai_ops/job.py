@@ -241,9 +241,13 @@ def run_job(
             adapter.write_sandbox_credential(dirs["home"], provider_id, prec or {})
         env = adapter.isolation_env(dirs["home"], runtime, broker_url)
         prov_argv, _live = provider.resolve_provider(provider_path)
-        job_prompt = prompt
+        # Providers without an agent-file mechanism get the SAME role
+        # instructions in their prompt. One source (policy.role_instructions),
+        # two delivery paths -- a worker told a different contract from the one
+        # the rail validates fails in a way that looks like a model problem.
+        job_prompt = adapter.compose_prompt(prompt, policy.role_instructions(role))
         if attach_dir:
-            lines = [prompt.rstrip(), "", "Attached files (read these first):"]
+            lines = [job_prompt.rstrip(), "", "Attached files (read these first):"]
             for name in sorted(attachments or {}):
                 safe = os.path.basename(name)
                 full = os.path.join(attach_dir, safe)

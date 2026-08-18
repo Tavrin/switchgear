@@ -13,12 +13,16 @@ locally first?** If it sends the placeholder, the broker swaps in the real value
 and the credential never enters the sandbox — the full tier. If it validates
 locally, the real (access) token must be inside the sandbox — the fallback tier.
 
-| CLI | Auth | Redirect knob | Placeholder? | Tier | Status |
-|---|---|---|---|---|---|
-| **OpenCode** | API key | provider config `baseURL` | yes | full | **shipped, live** |
-| **Claude Code** | Claude OAuth | `ANTHROPIC_BASE_URL` | yes | full | **shipped, live** |
-| **Codex** | ChatGPT OAuth | `chatgpt_base_url` + `supports_websockets=false` | yes | full | **shipped, live** |
-| **Grok** | xAI OIDC | `GROK_CLI_BASE_URL` | **no** — validates locally | fallback | **shipped, live** (token in sandbox, refresh stripped) |
+| CLI | Auth | Tier | readonly | bounded-write |
+|---|---|---|---|---|
+| **OpenCode** | API key | full | **live** | **live** |
+| **Claude Code** | Claude OAuth | full | **live** | **live** |
+| **Codex** | ChatGPT OAuth | full | **live** | **live** |
+| **Grok** | xAI OIDC | fallback | **live** | wired, **unproven** (session expired mid-test; needs `grok login`) |
+
+Tier = whether the credential enters the sandbox. Full: never (placeholder in,
+real token swapped by the broker). Fallback: the access token is inside, refresh
+token stripped, egress still broker-locked.
 
 Facts behind the table, all measured against recording servers with no spend:
 

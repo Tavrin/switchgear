@@ -436,6 +436,127 @@ class CodexRealStream(unittest.TestCase):
         self.assertTrue(_os.path.isdir(_os.path.join(binds[0], "bin")))
 
 
+class WriteLane(unittest.TestCase):
+    """The bounded-write contract across providers.
+
+    OpenCode receives the role instructions in a generated agent file; every
+    other provider has no such mechanism and gets the SAME text in its prompt.
+    One source, two delivery paths -- two copies would drift, and a worker told a
+    different contract from the one the rail validates fails in a way that looks
+    like a model problem.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.policy import compile_policy
+        from ai_ops.profile import load_profile
+
+        prof = json.loads((ROOT / "project-profiles" / "example.json").read_text())
+        prof["write_enabled"] = True
+        self.pol = compile_policy(prof, "bounded-write")
+        self.instructions = self.pol.role_instructions("implement")
+
+    def test_the_agent_file_and_the_prompt_carry_the_same_contract(self):
+        agent_file = self.pol.agent_definition("implement")
+        # The handoff contract appears in the OpenCode agent file...
+        self.assertIn('"handoff"', agent_file)
+        # ...and in the text every other provider puts in its prompt.
+        self.assertIn('"handoff"', self.instructions)
+        for line in self.instructions.strip().splitlines():
+            self.assertIn(line, agent_file)
+
+    def test_opencode_leaves_the_prompt_alone(self):
+        a = get_adapter("opencode")
+        self.assertEqual(a.compose_prompt("do the thing", self.instructions), "do the thing")
+
+    def test_other_providers_get_the_instructions_in_the_prompt(self):
+        for name in ("claude", "codex", "grok"):
+            composed = get_adapter(name).compose_prompt("do the thing", self.instructions)
+            self.assertIn("do the thing", composed)
+            self.assertIn('"handoff"', composed, f"{name} lost the contract")
+
+    def _raw(self, name, text):
+        """A minimal terminal stream for each provider carrying `text`."""
+        if name == "claude":
+            evs = [{"type": "system", "subtype": "init", "session_id": "s"},
+                   {"type": "assistant", "session_id": "s",
+                    "message": {"content": [{"type": "text", "text": text}]}},
+                   {"type": "result", "subtype": "success", "session_id": "s",
+                    "is_error": False, "num_turns": 1, "total_cost_usd": 0.01,
+                    "usage": {"input_tokens": 1, "output_tokens": 1}}]
+        elif name == "codex":
+            evs = [{"type": "thread.started", "thread_id": "t"},
+                   {"type": "turn.started"},
+                   {"type": "item.completed",
+                    "item": {"id": "i", "type": "agent_message", "text": text}},
+                   {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}]
+        else:
+            evs = [{"type": "text", "sessionID": "s", "data": text},
+                   {"type": "end", "stopReason": "end_turn", "sessionId": "s",
+                    "num_turns": 1, "total_cost_usd": 0.001, "usage": {"total_tokens": 5}}]
+        return "\n".join(json.dumps(e) for e in evs).encode()
+
+    def test_a_valid_handoff_is_extracted_on_every_provider(self):
+        handoff = {"handoff": {"summary": "added a zero check", "status": "awaiting_review",
+                               "changes": ["calc.py"], "next_action": "review"}}
+        text = "Done.\n\n```json\n" + json.dumps(handoff) + "\n```"
+        for name in ("claude", "codex", "grok"):
+            obj, err = get_adapter(name).validate_result(
+                self._raw(name, text), require_handoff=True)
+            self.assertIsNone(err, f"{name}: {err}")
+            self.assertEqual(obj["status"], "awaiting_review")
+
+    def test_a_missing_handoff_is_rejected_on_every_provider(self):
+        for name in ("claude", "codex", "grok"):
+            obj, err = get_adapter(name).validate_result(
+                self._raw(name, "I finished, trust me."), require_handoff=True)
+            self.assertIsNone(obj)
+            self.assertIn("handoff", err or "", f"{name} accepted a write with no handoff")
+
+    def test_a_schema_invalid_handoff_is_rejected(self):
+        """A worker's structured claim must satisfy the same schema whichever
+        provider produced it -- status is an enum, not free text."""
+        bad = {"handoff": {"summary": "x", "status": "totally-done"}}
+        text = "```json\n" + json.dumps(bad) + "\n```"
+        for name in ("claude", "codex", "grok"):
+            obj, err = get_adapter(name).validate_result(
+                self._raw(name, text), require_handoff=True)
+            self.assertIsNone(obj)
+            self.assertTrue(err)
+
+    def test_handoff_survives_a_long_answer_that_the_digest_clips(self):
+        """Normalized text events are clipped to 400 chars for the digest. The
+        handoff must come from the UNCLIPPED text or long-but-valid work is
+        rejected with 'missing handoff'."""
+        handoff = {"handoff": {"summary": "s", "status": "awaiting_review",
+                               "changes": ["a.py"] * 30}}
+        text = "Report. " + ("x" * 400) + "\n\n```json\n" + json.dumps(handoff) + "\n```"
+        for name in ("claude", "codex", "grok"):
+            obj, err = get_adapter(name).validate_result(
+                self._raw(name, text), require_handoff=True)
+            self.assertIsNone(err, f"{name} lost the handoff to clipping: {err}")
+            self.assertEqual(obj["status"], "awaiting_review")
+
+    def test_write_argv_asks_for_write_permission_per_provider(self):
+        """Each CLI gates edits differently; headless has no one to answer a
+        prompt. The OS boundary is the control, so these flags are unblocking a
+        redundant in-process gate, not widening the boundary."""
+        common = dict(provider_argv=["/x"], worktree="/w", model_id="p/m",
+                      role="implement", job_id="j", prompt="do")
+        claude = get_adapter("claude").argv(agent="ai-ops-bounded-write", **common)
+        self.assertIn("--permission-mode", claude)
+        codex = get_adapter("codex").argv(agent="ai-ops-bounded-write", **common)
+        self.assertIn("workspace-write", codex)
+        grok = get_adapter("grok").argv(agent="ai-ops-bounded-write", **common)
+        self.assertIn("--always-approve", grok)
+        # And a READONLY job must not carry any of them.
+        ro = get_adapter("codex").argv(agent="ai-ops-readonly", **common)
+        self.assertIn("read-only", ro)
+        self.assertNotIn("workspace-write", ro)
+        self.assertNotIn("--always-approve",
+                         get_adapter("grok").argv(agent="ai-ops-readonly", **common))
+
+
 class ExecutionPinning(unittest.TestCase):
     """Content pin, not path pin (atelier ATT-006, owner ruling)."""
 

@@ -82,6 +82,17 @@ class CompiledPolicy:
             "---",
             "",
         ]
+        return "\n".join(head + self.role_instructions(role).splitlines()) + "\n"
+
+    def role_instructions(self, role: str) -> str:
+        """What the worker is told to do, independent of HOW it is delivered.
+
+        OpenCode receives this inside a generated agent file. Every other
+        provider has no agent-file mechanism, so its adapter puts the same text
+        in the prompt. Keeping it in ONE place is the point: two copies of the
+        handoff contract would drift, and a worker instructed differently from
+        what the rail validates fails in a way that looks like a model problem.
+        """
         common = [
             "You are running inside an isolated sandbox on a single git worktree.",
             "You cannot reach anything outside it, and you must not try.",
@@ -126,7 +137,7 @@ class CompiledPolicy:
                 "Inspect and report. Never modify anything.",
                 "Answer the question directly, citing file:line where useful.",
             ]
-        return "\n".join(head + body) + "\n"
+        return "\n".join(body) + "\n"
 
     def to_opencode_runtime(self) -> dict[str, Any]:
         bash = self.tools.get("bash", "deny") == "allow"

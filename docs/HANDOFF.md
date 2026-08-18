@@ -212,9 +212,12 @@ Still open:
    carries the fleet table and the per-CLI gotchas (Codex is websocket-first and
    needs supports_websockets=false; Claude's OAuth header is Authorization not
    x-api-key; Codex's ChatGPT-Account-ID is broker-injected).
-   Remaining per-provider work: bounded-WRITE is still OpenCode-only -- Grok,
-   Claude and Codex adapters return a clear refusal for write roles, because a
-   write lane needs its own handoff contract and a captured write-mode stream.
+   BOUNDED-WRITE is live on OpenCode, Claude Code and Codex (each proven with a
+   real edit + valid handoff + exact delta attribution). Grok's write lane is
+   wired and hermetically tested but UNPROVEN live: its OAuth session expired
+   during the test and the rail refused cleanly ("re-login with its own CLI").
+   Re-run `python3 /tmp/live_write.py grok` after `grok login --device-code`
+   before claiming it works.
 
 1. **The OAuth broker** (`docs/PROVIDERS.md`, "The OAuth problem"). Target
    confirmed by Etienne 2026-08-18: one rail invoking OpenCode, Grok, Codex

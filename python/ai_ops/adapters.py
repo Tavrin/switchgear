@@ -162,6 +162,10 @@ class OpenCodeAdapter:
 
         return runtime_with_broker(runtime, base_url, model_id)
 
+    def compose_prompt(self, prompt: str, instructions: str) -> str:
+        """Unchanged: OpenCode reads the instructions from its agent file."""
+        return prompt
+
     # A step_finish carries the reason the step ended. "stop" ends the run;
     # "tool-calls" only ends a step and more will follow.
     TERMINAL_REASONS = {"stop", "length", "content-filter"}
@@ -319,7 +323,7 @@ class GrokAdapter:
         # already demands. Provider-side rules can be added as defense in depth
         # once their syntax is captured rather than guessed.
         wire = model_id.split("/", 1)[1] if "/" in model_id else model_id
-        return list(provider_argv) + [
+        argv = list(provider_argv) + [
             "-p",
             prompt,
             "--output-format",
@@ -327,6 +331,12 @@ class GrokAdapter:
             "--model",
             wire,
         ]
+        if agent.endswith("bounded-write"):
+            # Headless has no one to answer an approval prompt. The OS boundary
+            # is the control: only the leased worktree is writable, the git dir
+            # is read-only, and there is no network but the brokered upstream.
+            argv.append("--always-approve")
+        return argv
 
     def version_argv(self, provider_argv: list[str]) -> list[str]:
         return list(provider_argv) + ["--version"]
@@ -369,6 +379,23 @@ class GrokAdapter:
         is returned untouched and isolation_env does the work."""
         return runtime
 
+    def compose_prompt(self, prompt: str, instructions: str) -> str:
+        """No agent-file mechanism: the role instructions go in the prompt.
+
+        Same text the OpenCode agent file carries (policy.role_instructions), so
+        the handoff contract a worker is told and the one the rail validates
+        cannot drift apart.
+        """
+        if not instructions:
+            return prompt
+        return f"{instructions.strip()}\n\n---\n\n{prompt}"
+
+    def full_text(self, events: Iterable[dict[str, Any]]) -> str:
+        """Unclipped text, coalesced from the per-token deltas."""
+        return "".join(
+            str(ev.get("data") or "") for ev in events if ev.get("type") == "text"
+        )
+
     def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
         for ev in events:
             if ev.get("type") == "end" and isinstance(ev.get("sessionId"), str):
@@ -376,16 +403,15 @@ class GrokAdapter:
         return None
 
     def validate_result(self, raw: bytes, *, require_handoff: bool):
-        if require_handoff:
-            return None, "grok bounded-write is not supported yet (readonly roles only)"
-        text = raw.decode("utf-8", "replace")
-        parsed, _ = parse_lenient(text)
+        parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
         norm = self.normalize(parsed, run_ended=True)
         fin = next((n for n in norm if n["event"] == "finished"), None)
         if fin is None:
             return None, "no terminal provider event"
         if fin["status"] == TERMINAL_FAILED:
             return None, fin.get("exitSummary") or "provider run failed"
+        if require_handoff:
+            return _extract_handoff(self.full_text(parsed))
         return None, None
 
     def normalize(
@@ -524,7 +550,7 @@ class ClaudeCodeAdapter:
         # No --dir: build_bwrap_argv --chdir's to the worktree. --verbose is
         # REQUIRED for stream-json (the CLI rejects the combination without it).
         wire = model_id.split("/", 1)[1] if "/" in model_id else model_id
-        return list(provider_argv) + [
+        argv = list(provider_argv) + [
             "-p",
             prompt,
             "--output-format",
@@ -533,6 +559,13 @@ class ClaudeCodeAdapter:
             "--model",
             wire,
         ]
+        if agent.endswith("bounded-write"):
+            # Claude's own permission prompts cannot be answered in headless
+            # mode. The OS boundary is the real control here -- the worktree is
+            # the only writable mount and the git dir is read-only -- so its
+            # in-process gate is redundant, not load-bearing.
+            argv += ["--permission-mode", "acceptEdits"]
+        return argv
 
     def version_argv(self, provider_argv: list[str]) -> list[str]:
         return list(provider_argv) + ["--version"]
@@ -566,6 +599,17 @@ class ClaudeCodeAdapter:
     def broker_runtime(self, runtime: dict[str, Any], base_url: str, model_id: str):
         """Redirected by ENVIRONMENT; the runtime dict is not used."""
         return runtime
+
+    def compose_prompt(self, prompt: str, instructions: str) -> str:
+        """No agent-file mechanism: the role instructions go in the prompt.
+
+        Same text the OpenCode agent file carries (policy.role_instructions), so
+        the handoff contract a worker is told and the one the rail validates
+        cannot drift apart.
+        """
+        if not instructions:
+            return prompt
+        return f"{instructions.strip()}\n\n---\n\n{prompt}"
 
     def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
         for ev in events:
@@ -647,17 +691,32 @@ class ClaudeCodeAdapter:
         return out
 
     def validate_result(self, raw: bytes, *, require_handoff: bool):
-        if require_handoff:
-            return None, "claude bounded-write is not supported yet (readonly roles only)"
         parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
-        fin = next(
-            (n for n in self.normalize(parsed, run_ended=True) if n["event"] == "finished"), None
-        )
+        norm = self.normalize(parsed, run_ended=True)
+        fin = next((n for n in norm if n["event"] == "finished"), None)
         if fin is None:
             return None, "no terminal provider event"
         if fin["status"] == TERMINAL_FAILED:
             return None, fin.get("exitSummary") or "provider run failed"
+        if require_handoff:
+            # From the RAW blocks, not the normalized events: those are clipped
+            # to 400 chars for the digest, and a handoff object is routinely
+            # longer than that. Extracting from the clipped copy would reject
+            # perfectly good work with "missing handoff".
+            return _extract_handoff(self.full_text(parsed))
         return None, None
+
+    def full_text(self, events: Iterable[dict[str, Any]]) -> str:
+        """Unclipped assistant text, for contract extraction."""
+        out = []
+        for ev in events:
+            if ev.get("type") != "assistant":
+                continue
+            msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+            for block in msg.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    out.append(str(block["text"]))
+        return "\n".join(out)
 
 
 def _claude_tool_target(block: dict[str, Any]) -> str:
@@ -740,8 +799,15 @@ class CodexAdapter:
         # --skip-git-repo-check: the sandbox mounts the git dir read-only and
         # Codex's own check is redundant with the rail's worktree identity work.
         wire = model_id.split("/", 1)[1] if "/" in model_id else model_id
+        # Codex runs model-generated shell commands under its OWN sandbox, nested
+        # inside ours. read-only for a scout; workspace-write when the job is
+        # allowed to edit. Ours remains the real boundary either way -- for a
+        # readonly job the worktree is a read-only mount, so even a wrong value
+        # here cannot grant writes.
+        sandbox_mode = "workspace-write" if agent.endswith("bounded-write") else "read-only"
         return list(provider_argv) + [
-            "exec", "--skip-git-repo-check", "--json", "--model", wire, prompt,
+            "exec", "--skip-git-repo-check", "--json",
+            "--sandbox", sandbox_mode, "--model", wire, prompt,
         ]
 
     def version_argv(self, provider_argv: list[str]) -> list[str]:
@@ -829,6 +895,27 @@ class CodexAdapter:
         """Redirected by its config file, written in isolation_env."""
         return runtime
 
+    def compose_prompt(self, prompt: str, instructions: str) -> str:
+        """No agent-file mechanism: the role instructions go in the prompt.
+
+        Same text the OpenCode agent file carries (policy.role_instructions), so
+        the handoff contract a worker is told and the one the rail validates
+        cannot drift apart.
+        """
+        if not instructions:
+            return prompt
+        return f"{instructions.strip()}\n\n---\n\n{prompt}"
+
+    def full_text(self, events: Iterable[dict[str, Any]]) -> str:
+        """Unclipped agent_message text, for contract extraction."""
+        out = []
+        for ev in events:
+            item = ev.get("item") if isinstance(ev.get("item"), dict) else {}
+            if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
+                if item.get("text"):
+                    out.append(str(item["text"]))
+        return "\n".join(out)
+
     def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
         for ev in events:
             if ev.get("type") == "thread.started" and isinstance(ev.get("thread_id"), str):
@@ -912,8 +999,6 @@ class CodexAdapter:
         return out
 
     def validate_result(self, raw: bytes, *, require_handoff: bool):
-        if require_handoff:
-            return None, "codex bounded-write is not supported yet (readonly roles only)"
         parsed, _ = parse_lenient(raw.decode("utf-8", "replace"))
         fin = next(
             (n for n in self.normalize(parsed, run_ended=True) if n["event"] == "finished"), None
@@ -922,7 +1007,33 @@ class CodexAdapter:
             return None, "no terminal provider event"
         if fin["status"] == TERMINAL_FAILED:
             return None, fin.get("exitSummary") or "provider run failed"
+        if require_handoff:
+            return _extract_handoff(self.full_text(parsed))
         return None, None
+
+
+def _extract_handoff(text: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Pull the mandatory handoff object out of a worker's final text.
+
+    OpenCode's strict parser does this against its own event objects; every
+    other provider only ever produces TEXT, so the handoff has to be recovered
+    from the model's own words and then validated against the SAME schema. A
+    write job without a schema-valid handoff is rejected -- the object is the
+    worker's structured claim about what it did, and promotion binds to it.
+    """
+    from .events import extract_object
+    from .schema import validate
+
+    obj = extract_object(text or "", "handoff")
+    if not isinstance(obj, dict):
+        return None, "write job missing schema-valid handoff object"
+    try:
+        validate(obj, "handoff.schema.json")
+    except Exception as exc:
+        return None, f"handoff object failed schema validation: {exc}"
+    if obj.get("status") not in {"awaiting_review", "complete"}:
+        return None, "wrong handoff status"
+    return obj, None
 
 
 def _finish_events(
