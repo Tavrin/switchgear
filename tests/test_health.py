@@ -186,5 +186,86 @@ class Rollup(Base):
         self.assertEqual(roll["by_provider"], [])
 
 
+class Compaction(Base):
+    """spend.jsonl grows forever. Only assert_within_budget reads it in the hot
+    path, via spent_since(day_start()), so everything before today is history —
+    worth keeping, not worth carrying in the file the budget check reads."""
+
+    def _spend_at(self, model, cost, ts):
+        quota.record_spend(str(self.state), "j", model, cost)
+        path = Path(quota.ledger_path(str(self.state)))
+        lines = path.read_text().splitlines()
+        rec = json.loads(lines[-1]); rec["ts"] = ts
+        lines[-1] = json.dumps(rec)
+        path.write_text("\n".join(lines) + "\n")
+
+    def _seed(self):
+        now = time.time()
+        self._spend_at("claude/haiku", 0.10, now - 86400 * 3)
+        self._spend_at("claude/haiku", 0.20, now - 86400 * 2)
+        self._spend_at("grok/grok-4.5", 0.05, now - 86400 * 2)
+        self._spend_at("claude/sonnet", 0.40, now)  # today, must survive
+        return now
+
+    def test_totals_are_preserved_across_compaction(self):
+        """The property that decides whether compaction is trustworthy."""
+        self._seed()
+        before = quota.rollup(str(self.state))["total_usd"]
+        quota.compact_ledger(str(self.state), apply=True)
+        self.assertAlmostEqual(quota.rollup(str(self.state))["total_usd"],
+                               before, places=6)
+
+    def test_the_budget_reading_is_byte_for_byte_unchanged(self):
+        """assert_within_budget reads spent_since(day_start()) and nothing else.
+        If compaction moved that number, it would silently change what the rail
+        allows to start."""
+        self._seed()
+        before = quota.spent_since(str(self.state), quota.day_start())
+        quota.compact_ledger(str(self.state), apply=True)
+        self.assertEqual(quota.spent_since(str(self.state), quota.day_start()),
+                         before)
+
+    def test_today_is_never_folded(self):
+        self._seed()
+        quota.compact_ledger(str(self.state), apply=True)
+        remaining = quota.read_ledger(str(self.state))
+        self.assertEqual(len(remaining), 1)
+        self.assertGreaterEqual(float(remaining[0]["ts"]), quota.day_start())
+
+    def test_compacting_twice_does_not_double_count(self):
+        """The rollup is append-only, so this is the failure mode to guard."""
+        self._seed()
+        quota.compact_ledger(str(self.state), apply=True)
+        once = quota.rollup(str(self.state))["total_usd"]
+        quota.compact_ledger(str(self.state), apply=True)
+        self.assertAlmostEqual(quota.rollup(str(self.state))["total_usd"],
+                               once, places=6)
+
+    def test_dry_run_changes_nothing(self):
+        self._seed()
+        before = Path(quota.ledger_path(str(self.state))).read_text()
+        out = quota.compact_ledger(str(self.state), apply=False)
+        self.assertFalse(out["applied"])
+        self.assertEqual(Path(quota.ledger_path(str(self.state))).read_text(), before)
+        self.assertFalse(os.path.exists(quota.rollup_path(str(self.state))))
+
+    def test_nothing_to_compact_is_not_an_error(self):
+        quota.record_spend(str(self.state), "j", "claude/haiku", 0.10)
+        out = quota.compact_ledger(str(self.state), apply=True)
+        self.assertEqual(out["compacted"], 0)
+        self.assertEqual(len(quota.read_ledger(str(self.state))), 1)
+
+    def test_history_is_still_visible_in_the_rollup(self):
+        """A compaction that made the past look like it never happened is the
+        exact thing that makes people distrust a compaction step."""
+        self._seed()
+        quota.compact_ledger(str(self.state), apply=True)
+        roll = quota.rollup(str(self.state))
+        self.assertGreater(roll["from_compacted_rollup_usd"], 0)
+        names = {r["name"] for r in roll["by_provider"]}
+        self.assertIn("grok", names, "a provider that only appears in history vanished")
+        self.assertGreaterEqual(len(roll["by_day"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

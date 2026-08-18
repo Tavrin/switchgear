@@ -1358,6 +1358,33 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- logs --json --------------------------------------------------------
+
+    def test_logs_json_wraps_the_digest_with_its_truncation_state(self):
+        """The digest is already JSONL, so --json is about the ENVELOPE: a caller
+        gets truncation as a field rather than a sentinel line it must notice."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"))
+        job_id = json.loads(p.stdout)["job_id"]
+        p2 = run_cli(self.args("--json", "logs", job_id))
+        self.assertEqual(p2.returncode, 0, p2.stderr)
+        out = json.loads(p2.stdout)
+        self.assertEqual(out["job_id"], job_id)
+        self.assertEqual(out["format"], "digest")
+        self.assertIsInstance(out["events"], list)
+        self.assertIn("truncated", out)
+        self.assertIn("dropped_events", out)
+
+    def test_logs_full_under_json_refuses_rather_than_wrapping(self):
+        """`full` is the raw unbounded provider stream. Buffering it into one
+        JSON object would defeat the only reason it exists and hand an agent the
+        context flood this command is careful to avoid."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"))
+        job_id = json.loads(p.stdout)["job_id"]
+        p2 = run_cli(self.args("--json", "logs", job_id, "--format", "full"))
+        self.assertNotEqual(p2.returncode, 0)
+        self.assertIn("not available as a JSON object", p2.stderr)
+        self.assertIn("events.jsonl", p2.stderr, "must say where to read it instead")
+
     # --- concurrency cap ----------------------------------------------------
 
     def _budget(self, **fields):

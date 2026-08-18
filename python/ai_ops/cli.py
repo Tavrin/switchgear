@@ -910,12 +910,34 @@ def cmd_gc(ns: argparse.Namespace) -> int:
     from .joblist import parse_duration
 
     older = parse_duration(ns.older_than) if getattr(ns, "older_than", None) else None
-    planned = gcmod.plan(
-        _state_path(ns),
-        older_than_s=older,
-        keep_last=getattr(ns, "keep_last", None),
-        include_sessions=bool(getattr(ns, "include_sessions", False)),
-    )
+    if (older is None and getattr(ns, "keep_last", None) is None
+            and getattr(ns, "compact_ledger", False)):
+        # Compacting the ledger removes no jobs, so it does not need a job
+        # selector. Asking for one would push callers into passing a destructive
+        # selector they did not want just to tidy the ledger.
+        planned = {"jobs": [], "protected": [], "orphan_launch_records": [],
+                   "sessions": [], "sessions_skipped": [], "bytes": 0}
+    else:
+        planned = gcmod.plan(
+            _state_path(ns),
+            older_than_s=older,
+            keep_last=getattr(ns, "keep_last", None),
+            include_sessions=bool(getattr(ns, "include_sessions", False)),
+        )
+
+    if getattr(ns, "compact_ledger", False):
+        from . import quota as quotamod
+
+        comp = quotamod.compact_ledger(_state_path(ns), apply=bool(ns.yes))
+        planned["ledger"] = comp
+        if not ns.json:
+            if comp["compacted"]:
+                verb = "folded" if comp["applied"] else "would fold"
+                print(f"ledger: {verb} {comp['compacted']} entr(ies) from "
+                      f"{len(comp['days'])} past day(s) into {comp['rollup']}, "
+                      f"keeping {comp['kept']} from today")
+            else:
+                print("ledger: nothing to compact (only today's entries)")
 
     if not ns.yes:
         planned["dry_run"] = True
@@ -1183,6 +1205,16 @@ def cmd_logs(ns: argparse.Namespace) -> int:
         # Explicit only -- there is deliberately no default that lands here.
         if not os.path.isfile(ev_path):
             _die(f"no evidence stream at {ev_path}")
+        if ns.json:
+            # Refused rather than wrapped. `full` is the raw provider stream,
+            # unbounded and provider-shaped; buffering it into one JSON object
+            # would defeat the only reason it exists (tailing a file) and would
+            # hand an agent the context flood this command is careful to avoid.
+            _die(
+                "logs --format full is the raw, unbounded provider stream and is "
+                "not available as a JSON object. Use the digest (the default) for "
+                f"structured output, or read the file directly: {ev_path}"
+            )
         with open(ev_path, "rb") as fh:
             sys.stdout.buffer.write(fh.read())
         return 0
@@ -1205,6 +1237,23 @@ def cmd_logs(ns: argparse.Namespace) -> int:
                         "cap_bytes": DIGEST_MAX_BYTES})
         )
         blob = "\n".join(kept)
+        norm = [json.loads(line) for line in kept]
+
+    if ns.json:
+        # The digest is already machine-readable as JSONL, so --json is not about
+        # making it parseable -- it is about the ENVELOPE. A caller that asks
+        # every command for JSON gets one object here too, with the truncation
+        # state as a field rather than as a sentinel line it has to notice.
+        truncated = norm and norm[-1].get("event") == "truncated"
+        print(json.dumps({
+            "job_id": ns.job,
+            "format": "digest",
+            "events": norm[:-1] if truncated else norm,
+            "truncated": bool(truncated),
+            "dropped_events": norm[-1].get("dropped_events", 0) if truncated else 0,
+            "cap_bytes": DIGEST_MAX_BYTES,
+        }, indent=2))
+        return 0
     print(blob)
     return 0
 
@@ -1332,6 +1381,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="keep the N most recent jobs, remove the rest")
     gp.add_argument("--yes", action="store_true",
                     help="actually delete (without this, gc only reports)")
+    gp.add_argument("--compact-ledger", dest="compact_ledger", action="store_true",
+                    help="fold spend.jsonl history older than today into an "
+                         "append-only spend-rollup.jsonl (totals are preserved)")
     gp.add_argument("--include-sessions", dest="include_sessions", action="store_true",
                     help="also remove session stores whose worktree is gone. Needs "
                          "--yes as well: a job directory can be recreated by "

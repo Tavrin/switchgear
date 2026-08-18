@@ -297,6 +297,15 @@ only durable copy of a conversation you may still want to `resume`. A store whos
 worktree cannot be stat'ed is reported as **skipped**, never deleted —
 unverifiable is not absent.
 
+`--compact-ledger` folds `spend.jsonl` history older than today into an
+append-only `spend-rollup.jsonl`. Only `assert_within_budget` reads the ledger in
+the hot path — via `spent_since(day_start())` — so everything before today is
+history: worth keeping, not worth carrying in the file the budget check reads.
+Totals are preserved (`quota --rollup` still shows the compacted days, and a
+provider that appears only in history does not vanish), the budget reading is
+byte-for-byte unchanged, and compacting twice cannot double-count. It removes no
+jobs, so it needs no job selector.
+
 Every protected entry carries the reason it was kept, so a caller who expected a
 job to go can see which rule kept it instead of concluding `gc` is broken. Bytes
 are measured by block count, never `os.path.getsize`, which follows symlinks.
@@ -432,6 +441,9 @@ ones are the defaults on purpose:
 - **read `logs` (digest)** only when something looks wrong. It is normalized,
   structured, and capped at 8 KiB in code; on truncation it emits a final
   `{"event":"truncated","dropped_events":N}` rather than trimming silently.
+- **`logs --json`** wraps the digest in one object with `truncated` and
+  `dropped_events` as fields, rather than as a sentinel line the caller has to
+  notice. `--format full` under `--json` is **refused**, not wrapped.
 - **`logs --format full`** is the raw provider stream. It is unbounded and grows
   with job length. It is for a human terminal, a TUI or a file tail — never for
   an agent's context. There is deliberately no default that lands here.
