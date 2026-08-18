@@ -130,7 +130,8 @@ class ExpiryHandling(unittest.TestCase):
                 "grok", {"auth_file": path, "auth_format": "grok-oidc"})
         msg = str(cm.exception)
         self.assertIn("expired", msg)
-        self.assertIn("re-login", msg)
+        # Actionable: it must say how to fix it, not just that it is broken.
+        self.assertTrue("refresh" in msg or "log in" in msg, msg)
 
     def test_a_token_expiring_within_the_skew_is_already_expired(self):
         """A job starting with 20 seconds left outlives its own credential
@@ -394,6 +395,11 @@ class ProviderPinning(unittest.TestCase):
         link = os.path.expanduser("~/.grok/bin/grok")
         if not os.path.exists(link):
             self.skipTest("grok not installed")
+        # Grok self-updates and repoints this symlink (1.0.4 -> 1.0.5 was
+        # observed mid-session). It must still be RECOGNISED as grok -- an
+        # unrecognised real binary falls through to the committed-mock branch and
+        # would run with neither the live gate nor a broker. The version
+        # assertion is what refuses an untested build, loudly.
         self.assertEqual(pinned_for_path(link)[0], "grok")
 
     def test_a_pinned_binary_still_needs_the_live_gate(self):

@@ -396,6 +396,12 @@ class GrokAdapter:
             str(ev.get("data") or "") for ev in events if ev.get("type") == "text"
         )
 
+    def refresh_argv(self, provider_argv: list[str]) -> list[str] | None:
+        """`grok models` refreshes an expired session in place -- measured:
+        backdating expires_at then running it produced a NEW token and a new
+        expiry, with agent-ops never touching the refresh token."""
+        return list(provider_argv) + ["models"]
+
     def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
         for ev in events:
             if ev.get("type") == "end" and isinstance(ev.get("sessionId"), str):
@@ -706,6 +712,9 @@ class ClaudeCodeAdapter:
             return _extract_handoff(self.full_text(parsed))
         return None, None
 
+    def refresh_argv(self, provider_argv: list[str]) -> list[str] | None:
+        return list(provider_argv) + ["doctor"]
+
     def full_text(self, events: Iterable[dict[str, Any]]) -> str:
         """Unclipped assistant text, for contract extraction."""
         out = []
@@ -815,6 +824,10 @@ class CodexAdapter:
 
     def agent_name(self, mode: str) -> str:
         return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+
+    def refresh_argv(self, provider_argv: list[str]) -> list[str] | None:
+        """A cheap, no-model command that makes the CLI refresh its own session."""
+        return list(provider_argv) + ["doctor"]
 
     def extra_binds(self, provider_argv: list[str]) -> list[str]:
         """Codex is not one file: it needs its sibling helpers.

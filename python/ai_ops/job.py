@@ -158,7 +158,19 @@ def run_job(
             # Resolved by the provider's declared credential class: an
             # operator-installed API key, or the access token out of a CLI's own
             # OAuth session. Either way it stays controller-side.
-            cred = credmod.load_credential(provider_id, prec)
+            # If the access token has gone stale, let the provider's OWN CLI
+            # refresh it before giving up. These tokens last about an hour and
+            # every vendor CLI refreshes on use, so refusing would send the
+            # operator off to run a command by hand for a credential that is
+            # perfectly valid.
+            prov_argv_for_refresh, _ = provider.resolve_provider(provider_path)
+            cred = credmod.load_credential(
+                provider_id,
+                prec,
+                on_expired=lambda: credmod.refresh_via_own_cli(
+                    provider_id, prec, list(prov_argv_for_refresh), adapter
+                ),
+            )
             upstream = os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or prec["upstream"]
             if not cred:
                 # Fail closed. Falling through to the no-broker path here would

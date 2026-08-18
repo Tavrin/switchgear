@@ -40,9 +40,14 @@ PINNED_PROVIDERS: dict[str, dict[str, str | None]] = {
         "version": "0.147.0",
     },
     "grok": {
-        # The launcher symlinks into ~/.grok/downloads; the real file is pinned
-        # so an update that repoints the symlink is caught rather than followed.
+        # The launcher symlinks into ~/.grok/downloads and Grok SELF-UPDATES,
+        # repointing it (measured: 1.0.4 -> 1.0.5 mid-session). Both are listed:
+        # `path` is the tested file, `launcher` the stable entry point. Matching
+        # either is what stops an updated binary from falling through to the
+        # committed-mock branch -- it is recognised as Grok and then refused
+        # loudly by the version assertion until someone tests the new build.
         "path": "/home/user/.grok/downloads/grok-linux-x86_64",
+        "launcher": "/home/user/.grok/bin/grok",
         "version": "1.0.4",
     },
 }
@@ -63,7 +68,8 @@ def pinned_for_path(path: str) -> tuple[str, dict[str, str | None]] | None:
     """
     target = os.path.realpath(path)
     for name, rec in PINNED_PROVIDERS.items():
-        pinned = rec.get("path")
-        if pinned and os.path.realpath(pinned) == target:
-            return name, rec
+        for key in ("path", "launcher"):
+            pinned = rec.get(key)
+            if pinned and os.path.exists(pinned) and os.path.realpath(pinned) == target:
+                return name, rec
     return None

@@ -218,7 +218,138 @@ _EXTRACTORS: dict[str, Callable[[dict[str, Any]], tuple[str, float | None]]] = {
 }
 
 
-def load_oauth_credential(provider_id: str, prec: dict[str, Any]) -> Credential:
+def _has_refresh_token(obj: Any) -> bool:
+    """Whether the session could be refreshed BY ITS OWN CLI.
+
+    Checks only for the presence of such a field, at any depth -- deliberately
+    without reading the value, which is the invariant this module exists to keep.
+    """
+    if isinstance(obj, dict):
+        return any(
+            ("refresh" in k.lower() and bool(v)) or _has_refresh_token(v)
+            for k, v in obj.items()
+        )
+    if isinstance(obj, list):
+        return any(_has_refresh_token(x) for x in obj)
+    return False
+
+
+def refresh_via_own_cli(
+    provider_id: str, prec: dict[str, Any], provider_argv: list[str], adapter
+) -> bool:
+    """Ask the provider's own CLI to refresh its session -- on a COPY.
+
+    Returns True if the real session was replaced with a fresher one.
+
+    THE COPY IS NOT AN OPTIMISATION, IT IS THE SAFETY PROPERTY. The first version
+    of this bind-mounted the real credential directory read-write so the CLI
+    could write the refreshed token back. Measured consequence: presented with a
+    session it judged invalid, the Grok CLI did not refresh it -- it DELETED
+    auth.json. That is a destroyed login, and in production an actually-expired
+    token would hit exactly that path. A credential store is not ours to hand to
+    a process that may decide to reset it.
+
+    So the CLI operates on a throwaway copy. If it produces a valid, fresher
+    session there, that file is atomically installed over the real one (with a
+    backup alongside). If it wipes the copy, errors, or produces something no
+    better, the real store is never touched.
+
+    agent-ops still never reads the refresh token: the CLI that owns the
+    credential performs its own refresh. That is what makes one mechanism serve
+    every provider instead of a hand-written OAuth flow per vendor.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    from . import sandbox
+
+    argv = adapter.refresh_argv(list(provider_argv)) if hasattr(adapter, "refresh_argv") else None
+    if not argv:
+        return False
+    path = os.path.expanduser(prec.get("auth_file") or "")
+    if not path or not os.path.isfile(path):
+        return False
+    auth_dir = os.path.dirname(path)
+    name = os.path.basename(auth_dir)
+    rel = os.path.relpath(path, auth_dir)
+
+    # Serialise refreshes for this provider. These refresh tokens ROTATE: a
+    # successful refresh invalidates the one that was used. Two jobs refreshing
+    # at once therefore race to burn the same rotation, and the loser is left
+    # holding a token the issuer has already retired -- a broken login caused by
+    # nothing but concurrency. Measured the hard way: a refresh whose result was
+    # discarded instead of persisted killed the session it was trying to save.
+    import fcntl
+
+    lock_path = path + ".aiops-refresh.lock"
+    home = tempfile.mkdtemp(prefix="aiops-refresh-")
+    lock_fh = open(lock_path, "w")
+    try:
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Another job is already refreshing. Do not race it; that job will
+            # write the new session and this one re-reads on its next attempt.
+            return False
+        # ONLY the session file, into an otherwise-empty directory. Copying the
+        # whole credential directory drags in lock files, caches and local state
+        # that change how the CLI behaves -- measured: a full-directory copy made
+        # the Grok CLI discard the session instead of refreshing it, while a bare
+        # directory holding just auth.json refreshed cleanly. Less is both safer
+        # and, here, the only thing that works.
+        work = os.path.join(home, name)
+        os.makedirs(work, exist_ok=True)
+        shutil.copy2(path, os.path.join(work, rel))
+        try:
+            full = sandbox.build_credential_refresh_argv(
+                auth_dir=work, synth_home=home, provider_argv=argv
+            )
+            subprocess.run(
+                full,
+                env={"PATH": "/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8", "TERM": "dumb"},
+                capture_output=True,
+                timeout=120,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception:
+            return False
+
+        refreshed = os.path.join(work, rel)
+        if not os.path.isfile(refreshed):
+            return False  # the CLI wiped its copy; the real store is untouched
+        try:
+            with open(refreshed, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            extractor = _EXTRACTORS[prec["auth_format"]]
+            _token, exp = extractor(doc)
+        except Exception:
+            return False
+        # Only accept a session that is actually USABLE and actually newer.
+        if exp is None or exp - time.time() <= EXPIRY_SKEW_S:
+            return False
+
+        shutil.copy2(path, path + ".aiops-backup")
+        tmp = path + ".aiops-new"
+        shutil.copy2(refreshed, tmp)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)  # atomic
+        return True
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        try:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+            lock_fh.close()
+        except Exception:
+            pass
+
+
+def load_oauth_credential(
+    provider_id: str, prec: dict[str, Any], on_expired=None
+) -> Credential:
+    """`on_expired` is called once if the token is stale; if it returns True the
+    file is re-read. That is how an expired-but-refreshable session becomes a
+    working job instead of a refusal the operator has to fix by hand."""
     auth_file = prec.get("auth_file")
     fmt = prec.get("auth_format")
     if not auth_file or not fmt:
@@ -247,6 +378,15 @@ def load_oauth_credential(provider_id: str, prec: dict[str, Any]) -> Credential:
         raise Refuse(f"session file {path} is not a JSON object")
 
     token, expires_at = extractor(doc)
+    if (
+        on_expired is not None
+        and expires_at is not None
+        and expires_at - time.time() <= EXPIRY_SKEW_S
+        and on_expired()
+    ):
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        token, expires_at = extractor(doc)
     cred = Credential(token=token, cls="oauth", source=path, expires_at=expires_at)
     if fmt == "codex-tokens":
         acct = codex_account_id(token)
@@ -254,10 +394,22 @@ def load_oauth_credential(provider_id: str, prec: dict[str, Any]) -> Credential:
             cred.extra_headers["chatgpt-account-id"] = acct
     remaining = cred.seconds_remaining()
     if remaining is not None and remaining <= EXPIRY_SKEW_S:
+        # These access tokens are short-lived (about an hour) and the vendor CLI
+        # refreshes its own file whenever it runs. So the usual cause is not a
+        # lost login -- it is simply that the CLI has not been used for a while.
+        # Say that, because "re-login" sends the operator to a browser flow they
+        # almost never need.
+        has_refresh = _has_refresh_token(doc)
+        fix = (
+            f"run any {provider_id} command (e.g. `{provider_id} models`) to let its own "
+            "CLI refresh the session, then retry"
+            if has_refresh
+            else f"log in again with the {provider_id} CLI"
+        )
         raise Refuse(
-            f"provider '{provider_id}' session expired {-int(remaining)}s ago "
-            f"({path}); re-login with its own CLI. agent-ops deliberately does not "
-            "refresh: it never reads the refresh token"
+            f"provider '{provider_id}' access token expired {-int(remaining)}s ago "
+            f"({path}): {fix}. agent-ops does not refresh it itself -- it never "
+            "reads the refresh token, which is the whole subscription"
         )
     return cred
 
@@ -305,7 +457,7 @@ def load_sandbox_session(provider_id: str, prec: dict[str, Any]) -> dict[str, An
     return strip_refresh_tokens(doc)
 
 
-def load_credential(provider_id: str, prec: dict[str, Any]) -> Credential | None:
+def load_credential(provider_id: str, prec: dict[str, Any], **kwargs) -> Credential | None:
     """Resolve a provider's credential by its registry-declared class.
 
     Returns None only for a configured api-key provider with no key installed --
@@ -315,7 +467,7 @@ def load_credential(provider_id: str, prec: dict[str, Any]) -> Credential | None
     """
     cls = (prec.get("credential_class") or "api-key").strip().lower()
     if cls == "oauth":
-        return load_oauth_credential(provider_id, prec)
+        return load_oauth_credential(provider_id, prec, on_expired=kwargs.get("on_expired"))
     if cls != "api-key":
         raise Refuse(
             f"provider '{provider_id}' has unknown credential_class {cls!r} "
