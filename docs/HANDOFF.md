@@ -132,8 +132,14 @@ settle for OpenCode alone — proving that host global agents, plugins and
 `OPENCODE_PERMISSION` cannot leak in. Each new provider reopens that question
 from scratch, with its own config discovery, credential store, event vocabulary
 and permission model. Codex and Grok both have native CLIs on this machine
-(`codex`, `~/.grok/bin/grok`). Grok notably has **no** agent/permission model, so
-it would rely purely on the OS boundary.
+(`codex`, `~/.grok/bin/grok`).
+
+> **Corrected 2026-08-18 by measurement — see `PROVIDERS.md`.** The claim that
+> Grok has "no agent/permission model" is wrong: it has `--agent`, `--agents`,
+> `--allow`/`--deny` and headless NDJSON output. And Codex's isolation question
+> is already settled (the synthetic HOME hides its auth, MCP servers, history and
+> config); what actually blocks a Codex adapter is that its auth is ChatGPT OAuth
+> rather than an API key, which does not fit the broker.
 
 Verify each adapter with a **no-model probe inside the real sandbox** (the
 technique that settled F04: run the binary's own config-dump command under
