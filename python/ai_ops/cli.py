@@ -809,7 +809,11 @@ def cmd_providers(ns: argparse.Namespace) -> int:
                "provider_path": os.path.realpath(binary) if binary and os.path.exists(binary) else None,
                "status": "ok" if ok else ("not installed" if not installed else "UNVERIFIED")}
 
-        if getattr(ns, "verify", False) and installed and not ok:
+        # Both spellings. `providers verify` is what every remedy in this
+        # codebase reached for independently, and a remedy that errors is worse
+        # than none -- so the parser accepts the phrasing the tool itself uses.
+        wants_verify = bool(getattr(ns, "verify", False)) or getattr(ns, "action", None) == "verify"
+        if wants_verify and installed and not ok:
             # The real check: does this build still offer the CLI surface the
             # adapter's argv depends on? A version number proves nothing; a
             # missing flag breaks every job for that provider.
@@ -1398,9 +1402,12 @@ def build_parser() -> argparse.ArgumentParser:
     ls.set_defaults(func=cmd_lease)
 
     pv = sub.add_parser("providers", help="installed provider binaries and whether their build is verified")
-    pv.add_argument("--provider")
+    pv.add_argument("action", nargs="?", choices=["verify"],
+                    help="`verify` checks an unverified build against its "
+                         "adapter's CLI surface and records it")
+    pv.add_argument("--provider", help="limit to one provider")
     pv.add_argument("--verify", action="store_true",
-                    help="check an unverified build against its adapter's CLI surface and record it")
+                    help="same as the `verify` action")
     pv.set_defaults(func=cmd_providers)
 
     ep = sub.add_parser("execution-profile", help="content digest of the launcher and package, for pinning")

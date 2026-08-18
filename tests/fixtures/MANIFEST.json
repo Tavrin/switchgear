@@ -1,0 +1,30 @@
+{
+  "_why": "Which provider build produced each captured stream. `providers verify` checks that a new build still offers the CLI FLAGS an adapter's argv needs, and explicitly does not check the event VOCABULARY -- that needs a captured stream. These CLIs update weekly, so a vocabulary regression would present as 'jobs stopped failing to parse' with no obvious cause. This file is the baseline that makes drift visible.",
+  "_captured_version": "null means the exact build was not recorded at capture time. That is honest rather than guessed: a wrong baseline is worse than an absent one, because it reads as a check that passed. Re-capture to establish it.",
+  "fixtures": {
+    "opencode-real-scout.jsonl": {
+      "provider": "opencode",
+      "captured_version": "1.18.18",
+      "captured_at": "2026-08-18",
+      "note": "the pinned build at capture time; no other opencode was installed"
+    },
+    "claude-real-scout.jsonl": {
+      "provider": "claude",
+      "captured_version": "2.1.235",
+      "captured_at": "2026-08-18",
+      "note": "re-captured after the fixture check flagged 2.1.234 -> 2.1.235; the vocabulary was unchanged (init/result/assistant, session_id on every event, thinking+tool_use+text blocks)"
+    },
+    "codex-real-scout.jsonl": {
+      "provider": "codex",
+      "captured_version": "0.147.0",
+      "captured_at": "2026-08-18",
+      "note": "the pinned build at capture time"
+    },
+    "grok-real-scout.jsonl": {
+      "provider": "grok",
+      "captured_version": "1.0.5",
+      "captured_at": "2026-08-18",
+      "note": "re-captured to establish the baseline the freshness check said was missing; vocabulary unchanged (text/thought/tool_call/tool_call_update/usage/end)"
+    }
+  }
+}

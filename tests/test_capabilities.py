@@ -155,5 +155,71 @@ class Usable(unittest.TestCase):
         self.assertIn("PORTABILITY", check["remedy"])
 
 
+class RemediesAreRunnable(unittest.TestCase):
+    """A remedy that names a command which does not exist is worse than none.
+
+    Found the hard way: the refusal for an unverified provider build said to run
+    `ai-opencode providers verify --provider claude`, and the parser only accepted
+    `--verify`. The remedy errored. Every one of these strings is written by
+    someone confident it works, which is exactly why it needs a machine check.
+    """
+
+    def _invocations(self, text):
+        """Every `ai-opencode ...` command mentioned in a string."""
+        import re
+
+        out = []
+        for m in re.finditer(r"ai-opencode\s+([^`'\"\n.;]+)", text or ""):
+            argv = m.group(1).split()
+            # Trim trailing prose the regex swept up.
+            while argv and argv[-1] in {"—", "-", "and", "or", "then", "to", "it"}:
+                argv.pop()
+            if argv:
+                out.append(argv)
+        return out
+
+    def _parses(self, argv):
+        import argparse
+        import contextlib
+        import io
+
+        parser = build_parser()
+        placeholders = {"<root>", "<job>", "<abs", "N", "<duration>", "<provider>",
+                        "<path>", "<state>", "<s>", "<subject>", "<review>"}
+        cleaned = [a for a in argv if not (a.startswith("<") or a in placeholders)]
+        if not cleaned:
+            return True
+        with contextlib.redirect_stderr(io.StringIO()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                parser.parse_known_args(cleaned)
+            except SystemExit:
+                return False
+            except Exception:
+                return False
+        return True
+
+    def test_every_doctor_remedy_names_a_real_command(self):
+        from ai_ops import doctor
+
+        bad = []
+        for check in doctor.run_all(None)["checks"]:
+            for argv in self._invocations(check.get("remedy", "")):
+                if not self._parses(argv):
+                    bad.append((check["name"], " ".join(argv)))
+        self.assertEqual(bad, [], f"remedies naming commands that do not parse: {bad}")
+
+    def test_the_specific_form_that_was_broken(self):
+        """`providers verify` is the phrasing this codebase reached for in five
+        independent places; the parser now accepts it as well as --verify."""
+        self.assertTrue(self._parses(["providers", "verify", "--provider", "claude"]))
+        self.assertTrue(self._parses(["providers", "--provider", "claude", "--verify"]))
+
+    def test_the_check_can_actually_fail(self):
+        """Guard against the guard passing vacuously."""
+        self.assertFalse(self._parses(["providers", "definitely-not-an-action"]))
+        self.assertFalse(self._parses(["not-a-command"]))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -347,6 +347,68 @@ def check_health(state_path: str | None) -> list[dict[str, Any]]:
     ]
 
 
+def check_fixtures() -> list[dict[str, Any]]:
+    """Whether each provider's captured stream still matches its installed build.
+
+    `providers verify` checks that a new build offers the CLI FLAGS an adapter's
+    argv depends on, and explicitly does NOT check the event VOCABULARY -- that
+    needs a captured stream. These CLIs update weekly, so a normalization
+    regression is plausible and would present as "jobs stopped working" with no
+    obvious cause.
+
+    WARN, never fail: a version bump usually changes nothing in the stream. It is
+    a prompt to re-capture and re-run the tripwire tests, not a verdict.
+    """
+    import json as _json
+    import os as _os
+
+    from .compat import PINNED_PROVIDERS, version_token
+    from .provider import installed_version
+
+    root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    manifest_path = _os.path.join(root, "tests", "fixtures", "MANIFEST.json")
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = (_json.load(fh) or {}).get("fixtures") or {}
+    except (OSError, ValueError):
+        return [_check(
+            "fixtures.manifest", WARN, f"unreadable: {manifest_path}",
+            "the fixture manifest records which provider build produced each "
+            "captured stream; without it vocabulary drift is invisible.",
+        )]
+
+    out: list[dict[str, Any]] = []
+    for name, entry in sorted(manifest.items()):
+        provider = entry.get("provider")
+        captured = entry.get("captured_version")
+        rec = PINNED_PROVIDERS.get(provider) or {}
+        binary = rec.get("launcher") or rec.get("path")
+        if not binary:
+            continue  # not installed here; nothing to compare against
+        current = version_token(installed_version(binary))
+        if not captured:
+            out.append(_check(
+                f"fixtures.{provider}", WARN,
+                f"{name} has no recorded capture version (installed: {current})",
+                f"re-capture {name} from the current build to establish a "
+                "baseline; until then vocabulary drift for this provider cannot "
+                "be detected.",
+            ))
+        elif current and version_token(captured) != current:
+            out.append(_check(
+                f"fixtures.{provider}", WARN,
+                f"{name} captured from {captured}, installed is {current}",
+                f"re-capture {name} from {current} and re-run the tripwire tests. "
+                "`providers verify` checks the CLI flags, not the event "
+                "vocabulary, so this is the only thing that would catch a "
+                "normalization regression.",
+            ))
+        else:
+            out.append(_check(f"fixtures.{provider}", PASS,
+                              f"{name} matches the installed build ({current})"))
+    return out
+
+
 CHECKS: list[tuple[str, Callable[..., list[dict[str, Any]]], bool]] = [
     ("sandbox", check_sandbox, False),
     ("registry", check_registry, False),
@@ -355,6 +417,7 @@ CHECKS: list[tuple[str, Callable[..., list[dict[str, Any]]], bool]] = [
     ("state", check_state, True),
     ("effort", check_effort, False),
     ("health", check_health, True),
+    ("fixtures", check_fixtures, False),
     ("sessions", check_sessions, True),
 ]
 
