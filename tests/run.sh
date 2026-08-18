@@ -15,6 +15,9 @@ bash "$ROOT/tests/policy/test_no_project_nouns.sh"
 echo "== adversarial (absolute mock) =="
 /usr/bin/python3 "$ROOT/tests/test_adversarial.py"
 
+echo "== live-smoke retry rule (hermetic) =="
+bash "$ROOT/tests/test_live_retry.sh"
+
 echo "== OpenCode config probe (no model) =="
 /usr/bin/python3 "$ROOT/tests/test_config_probe.py"
 
