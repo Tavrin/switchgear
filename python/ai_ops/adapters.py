@@ -77,6 +77,35 @@ def parse_lenient(text: str) -> tuple[list[dict[str, Any]], int]:
     return out, idx
 
 
+# Effort ("reasoning effort") capability states.
+#
+# THREE states, not a boolean, for the same reason session_store_paths() is a
+# measured list rather than a flag: "this provider does not support effort" and
+# "nobody has measured which values it accepts" are different facts, and
+# collapsing them into one produces exactly the guessing this rail forbids.
+#
+# Measured 2026-08-18 by reading each CLI's own --help on the pinned build:
+#
+#   claude    --effort <level>            help ENUMERATES low, medium, high,
+#                                         xhigh, max
+#   grok      --reasoning-effort <EFFORT> flag confirmed (alias --effort); help
+#                                         gives no value list
+#   codex     -c model_reasoning_effort=  config key confirmed in the binary;
+#                                         no enumeration anywhere
+#   opencode  --variant <string>          help says "provider-specific reasoning
+#                                         effort, e.g. high, max, minimal" --
+#                                         an EXAMPLE, explicitly not a list, and
+#                                         it varies by underlying model anyway
+#
+# Also measured: none of grok, codex or opencode validate the value at parse
+# time (each accepted `bogus-value` and still ran). So a wrong value is silently
+# ignored by the provider rather than rejected, which is why the rail refuses
+# unmeasured values itself instead of passing them through and hoping.
+EFFORT_SUPPORTED = "supported"
+EFFORT_UNMEASURED = "unmeasured"
+EFFORT_UNSUPPORTED = "unsupported"
+
+
 class OpenCodeAdapter:
     """OpenCode 1.18.x.
 
@@ -106,6 +135,17 @@ class OpenCodeAdapter:
     # argv, the OPENCODE_* environment and the generated agent definition all sit
     # behind the same seam as parse() -- otherwise the seam is nominal and the
     # next provider still has to edit the job lifecycle.
+    def effort_support(self) -> dict[str, Any]:
+        """`--variant` is documented as "provider-specific reasoning effort".
+
+        UNMEASURED, not supported: the help text gives examples ("e.g. high, max,
+        minimal"), and an example list is not an accepted-value list. It is also
+        genuinely per-model here, since opencode fronts many vendors -- so the
+        set cannot be a property of the adapter at all, and pinning one would be
+        wrong for most of the pool.
+        """
+        return {"status": EFFORT_UNMEASURED, "flag": "--variant"}
+
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -157,6 +197,7 @@ class OpenCodeAdapter:
         prompt: str,
         attach_dir: str | None = None,
         resume_session: str | None = None,
+        effort: str | None = None,
     ) -> list[str]:
         resume = ["--session", resume_session] if resume_session else []
         return list(provider_argv) + [
@@ -173,8 +214,7 @@ class OpenCodeAdapter:
             "json",
             "--title",
             f"ai-opencode {role} {job_id}",
-            prompt,
-        ]
+        ] + (["--variant", effort] if effort else []) + [prompt]
 
     def version_argv(self, provider_argv: list[str]) -> list[str]:
         return list(provider_argv) + ["--version"]
@@ -354,6 +394,15 @@ class GrokAdapter:
         _os.chmod(dest, 0o600)
         return dest
 
+    def effort_support(self) -> dict[str, Any]:
+        """`--reasoning-effort` (alias `--effort`) confirmed on 1.0.x.
+
+        UNMEASURED: the flag exists and takes a value, but the CLI enumerates
+        nothing and accepts anything at parse time, so the accepted set is only
+        knowable from a live call.
+        """
+        return {"status": EFFORT_UNMEASURED, "flag": "--reasoning-effort"}
+
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -403,6 +452,7 @@ class GrokAdapter:
         prompt: str,
         attach_dir: str | None = None,
         resume_session: str | None = None,
+        effort: str | None = None,
     ) -> list[str]:
         # No --dir: grok works from cwd, and build_bwrap_argv --chdir's to the
         # worktree. No permission flags either -- deliberately. Grok has
@@ -420,6 +470,8 @@ class GrokAdapter:
             "--model",
             wire,
         ]
+        if effort:
+            argv += ["--reasoning-effort", effort]
         if resume_session:
             argv += ["--resume", resume_session]
         if agent.endswith("bounded-write"):
@@ -638,6 +690,20 @@ class ClaudeCodeAdapter:
     # Proven: a clean HOME with no credentials file runs fine on an env token.
     credential_in_sandbox = False
 
+    def effort_support(self) -> dict[str, Any]:
+        """The only provider that enumerates its own values.
+
+        Read off `claude --help` on the pinned build: "Effort level for the
+        current session (low, medium, high, xhigh, max)". Measured, so it is
+        SUPPORTED and the rail can validate a requested value before spending
+        anything.
+        """
+        return {
+            "status": EFFORT_SUPPORTED,
+            "flag": "--effort",
+            "values": ["low", "medium", "high", "xhigh", "max"],
+        }
+
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -683,6 +749,7 @@ class ClaudeCodeAdapter:
         prompt: str,
         attach_dir: str | None = None,
         resume_session: str | None = None,
+        effort: str | None = None,
     ) -> list[str]:
         # No --dir: build_bwrap_argv --chdir's to the worktree. --verbose is
         # REQUIRED for stream-json (the CLI rejects the combination without it).
@@ -696,6 +763,8 @@ class ClaudeCodeAdapter:
             "--model",
             wire,
         ]
+        if effort:
+            argv += ["--effort", effort]
         if resume_session:
             argv += ["--resume", resume_session]
         if attach_dir:
@@ -939,6 +1008,16 @@ class CodexAdapter:
             "YnJva2VyLXBsYWNlaG9sZGVy",
         ])
 
+    def effort_support(self) -> dict[str, Any]:
+        """`-c model_reasoning_effort=<v>`: the KEY is confirmed, the values are not.
+
+        The config key is present in the pinned binary. No enumeration is
+        published and `-c model_reasoning_effort=bogus-value` is accepted at parse
+        time, so the accepted set stays UNMEASURED rather than being copied from
+        another provider that happens to use similar words.
+        """
+        return {"status": EFFORT_UNMEASURED, "flag": "-c model_reasoning_effort="}
+
     def required_flags(self) -> list[str]:
         """CLI surface this adapter's argv depends on.
 
@@ -984,6 +1063,7 @@ class CodexAdapter:
         prompt: str,
         attach_dir: str | None = None,
         resume_session: str | None = None,
+        effort: str | None = None,
     ) -> list[str]:
         # --skip-git-repo-check: the sandbox mounts the git dir read-only and
         # Codex's own check is redundant with the rail's worktree identity work.
@@ -1002,6 +1082,11 @@ class CodexAdapter:
             argv += ["resume", resume_session]
         argv += ["--skip-git-repo-check", "--json", "--sandbox", sandbox_mode,
                  "--model", wire]
+        if effort:
+            # Codex takes this as a config override rather than a flag. `-c
+            # key=value` is one argv pair, so the value cannot be split off into
+            # a position where it would read as a prompt.
+            argv += ["-c", f"model_reasoning_effort={effort}"]
         if attach_dir:
             argv += ["--add-dir", attach_dir]
         return argv + [prompt]

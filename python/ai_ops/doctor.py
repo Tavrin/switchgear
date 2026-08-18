@@ -254,12 +254,43 @@ def check_sessions(state_path: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def check_effort() -> list[dict[str, Any]]:
+    """Which providers can be given a reasoning-effort value, and which cannot yet.
+
+    Reported so `effort` is DISCOVERABLE without reading source: an agent writing
+    a profile needs to know that asking Codex for `high` will be refused today,
+    and why, before it writes the role.
+    """
+    from .adapters import EFFORT_SUPPORTED, EFFORT_UNMEASURED, _ADAPTERS
+
+    out: list[dict[str, Any]] = []
+    for name in sorted(_ADAPTERS):
+        sup = _ADAPTERS[name].effort_support()
+        status = sup.get("status")
+        if status == EFFORT_SUPPORTED:
+            out.append(_check(f"effort.{name}", PASS,
+                              f"{sup['flag']} accepts {', '.join(sup['values'])}"))
+        elif status == EFFORT_UNMEASURED:
+            out.append(_check(
+                f"effort.{name}", PASS,
+                f"{sup.get('flag')} exists, accepted values unmeasured — effort "
+                "requests are refused for this provider",
+                "measure the accepted values with one cheap live job and add them "
+                f"to {name}'s effort_support(); until then a role must not set "
+                "`effort` for it.",
+            ))
+        else:
+            out.append(_check(f"effort.{name}", PASS, "no effort control"))
+    return out
+
+
 CHECKS: list[tuple[str, Callable[..., list[dict[str, Any]]], bool]] = [
     ("sandbox", check_sandbox, False),
     ("registry", check_registry, False),
     ("providers", check_providers, False),
     ("credentials", check_credentials, False),
     ("state", check_state, True),
+    ("effort", check_effort, False),
     ("sessions", check_sessions, True),
 ]
 

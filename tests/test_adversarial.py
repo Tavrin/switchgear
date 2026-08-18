@@ -1358,6 +1358,39 @@ class RailTests(unittest.TestCase):
             self.assertFalse((ROOT / stale).exists(), f"{stale} must not be reintroduced")
 
 
+    # --- effort ------------------------------------------------------------
+
+    def test_effort_from_the_profile_lands_on_the_record(self):
+        """Profile-owned, end to end: the mock provider is opencode-shaped, whose
+        values are UNMEASURED, so this also proves the refusal is real rather
+        than a lint on a string."""
+        prof = json.loads(self.profile.read_text())
+        prof["roles"]["scout"]["effort"] = "high"
+        self.profile.write_text(json.dumps(prof, indent=2))
+        p = run_cli(self.args("scout", str(self.primary), "hello"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("never been measured", p.stderr)
+        self.assertIn("--variant", p.stderr, "refusal must name the control it means")
+        self.assertIn("measure the values", p.stderr.lower(),
+                      "refusal must name a remedy")
+
+    def test_a_role_without_effort_records_null(self):
+        p = run_cli(self.args("--json", "scout", str(self.primary), "hello"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = json.loads(p.stdout)["job_id"]
+        rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+        self.assertIsNone(rec["effort"], "absent effort must be recorded, not omitted")
+
+    def test_an_unusable_effort_costs_nothing(self):
+        """Refused before the job directory exists, so a bad profile cannot
+        litter the state root or touch the budget."""
+        prof = json.loads(self.profile.read_text())
+        prof["roles"]["scout"]["effort"] = "high"
+        self.profile.write_text(json.dumps(prof, indent=2))
+        before = sorted(os.listdir(self.state / "jobs"))
+        run_cli(self.args("scout", str(self.primary), "hello"))
+        self.assertEqual(sorted(os.listdir(self.state / "jobs")), before)
+
     # --- `jobs` listing -------------------------------------------------
     # A state root's contents were entirely unlistable before this command.
     def _run_scout_job(self):

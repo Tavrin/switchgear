@@ -57,6 +57,49 @@ def _require_disk_headroom(path: str) -> None:
         )
 
 
+def _resolve_effort(requested: str | None, adapter) -> str | None:
+    """Validate a profile's effort request against what the provider can prove.
+
+    Effort is PROFILE-OWNED, never a caller flag, for the same reason model
+    choice is: it is a cost and behaviour lever, and the profile is where those
+    are fixed and validated. A bare --effort override would defeat the invariant
+    the budget, the model allowlist and the command allowlist all rely on.
+
+    Refuses rather than silently dropping. Measured on the pinned builds: grok,
+    codex and opencode all ACCEPT an unrecognised effort value at parse time and
+    run anyway -- so passing an unverified value through would buy a job that
+    quietly ran at the model's default while the record claimed otherwise. A
+    refusal with a remedy is worth more than a lie in the evidence.
+    """
+    if not requested:
+        return None
+    from .adapters import EFFORT_SUPPORTED, EFFORT_UNMEASURED
+
+    support = adapter.effort_support()
+    status = support.get("status")
+    if status == EFFORT_UNMEASURED:
+        raise Refuse(
+            f"provider {adapter.name!r} exposes an effort control "
+            f"({support.get('flag')}) but its accepted VALUES have never been "
+            "measured on this build, so the rail will not send one blindly — the "
+            "CLI accepts anything and silently ignores what it does not know. "
+            "Measure the values with one cheap live job, add them to that "
+            "adapter's effort_support(), or drop `effort` from this role."
+        )
+    if status != EFFORT_SUPPORTED:
+        raise Refuse(
+            f"provider {adapter.name!r} has no effort control; remove `effort` "
+            f"from role config for this profile."
+        )
+    values = support.get("values") or []
+    if requested not in values:
+        raise Refuse(
+            f"effort {requested!r} is not accepted by {adapter.name!r} "
+            f"(measured: {', '.join(values)})"
+        )
+    return requested
+
+
 def _reclaim_sandbox_home(home: str) -> None:
     """Delete the per-job synthetic HOME once the record is written.
 
@@ -145,6 +188,10 @@ def run_job(
     from . import quota as quotamod
 
     adapter = get_adapter(profile.get("provider"))
+    # Validated here rather than at argv-build time: an unusable effort request
+    # must cost nothing, so it is refused before the job directory exists and
+    # before the budget is touched.
+    effort = _resolve_effort(spec.get("effort"), adapter)
 
     # Before any work, and before any job directory exists: a budget checked
     # after the spend is an audit, not a control.
@@ -344,6 +391,7 @@ def run_job(
             prompt=job_prompt,
             attach_dir=attach_dir,
             resume_session=resume_session,
+            effort=effort,
         )
         # bind mock script if python
         extra_binds = [p for p in prov_argv if os.path.isabs(p) and os.path.exists(p)]
@@ -506,6 +554,10 @@ def run_job(
             "mode": mode,
             "role": role,
             "model": model,
+            # What the provider was actually TOLD to use, not what the profile
+            # asked for -- null means no effort was sent, which is the honest
+            # record when a role declares none.
+            "effort": effort,
             "dir": ident.realpath,
             "exit": result.returncode,
             "started": _now(),

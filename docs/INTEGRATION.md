@@ -199,6 +199,34 @@ recycled) is the fallback authority.
 `cancel <job-id>` terminates the job's process group, escalating TERM→KILL, and
 records the cancellation so a later poll says `cancelled` rather than `died`.
 
+### Reasoning effort
+
+Effort is **profile-owned**, set per role, never a caller flag:
+
+```json
+"roles": { "scout": { "model": "claude/claude-haiku-4-5-20251001",
+                      "mode": "readonly", "effort": "low" } }
+```
+
+It is a cost and behaviour lever exactly like model choice, so it lives where
+model choice already lives and is validated against the same kind of allowlist. A
+bare `--effort` override would defeat the invariant the budget, the model
+allowlist and the command allowlist all rely on.
+
+An adapter reports one of **three** states, not a boolean — `supported` (with the
+measured values), `unmeasured`, or `unsupported`. "This provider has no effort
+control" and "nobody has measured which values it accepts" are different facts.
+`doctor` prints the current table; today only Claude Code is `supported`
+(`low, medium, high, xhigh, max`, enumerated by its own `--help`).
+
+A request the rail cannot verify is **refused**, never silently dropped, and
+refused before the job directory exists so it costs nothing. This matters because
+Grok, Codex and OpenCode were each measured to **accept an unrecognised effort
+value at parse time and run anyway** — passing one through would buy a job that
+quietly ran at the model's default while the record claimed otherwise.
+
+The value actually sent is recorded on the job as `effort` (null when none was).
+
 ### Checking the install before you depend on it
 
 ```

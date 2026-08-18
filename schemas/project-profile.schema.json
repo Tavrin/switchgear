@@ -2,46 +2,129 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "Project profile",
   "type": "object",
-  "required": ["name", "provider", "models", "roles"],
+  "required": [
+    "name",
+    "provider",
+    "models",
+    "roles"
+  ],
   "additionalProperties": false,
   "properties": {
-    "name": { "type": "string", "minLength": 1 },
-    "provider": { "type": "string", "enum": ["opencode", "grok", "claude", "codex"],
-      "description": "The provider BINARY this profile invokes (not the model pool). Adding one here is not enough: it needs an adapter in adapters.py and a pinned binary in compat.py, both of which refuse an unknown provider." },
-    "timeout_s": { "type": "integer", "minimum": 1, "maximum": 1800 },
-    "timeout_min": { "type": "integer", "minimum": 1 },
-    "timeout_max": { "type": "integer", "maximum": 1800 },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": "string",
+      "enum": [
+        "opencode",
+        "grok",
+        "claude",
+        "codex"
+      ],
+      "description": "The provider BINARY this profile invokes (not the model pool). Adding one here is not enough: it needs an adapter in adapters.py and a pinned binary in compat.py, both of which refuse an unknown provider."
+    },
+    "timeout_s": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1800
+    },
+    "timeout_min": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timeout_max": {
+      "type": "integer",
+      "maximum": 1800
+    },
     "models": {
       "type": "object",
-      "required": ["allow"],
+      "required": [
+        "allow"
+      ],
       "additionalProperties": false,
       "properties": {
-        "allow": { "type": "array", "items": { "type": "string" } },
-        "deny": { "type": "array", "items": { "type": "string" } }
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "roles": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["model", "mode"],
+        "required": [
+          "model",
+          "mode"
+        ],
         "properties": {
-          "model": { "type": "string" },
-          "mode": { "type": "string", "enum": ["readonly", "bounded-write"] }
+          "model": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "readonly",
+              "bounded-write"
+            ]
+          },
+          "effort": {
+            "type": "string",
+            "description": "reasoning effort for this role. Profile-owned like model: never a caller flag. Refused unless the provider's adapter has MEASURED its accepted values."
+          }
         }
       }
     },
     "review": {
       "type": "object",
       "properties": {
-        "required_after_write": { "type": "boolean" },
+        "required_after_write": {
+          "type": "boolean"
+        },
         "independence": {
           "type": "object",
           "properties": {
-            "different_job": { "type": "string", "enum": ["required", "preferred", "optional"] },
-            "different_model": { "type": "string", "enum": ["required", "preferred", "optional"] },
-            "different_family": { "type": "string", "enum": ["required", "preferred", "optional"] },
-            "different_provider": { "type": "string", "enum": ["required", "preferred", "optional"] }
+            "different_job": {
+              "type": "string",
+              "enum": [
+                "required",
+                "preferred",
+                "optional"
+              ]
+            },
+            "different_model": {
+              "type": "string",
+              "enum": [
+                "required",
+                "preferred",
+                "optional"
+              ]
+            },
+            "different_family": {
+              "type": "string",
+              "enum": [
+                "required",
+                "preferred",
+                "optional"
+              ]
+            },
+            "different_provider": {
+              "type": "string",
+              "enum": [
+                "required",
+                "preferred",
+                "optional"
+              ]
+            }
           }
         }
       }
@@ -49,15 +132,25 @@
     "worktree": {
       "type": "object",
       "properties": {
-        "require_linked_worktree_for_write": { "type": "boolean" },
-        "require_lease_for_write": { "type": "boolean" },
-        "allow_primary_for_readonly": { "type": "boolean" }
+        "require_linked_worktree_for_write": {
+          "type": "boolean"
+        },
+        "require_lease_for_write": {
+          "type": "boolean"
+        },
+        "allow_primary_for_readonly": {
+          "type": "boolean"
+        }
       }
     },
-    "write_enabled": { "type": "boolean" },
+    "write_enabled": {
+      "type": "boolean"
+    },
     "commands": {
       "type": "object",
-      "additionalProperties": { "type": "boolean" }
+      "additionalProperties": {
+        "type": "boolean"
+      }
     }
   }
 }

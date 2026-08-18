@@ -715,6 +715,113 @@ class ResumeContract(unittest.TestCase):
                 self.assertNotEqual(path.rstrip("/"), ".codex", name)
 
 
+class EffortContract(unittest.TestCase):
+    """Effort is measured per provider, refused when unmeasured, and never
+    silently dropped."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def _argv(self, name, **over):
+        base = dict(provider_argv=["/BIN"], worktree="/w", model_id="p/m",
+                    agent="ai-ops-readonly", role="scout", job_id="j", prompt="MSG")
+        base.update(over)
+        return get_adapter(name).argv(**base)
+
+    def test_three_states_not_a_boolean(self):
+        """"unsupported" and "not yet measured" are different facts. Collapsing
+        them is the guessing this rail exists to avoid."""
+        from ai_ops.adapters import (
+            EFFORT_SUPPORTED, EFFORT_UNMEASURED, EFFORT_UNSUPPORTED, _ADAPTERS,
+        )
+
+        allowed = {EFFORT_SUPPORTED, EFFORT_UNMEASURED, EFFORT_UNSUPPORTED}
+        for name, adapter in _ADAPTERS.items():
+            sup = adapter.effort_support()
+            self.assertIn(sup["status"], allowed, name)
+            if sup["status"] == EFFORT_SUPPORTED:
+                self.assertTrue(sup.get("values"),
+                                f"{name} claims supported but measured no values")
+
+    def test_claude_is_the_only_measured_provider_today(self):
+        """Guards the honesty of the table: if another provider is promoted to
+        `supported`, that must be a deliberate edit backed by a measurement, not
+        a copied value list."""
+        from ai_ops.adapters import EFFORT_SUPPORTED, _ADAPTERS
+
+        measured = {n for n, a in _ADAPTERS.items()
+                    if a.effort_support()["status"] == EFFORT_SUPPORTED}
+        self.assertEqual(measured, {"claude"})
+        self.assertEqual(_ADAPTERS["claude"].effort_support()["values"],
+                         ["low", "medium", "high", "xhigh", "max"])
+
+    def test_each_provider_carries_effort_in_its_own_form(self):
+        cl = self._argv("claude", effort="high")
+        self.assertEqual(cl[cl.index("--effort") + 1], "high")
+
+        gk = self._argv("grok", effort="high")
+        self.assertEqual(gk[gk.index("--reasoning-effort") + 1], "high")
+
+        oc = self._argv("opencode", effort="high")
+        self.assertEqual(oc[oc.index("--variant") + 1], "high")
+
+        # Codex takes a config override, as one -c pair.
+        cx = self._argv("codex", effort="high")
+        self.assertEqual(cx[cx.index("-c") + 1], "model_reasoning_effort=high")
+
+    def test_the_prompt_stays_last_when_effort_is_added(self):
+        """opencode and codex both place the prompt positionally; an inserted
+        flag that displaced it would make the effort value read as the task."""
+        for name in ("opencode", "codex"):
+            self.assertEqual(self._argv(name, effort="high")[-1], "MSG", name)
+
+    def test_no_effort_means_no_flag(self):
+        for name in ("claude", "grok", "opencode", "codex"):
+            argv = self._argv(name)
+            for token in ("--effort", "--reasoning-effort", "--variant"):
+                self.assertNotIn(token, argv, f"{name} emitted {token} unasked")
+            self.assertNotIn("model_reasoning_effort=", " ".join(argv), name)
+
+
+class EffortResolution(unittest.TestCase):
+    """The refusal path. Measured: grok, codex and opencode all ACCEPT an
+    unrecognised effort value and run anyway, so a value the rail cannot verify
+    must never be sent."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def _resolve(self, requested, provider):
+        from ai_ops.job import _resolve_effort
+
+        return _resolve_effort(requested, get_adapter(provider))
+
+    def test_no_request_is_not_a_refusal(self):
+        for name in ("claude", "grok", "opencode", "codex"):
+            self.assertIsNone(self._resolve(None, name))
+
+    def test_measured_value_passes_through(self):
+        self.assertEqual(self._resolve("xhigh", "claude"), "xhigh")
+
+    def test_value_outside_the_measured_set_is_refused(self):
+        from ai_ops.errors import Refuse
+
+        with self.assertRaises(Refuse) as ctx:
+            self._resolve("ultra", "claude")
+        self.assertIn("ultra", str(ctx.exception))
+        self.assertIn("low", str(ctx.exception), "refusal must name what IS accepted")
+
+    def test_unmeasured_provider_is_refused_with_a_remedy(self):
+        from ai_ops.errors import Refuse
+
+        for name in ("grok", "codex", "opencode"):
+            with self.assertRaises(Refuse) as ctx:
+                self._resolve("high", name)
+            msg = str(ctx.exception)
+            self.assertIn("unmeasured" if "unmeasured" in msg else "measured", msg)
+            self.assertIn("measure", msg.lower(), f"{name} refusal names no remedy")
+
+
 class ExecutionPinning(unittest.TestCase):
     """Content pin, not path pin (atelier ATT-006, owner ruling)."""
 

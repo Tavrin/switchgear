@@ -183,6 +183,13 @@
         "null"
       ],
       "description": "The subject job this review was of, recorded on the REVIEWER's record before promotion is attempted. Without it an unpromoted review chain is invisible to retention."
+    },
+    "effort": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "reasoning-effort value sent to the provider, null if none"
     }
   }
 }
