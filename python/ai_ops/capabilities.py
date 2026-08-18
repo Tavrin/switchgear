@@ -115,6 +115,19 @@ def _providers() -> list[dict[str, Any]]:
     return out
 
 
+def _uid_boundary_state() -> dict[str, Any]:
+    """Whether a readonly worker runs as a uid that is not the caller's."""
+    from .userns import capability
+
+    cap = capability()
+    if cap.get("available"):
+        return {"available": True, "applies_to": "readonly jobs",
+                "note": ("bounded-write deliberately excluded: files written by a "
+                         "subuid could not be handed back to the controller")}
+    return {"available": False, "reason": cap.get("reason"),
+            "note": "mount and network isolation only; the worker runs as your uid"}
+
+
 def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
              state_path: str | None) -> dict[str, Any]:
     """The whole self-description. Every field traces to live code or config."""
@@ -145,6 +158,9 @@ def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
             "elsewhere": ("Run inside a Linux VM or container — every containment "
                           "property holds unchanged. There is no unsandboxed "
                           "fallback. See docs/PORTABILITY.md."),
+            # Reported rather than claimed: it depends on subuid allocation and
+            # helper binaries that a given machine may not have.
+            "uid_boundary": _uid_boundary_state(),
         },
     }
     if profile:

@@ -66,7 +66,17 @@ def run_sandboxed(
     max_file_bytes: int = 256 * 1024 * 1024,
     stdout_path: str | None = None,
     stderr_path: str | None = None,
+    userns: dict | None = None,
 ) -> ProcResult:
+    """Run a bwrap command line and stream its output.
+
+    `userns`, when given, is the capability dict from userns.capability(). bwrap
+    then creates a user namespace and BLOCKS until this process writes the id
+    map, because an unprivileged process cannot write a multi-range map for
+    itself -- that needs the setuid newuidmap/newgidmap helpers, which need a pid
+    to act on. The handshake is: bwrap reports its child pid on the info fd, we
+    map, we unblock.
+    """
     if not argv:
         raise Refuse("empty sandbox argv")
     # First element must be trusted bwrap
@@ -98,6 +108,19 @@ def run_sandboxed(
     err_fh = _open(stderr_path)
     out_state: dict = {"truncated": False, "written": 0}
     err_state: dict = {"truncated": False, "written": 0}
+    # The uid-boundary handshake fds, if any. Created here so the `finally`
+    # below closes them on every path.
+    block_r = block_w = info_r = info_w = None
+    argv = list(argv)
+    if userns is not None:
+        from .userns import bwrap_flags
+
+        block_r, block_w = os.pipe()
+        info_r, info_w = os.pipe()
+        # Inserted here rather than by the argv builder because these flags carry
+        # fds this function owns; splitting them from the pipes that back them is
+        # how one ends up passing a number that means nothing in the child.
+        argv[1:1] = bwrap_flags(block_r, info_w)
     try:
         def _apply_limits() -> None:
             # RLIMIT_FSIZE is inherited by every process in the sandbox and is
@@ -124,10 +147,33 @@ def run_sandboxed(
                 cwd=cwd,
                 start_new_session=True,
                 close_fds=True,
+                pass_fds=tuple(f for f in (block_r, info_w) if f is not None),
                 preexec_fn=_apply_limits,
             )
         except OSError as exc:
             raise Refuse(f"failed to start sandbox: {exc}") from exc
+
+        if userns is not None:
+            from . import userns as usernsmod
+
+            # Close OUR copies of the ends the child owns, or the reads below
+            # never see EOF.
+            os.close(block_r); block_r = None
+            os.close(info_w); info_w = None
+            try:
+                child_pid = usernsmod.read_child_pid(info_r)
+                usernsmod.apply_map(child_pid, userns)
+            except BaseException:
+                # Never unblock a namespace whose map failed: bwrap would run the
+                # payload as the invoking user while the caller believed it was
+                # confined. Kill it instead.
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    proc.kill()
+                raise
+            os.write(block_w, b"1")
+            os.close(block_w); block_w = None
 
         # Take the fds from Popen so the threads own them exclusively.
         out_fd = os.dup(proc.stdout.fileno()); proc.stdout.close()
@@ -148,6 +194,12 @@ def run_sandboxed(
         t_out.join(timeout=10); t_err.join(timeout=10)
         return _collect(proc, out_fh, err_fh, timed_out, out_state)
     finally:
+        for fd in (block_r, block_w, info_r, info_w):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
         for fh in (out_fh, err_fh):
             try:
                 fh.close()

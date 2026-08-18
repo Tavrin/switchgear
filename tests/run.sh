@@ -27,6 +27,9 @@ echo "== adapters / normalized vocabulary (real captured stream) =="
 echo "== credential classes (api-key + oauth) =="
 /usr/bin/python3 "$ROOT/tests/test_credentials.py"
 
+echo "== uid boundary (the worker is not you) =="
+/usr/bin/python3 "$ROOT/tests/test_uid_boundary.py"
+
 echo "== guarded recursive deletes =="
 /usr/bin/python3 "$ROOT/tests/test_safe_delete.py"
 

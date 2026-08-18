@@ -207,6 +207,22 @@ def run_job(
     from . import quota as quotamod
 
     adapter = get_adapter(profile.get("provider"))
+
+    # Second containment layer: run the worker as a uid that is not the invoking
+    # user, so the kernel refuses a write even to something that became reachable
+    # by mistake. READONLY only -- a bounded-write worker must produce files the
+    # controller then reads and commits, and files written by a subuid are owned
+    # by that subuid with no way to hand them back without privileges we do not
+    # have. Claiming the boundary for a lane where it breaks ownership would
+    # trade a real property for a broken one. Scout and review are readonly,
+    # which is most jobs and includes the review gate itself.
+    from . import userns as usernsmod
+
+    uid_boundary = None
+    if mode == "readonly":
+        _cap = usernsmod.capability()
+        if _cap.get("available"):
+            uid_boundary = _cap
     # Validated here rather than at argv-build time: an unusable effort request
     # must cost nothing, so it is refused before the job directory exists and
     # before the budget is touched.
@@ -318,6 +334,9 @@ def run_job(
             upstream=upstream,
             allowed_models=wire_model_names(model["id"]),
             unix_socket=sock,
+            # The worker is not this user under the uid boundary, so 0600 would
+            # lock it out of its own broker.
+            socket_mode=0o666 if uid_boundary else 0o600,
             max_calls=quotamod.max_provider_calls(),
             allowed_paths=tuple(prec.get("allowed_paths") or ()) or None,
             allowed_get_paths=tuple(prec.get("allowed_get_paths") or ()) or None,
@@ -498,6 +517,7 @@ def run_job(
             command_binds=extra_binds,
             broker_socket=broker_sock,
             session_binds=session_binds,
+            uid_boundary=bool(uid_boundary),
         )
         before_id = identity.git_identity_digest(ident)
         before_tree = identity.tree_digest(ident)
@@ -518,12 +538,24 @@ def run_job(
         # back over what it already emitted.
         ev_path = os.path.join(dirs["evidence"], "events.jsonl")
         err_path = os.path.join(dirs["evidence"], "stderr")
+        if uid_boundary:
+            # The worker runs as a different id now, so the directories the
+            # controller made FOR it have to be usable by it. Evidence and the
+            # job directory itself are deliberately not in this list.
+            usernsmod.grant_payload_access(
+                [dirs["home"]] + [src for src, _dst in session_binds]
+            )
+            # And git must stop refusing a repository it no longer owns.
+            env = dict(env)
+            env.update(usernsmod.payload_env())
+
         result = process.run_sandboxed(
             bwrap_argv,
             env=env,
             timeout_s=timeout,
             stdout_path=ev_path,
             stderr_path=err_path,
+            userns=uid_boundary,
         )
         # process set is the bwrap pid ns; after return it is dead
 

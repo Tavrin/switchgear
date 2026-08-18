@@ -224,6 +224,19 @@ def main() -> int:
                        "tokens": {"total": 42}, "cost": 1.5e-05}})
         return 0
 
+    if beh == "whoami":
+        # Reports the identity the worker actually runs as, so the uid boundary
+        # can be asserted from outside rather than assumed from a flag.
+        emit({"type": "step_start", "sessionID": "ses_mock000000000000000000"})
+        emit({"type": "text", "sessionID": "ses_mock000000000000000000",
+              "part": {"type": "text", "sessionID": "ses_mock000000000000000000",
+                       "text": f"uid={os.getuid()} gid={os.getgid()}"}})
+        emit({"type": "step_finish", "sessionID": "ses_mock000000000000000000",
+              "part": {"type": "step-finish", "reason": "stop",
+                       "sessionID": "ses_mock000000000000000000",
+                       "tokens": {"total": 1}, "cost": 0.0}})
+        return 0
+
     if beh == "spawn-orphan":
         # A provider that leaves a long-lived child behind, which is exactly what
         # Codex does: every job spawns an app-server, which spawns the MCP

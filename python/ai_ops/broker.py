@@ -250,6 +250,7 @@ class CredentialBroker:
         allowed_models: Optional[set] = None,
         timeout_s: int = 300,
         unix_socket: Optional[str] = None,
+        socket_mode: int = 0o600,
         max_calls: Optional[int] = None,
         allowed_paths: Optional[tuple[str, ...]] = None,
         allowed_get_paths: Optional[tuple[str, ...]] = None,
@@ -282,6 +283,7 @@ class CredentialBroker:
         self.auth_scheme = auth_scheme
         self.timeout_s = timeout_s
         self.unix_socket = unix_socket
+        self.socket_mode = socket_mode
         self.forwarded = 0
         # Kept separate from denials on purpose. A DENIAL is the broker's policy
         # refusing a request (path/model/ceiling) -- a security-meaningful event.
@@ -334,11 +336,18 @@ class CredentialBroker:
         if self.unix_socket:
             # Unix socket mode: the sandbox can then run --unshare-net and still
             # reach us, because unix sockets are filesystem objects and survive a
-            # network namespace. Mode 600 -- only this user's processes.
+            # network namespace.
+            #
+            # 0600 by default. With the uid boundary on, the worker is no longer
+            # this user and 0600 locks it out of its own broker -- measured as a
+            # live job dying with ECONNRESET. The caller widens it then, which is
+            # safe because the socket lives inside the job directory, and THAT is
+            # 0700 and owned by this user: no other local account can reach the
+            # socket regardless of its own mode.
             if os.path.exists(self.unix_socket):
                 os.unlink(self.unix_socket)
             self._srv = _UnixHTTPServer(self.unix_socket, handler)
-            os.chmod(self.unix_socket, 0o600)
+            os.chmod(self.unix_socket, self.socket_mode)
         else:
             self._srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self._srv.daemon_threads = True

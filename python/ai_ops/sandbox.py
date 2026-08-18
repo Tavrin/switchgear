@@ -103,6 +103,35 @@ def build_credential_refresh_argv(
     return argv
 
 
+def _traversable_ancestors(argv: list[str]) -> list[str]:
+    """Ancestor dirs of every bind destination, so a non-root payload can reach them.
+
+    bwrap creates the parents of a bind destination itself, as `drwx------` owned
+    by the namespace root. With the uid boundary on, the payload runs as a
+    different id and cannot traverse them -- measured: the provider binary was
+    bind-mounted correctly and the worker still died with `Permission denied`
+    opening it, because `/home` inside the sandbox was mode 700.
+
+    Widening these to 0755 grants traversal, not content: they are empty tmpfs
+    directories whose only contents are the binds we chose. Nothing becomes
+    reachable that was not already mounted.
+    """
+    dests: list[str] = []
+    for i, tok in enumerate(argv):
+        if tok in ("--bind", "--ro-bind", "--dev-bind") and i + 2 < len(argv):
+            dests.append(argv[i + 2])
+    seen: dict[str, None] = {}
+    for dest in dests:
+        node = os.path.dirname(os.path.abspath(dest))
+        chain = []
+        while node not in ("/", ""):
+            chain.append(node)
+            node = os.path.dirname(node)
+        for node in reversed(chain):
+            seen.setdefault(node, None)
+    return list(seen)
+
+
 def build_bwrap_argv(
     *,
     ident: WorktreeIdentity,
@@ -112,7 +141,16 @@ def build_bwrap_argv(
     command_binds: Sequence[str] | None = None,
     broker_socket: str | None = None,
     session_binds: Sequence[tuple[str, str]] | None = None,
+    uid_boundary: bool = False,
 ) -> list[str]:
+    """Build the sandbox command line.
+
+    `uid_boundary` adds the payload drop that makes the worker run as a subuid
+    rather than as the invoking user. The bwrap flags that create the blocked
+    user namespace are added by process.run_sandboxed instead, because they
+    carry pipe fds it owns and the two cannot be separated. See userns.py for
+    why the one-line version of this is a boundary in appearance only.
+    """
     bwrap = require_bwrap()
     argv: list[str] = [
         bwrap,
@@ -178,6 +216,34 @@ def build_bwrap_argv(
         if extra not in {wt, common, ident.git_dir, synth_home} and os.path.exists(extra):
             argv.extend(["--ro-bind", extra, extra])
 
+    if uid_boundary:
+        # Computed from the finished bind list but SPLICED IN AT THE FRONT.
+        # bwrap applies operations left to right, so a parent created after the
+        # bind that needed it is too late -- the bind already made it, mode 700.
+        # Measured exactly that way: the pre-creates were appended and the worker
+        # still could not open its own provider binary.
+        pre: list[str] = []
+        for node in _traversable_ancestors(argv):
+            pre.extend(["--perms", "0755", "--dir", node])
+        # Spliced AFTER the tmpfs/proc/dev setup and BEFORE the binds. Both edges
+        # were found by measurement: appended at the end, the binds had already
+        # created the parents at 0700; inserted at the very front, `--tmpfs /tmp`
+        # then mounted a fresh 0700 tmpfs straight over them, and a synthetic
+        # HOME under /tmp was unreachable again.
+        try:
+            at = argv.index("--tmpfs") + 2
+        except ValueError:
+            at = 1
+        argv[at:at] = pre
+
     argv.append("--")
+    if uid_boundary:
+        # Drop to the unmapped payload id. bwrap runs the payload as inside-0,
+        # which the map points at the invoking user -- exactly the identity this
+        # exists to escape -- so the drop happens here, immediately before the
+        # provider, and setpriv clears the two capabilities that allowed it.
+        from .userns import payload_prefix
+
+        argv.extend(payload_prefix())
     argv.extend(list(provider_argv))
     return argv

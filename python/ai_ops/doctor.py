@@ -409,8 +409,31 @@ def check_fixtures() -> list[dict[str, Any]]:
     return out
 
 
+def check_uid_boundary() -> list[dict[str, Any]]:
+    """Whether readonly jobs get a second containment layer, and why not if not."""
+    from . import userns
+
+    cap = userns.capability()
+    if cap.get("available"):
+        return [_check(
+            "containment.uid_boundary", PASS,
+            f"readonly jobs run as a subuid (payload uid {cap['payload_uid']}, "
+            f"mapped into {cap['subuid']['start']}..)",
+        )]
+    return [_check(
+        "containment.uid_boundary", WARN,
+        f"unavailable: {cap.get('reason')} — readonly jobs run as YOUR uid, so "
+        "mount isolation is the only layer",
+        "install uidmap and util-linux and allocate a subuid range "
+        "(`sudo usermod --add-subuids 100000-165535 $USER`, same for subgids). "
+        "Without it the sandbox still confines by mount and network, but a hole "
+        "in that is a hole into your account.",
+    )]
+
+
 CHECKS: list[tuple[str, Callable[..., list[dict[str, Any]]], bool]] = [
     ("sandbox", check_sandbox, False),
+    ("uid_boundary", check_uid_boundary, False),
     ("registry", check_registry, False),
     ("providers", check_providers, False),
     ("credentials", check_credentials, False),
