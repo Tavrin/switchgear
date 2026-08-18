@@ -942,6 +942,51 @@ class RailTests(unittest.TestCase):
         self.assertEqual(json.loads(p.stdout)["state"], "cancelled")
         self.assertEqual(self._state_of(info["job_id"]), "cancelled")
 
+    def test_status_and_logs_refuse_an_unknown_job(self):
+        """Same family: `status` returned rc=0 with state "unknown" and `logs`
+        returned rc=0 with a `progress` event, so a typo'd id -- or an id from a
+        state store since wiped -- read as a healthy job that had not started.
+        An orchestrator polling it would wait forever on nothing."""
+        ghost = "00000000-0000-0000-0000-000000000000"
+        for verb in ("status", "logs"):
+            p = run_cli(self.args(verb, ghost))
+            self.assertNotEqual(p.returncode, 0, f"{verb} accepted a nonexistent job")
+            self.assertIn("no such job", p.stderr)
+
+    def test_a_foreground_job_that_dies_is_not_reported_as_running(self):
+        """The last hole in the lying-poll family. A backgrounded job has a
+        launch record to check liveness against; a FOREGROUND job had none, so
+        one whose process died left a job directory with no result.json and
+        polled as `running` forever -- measured on a job abandoned five hours
+        earlier. Every job now writes pid + starttime + boot_id at start."""
+        import signal as _signal
+
+        proc = subprocess.Popen(
+            [PYTHON, str(MAIN), *self.args("--json", "scout", str(self.primary), "look")],
+            env={**os.environ, "AI_OPS_MOCK_BEHAVIOR": "slow-stream", "AI_OPS_MOCK_EXTRA": "30"},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        job_id = None
+        deadline = time.time() + 20
+        while time.time() < deadline and job_id is None:
+            dirs = [d for d in (self.state / "jobs").glob("*") if (d / "runner.json").is_file()]
+            if dirs:
+                job_id = dirs[0].name
+            time.sleep(0.1)
+        self.assertIsNotNone(job_id, "no job with a runner record appeared")
+        proc.send_signal(_signal.SIGKILL)
+        proc.wait(timeout=15)
+
+        deadline = time.time() + 15
+        state = None
+        while time.time() < deadline:
+            p = run_cli(self.args("--json", "status", job_id))
+            state = json.loads(p.stdout)["state"]
+            if state != "running":
+                break
+            time.sleep(0.3)
+        self.assertEqual(state, "died")
+
     def test_a_background_job_that_dies_is_not_reported_as_running(self):
         """The worst answer a poll can give is 'running' about a dead process.
 

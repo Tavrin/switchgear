@@ -839,6 +839,22 @@ def _fence_identity(ns) -> str | None:
         return None
 
 
+def _require_known_job(ns, jd: str) -> None:
+    """Refuse to answer about a job that does not exist.
+
+    `status` used to return rc=0 with state "unknown", and `logs` used to return
+    rc=0 with a `progress` event -- so a typo'd id, or an id from a state store
+    that has since been wiped, read as a healthy job that simply had not started.
+    That is the same lying-poll class as a cancelled job reporting `running`: an
+    orchestrator polling it would wait forever on nothing.
+    """
+    if os.path.isdir(jd):
+        return
+    if os.path.isfile(os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")):
+        return  # launched, directory not created yet
+    _die(f"no such job: {ns.job} (no job directory and no launch record under this state root)")
+
+
 def _live_state(ns, rec: dict, jd: str) -> str:
     """What is this job doing right now?
 
@@ -851,18 +867,39 @@ def _live_state(ns, rec: dict, jd: str) -> str:
     """
     if rec:
         return str(rec.get("status"))
-    meta_path = os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")
-    if os.path.isfile(meta_path):
-        from .lease import _alive
+    from .lease import _alive
 
+    def _liveness(path: str) -> bool | None:
+        """True/False if we can tell, None if the record is unusable."""
+        if not os.path.isfile(path):
+            return None
         try:
-            meta = read_json(meta_path)
-            if _alive(int(meta["pid"]), meta.get("starttime", ""), meta.get("boot_id", "")):
-                return "running"
-            return "cancelled" if meta.get("cancelled") else "died"
+            meta = read_json(path)
+            return _alive(int(meta["pid"]), meta.get("starttime", ""), meta.get("boot_id", ""))
         except Exception:
-            return "unknown"
-    return "running" if os.path.isdir(jd) else "unknown"
+            return None
+
+    # A backgrounded job's launch record also carries cancellation INTENT, which
+    # the in-job runner record cannot know.
+    meta_path = os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")
+    launched = _liveness(meta_path)
+    if launched is False:
+        try:
+            if read_json(meta_path).get("cancelled"):
+                return "cancelled"
+        except Exception:
+            pass
+        return "died"
+    if launched is True:
+        return "running"
+
+    # Foreground jobs write the same triple into the job directory.
+    runner = _liveness(os.path.join(jd, "runner.json"))
+    if runner is True:
+        return "running"
+    if runner is False:
+        return "died"
+    return "unknown"
 
 
 def cmd_status(ns: argparse.Namespace) -> int:
@@ -878,6 +915,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
         return 0
 
     jd, ev_path, res_path = _job_paths(ns)
+    _require_known_job(ns, jd)
     rec, norm = _projection(ns)
     # Counters come from whichever summary event is present: `progress` while the
     # job runs, `finished` once it is over.
@@ -927,6 +965,7 @@ DIGEST_MAX_BYTES = 8192
 
 def cmd_logs(ns: argparse.Namespace) -> int:
     jd, ev_path, _ = _job_paths(ns)
+    _require_known_job(ns, jd)
     if ns.format == "full":
         # Explicit only -- there is deliberately no default that lands here.
         if not os.path.isfile(ev_path):

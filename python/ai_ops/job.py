@@ -151,6 +151,24 @@ def run_job(
     quotamod.assert_within_budget(root.path)
     job_id = job_id or new_job_id()
     dirs = state.create_job_dirs(root, job_id)
+    # Liveness record for EVERY job, not just backgrounded ones. Without it a
+    # FOREGROUND job whose process died left a directory with no result.json,
+    # and `status` reported "running" forever -- measured on a job abandoned five
+    # hours earlier. pid alone is not identity (pids are recycled), hence
+    # starttime and boot_id, the same triple the lease uses.
+    try:
+        atomic_write_json(
+            os.path.join(dirs["job"], "runner.json"),
+            {
+                "pid": os.getpid(),
+                "starttime": lease._starttime(os.getpid()),
+                "boot_id": lease._boot_id(),
+            },
+        )
+    except Exception:
+        # Never fail a job because its liveness marker could not be written; the
+        # status command degrades to "unknown" rather than lying.
+        pass
     lock_cm = None
     token_uuid = None
     if mode == "bounded-write":
