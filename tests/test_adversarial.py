@@ -1036,7 +1036,13 @@ class RailTests(unittest.TestCase):
             deadline = time.time() + 20
             while time.time() < deadline and not done:
                 dirs = [d for d in (self.state / "jobs").glob("*") if d.is_dir()]
-                if dirs and (dirs[0] / "evidence" / "events.jsonl").stat().st_size > 0:
+                # exists() before stat(): create_job_dirs makes evidence/ but
+                # events.jsonl only appears when the sandbox opens it, so this
+                # poll can land in the gap. That raised FileNotFoundError, which
+                # under `set -euo pipefail` aborted the whole suite — roughly one
+                # run in five, for a reason unrelated to any change.
+                ev = dirs[0] / "evidence" / "events.jsonl" if dirs else None
+                if ev is not None and ev.exists() and ev.stat().st_size > 0:
                     job_id = dirs[0].name
                     break
                 time.sleep(0.05)
@@ -1811,6 +1817,32 @@ class RailTests(unittest.TestCase):
                 continue
             self.assertIn("No GPU", composed, name)
             self.assertIn("DO THE TASK", composed, name)
+
+    def test_no_provider_binary_is_executed_outside_the_sandbox(self):
+        """An invariant stated in three places — HANDOFF's list, THREAT-MODEL,
+        and a comment in job.py — and broken by `--version`, which looks
+        harmless. It was run straight on the host with the caller's whole
+        environment inherited, from `providers`, `doctor` AND `capabilities`:
+        the command documented as safe to run when everything else is broken,
+        and the one CI gates on."""
+        import ast as _ast
+
+        offenders = []
+        for path in (ROOT / "python" / "ai_ops").glob("*.py"):
+            tree = _ast.parse(path.read_text())
+            for node in _ast.walk(tree):
+                if not (isinstance(node, _ast.Call)
+                        and isinstance(node.func, _ast.Attribute)
+                        and node.func.attr in ("run", "Popen", "call", "check_output")):
+                    continue
+                src = _ast.get_source_segment(path.read_text(), node) or ""
+                if "bwrap" in src or "build_probe_argv" in src or "full" in src:
+                    continue
+                # A provider binary reaches subprocess only via these names.
+                if any(tok in src for tok in ("realpath(binary)", "[binary", "provider_argv")):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(offenders, [],
+                         f"provider executed outside bwrap at: {offenders}")
 
     # --- process containment ------------------------------------------------
 

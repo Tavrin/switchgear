@@ -422,7 +422,12 @@ def cmd_resume(ns: argparse.Namespace) -> int:
     root = StateRoot(_state_path(ns))
     prior = read_json(os.path.join(root.job_dir(ns.job), "result.json"))
     profile = load_profile(_profile_path(ns))
-    adapter = get_adapter(profile.get("provider"))
+    # From the JOB. Resolving this from the caller's profile made `resume` refuse
+    # a healthy Claude job with "no resumable session id ... (provider opencode).
+    # A job that failed before its session id was emitted" -- false in every
+    # clause. Worse, where the wrong adapter DID parse an id, resume launched a
+    # different provider's binary carrying another provider's session id.
+    adapter = get_adapter(_provider_for_job(ns, root.job_dir(ns.job), prior))
 
     events_path = (prior.get("artifacts") or {}).get("events")
     session = None
@@ -611,7 +616,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
     env = None
     prompt = ns.prompt
     if ns.envelope:
-        env = json.loads(open(ns.envelope, encoding="utf-8").read())
+        env = _read_envelope(ns.envelope)
         validate(env, "task-envelope.schema.json")
         prompt = env.get("goal") or prompt
     # Give the reviewer the controller's frozen diff. It has no shell and no git,
@@ -755,7 +760,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
 
 
 def cmd_write(ns: argparse.Namespace) -> int:
-    env = json.loads(open(ns.envelope, encoding="utf-8").read())
+    env = _read_envelope(ns.envelope)
     validate(env, "task-envelope.schema.json")
     if env.get("mode") != "bounded-write":
         _die("envelope mode must be bounded-write")
@@ -765,7 +770,7 @@ def cmd_write(ns: argparse.Namespace) -> int:
 
 
 def cmd_run(ns: argparse.Namespace) -> int:
-    env = json.loads(open(ns.envelope, encoding="utf-8").read())
+    env = _read_envelope(ns.envelope)
     validate(env, "task-envelope.schema.json")
     mode = env["mode"]
     if mode == "bounded-write":
@@ -788,6 +793,75 @@ def _job_paths(ns) -> tuple[str, str, str]:
     root = StateRoot(_state_path(ns))
     jd = root.job_dir(ns.job)
     return jd, os.path.join(jd, "evidence", "events.jsonl"), os.path.join(jd, "result.json")
+
+
+def _read_envelope(path: str) -> dict[str, Any]:
+    """Load a task envelope, refusing rather than raising.
+
+    These three reads were bare `json.loads(open(...))` outside any handler, and
+    main() catches only Refuse/RailError -- so a missing or malformed envelope
+    printed a Python traceback. That breaks the contract `capabilities` publishes
+    to every caller: one stderr line, the REFUSING prefix, and a remedy. A caller
+    parsing stderr got a stack trace instead.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        raise Refuse(
+            f"no envelope at {path}. --envelope takes a path to a JSON task "
+            "envelope; check the path, or write one (see the task-envelope "
+            "schema for the required fields)."
+        ) from None
+    except IsADirectoryError:
+        raise Refuse(f"{path} is a directory; --envelope takes a JSON file") from None
+    except PermissionError as exc:
+        raise Refuse(f"cannot read the envelope at {path}: {exc}") from None
+    except ValueError as exc:
+        raise Refuse(
+            f"the envelope at {path} is not valid JSON: {exc}. Fix the file; "
+            "nothing was run."
+        ) from None
+    if not isinstance(data, dict):
+        raise Refuse(
+            f"the envelope at {path} must be a JSON object, not "
+            f"{type(data).__name__}"
+        )
+    return data
+
+
+def _provider_for_job(ns, jd: str, rec: dict | None = None) -> str:
+    """Which adapter can read this job's stream — from the JOB, never the caller.
+
+    The caller's profile is a guess about a job it may not have launched; the
+    job's own record is a fact. Resolving from the profile made `logs` report a
+    completed Claude job as `failed / truncated`, and left `resume` and
+    `promote` refusing real jobs with sentences that were false in every clause.
+
+    Order: result record, then the runner record (which exists from job start,
+    so a RUNNING job resolves too), then the caller's profile, then refuse.
+    """
+    provider = (rec or {}).get("provider")
+    if not provider and os.path.isfile(os.path.join(jd, "result.json")):
+        try:
+            provider = read_json(os.path.join(jd, "result.json")).get("provider")
+        except Exception:
+            provider = None
+    if not provider:
+        try:
+            provider = read_json(os.path.join(jd, "runner.json")).get("provider")
+        except Exception:
+            provider = None
+    if not provider and getattr(ns, "profile", None):
+        provider = (load_profile(_profile_path(ns)) or {}).get("provider")
+    if not provider:
+        _die(
+            f"cannot tell which provider produced job {getattr(ns, 'job', '?')}: "
+            "its record predates provider stamping and no --profile was given. "
+            "Pass --profile with the profile the job ran under. Guessing would "
+            "silently misread the stream."
+        )
+    return provider
 
 
 def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -819,24 +893,7 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     # evidence of completion"` for a job that had completed fine. A false failure
     # report, produced confidently. The job's own provider is a fact; the
     # caller's profile is a guess about it.
-    provider = rec.get("provider")
-    if not provider:
-        # A running job has no result.json yet, which is exactly when logs and
-        # status are used most -- so the runner record carries it too.
-        try:
-            provider = read_json(os.path.join(jd, "runner.json")).get("provider")
-        except Exception:
-            provider = None
-    if not provider and getattr(ns, "profile", None):
-        provider = (load_profile(_profile_path(ns)) or {}).get("provider")
-    if not provider:
-        _die(
-            f"cannot tell which provider produced job {getattr(ns, 'job', '?')}: "
-            "its record predates provider stamping and no --profile was given. "
-            "Pass --profile with the profile the job ran under. Guessing would "
-            "silently misread the stream and report a completed job as failed."
-        )
-
+    provider = _provider_for_job(ns, jd, rec)
     adapter = get_adapter(provider)
     parsed, _ = parse_lenient(raw)
     normalized = adapter.normalize(parsed, run_ended=bool(rec))
@@ -866,7 +923,7 @@ def cmd_providers(ns: argparse.Namespace) -> int:
 
     from .adapters import get_adapter
     from .compat import PINNED_PROVIDERS, accepted_versions, record_verified, version_token
-    from .provider import installed_version
+    from .provider import installed_version, probe_provider
 
     only = getattr(ns, "provider", None)
     rows = []
@@ -895,19 +952,13 @@ def cmd_providers(ns: argparse.Namespace) -> int:
             adapter = get_adapter(name)
             needed = adapter.required_flags()
             try:
-                helptext = subprocess.run(
-                    [os.path.realpath(binary), "--help"],
-                    capture_output=True, text=True, timeout=30,
-                    stdin=subprocess.DEVNULL,
-                ).stdout or ""
+                # Inside the sandbox, like every other invocation of a provider
+                # binary. `--help` looks harmless; the rule is unconditional.
+                helptext = probe_provider(binary, ["--help"]) or ""
                 sub = ""
                 for word in needed:
                     if not word.startswith("-"):
-                        sub += subprocess.run(
-                            [os.path.realpath(binary), word, "--help"],
-                            capture_output=True, text=True, timeout=30,
-                            stdin=subprocess.DEVNULL,
-                        ).stdout or ""
+                        sub += probe_provider(binary, [word, "--help"]) or ""
                 surface = helptext + sub
             except Exception as exc:
                 row["status"] = f"verify failed: {type(exc).__name__}"
@@ -1378,12 +1429,14 @@ def cmd_promote(ns: argparse.Namespace) -> int:
     rev = read_json(os.path.join(root.job_dir(ns.review), "result.json"))
     validate(rev, "result.schema.json")
     ev = open(rev["artifacts"]["events"], "rb").read()
-    from . import events as evmod
-
     from .adapters import get_adapter
 
+    # From the REVIEWER's record, not the caller's profile: the reviewer may be a
+    # different provider from whatever this caller happens to be configured for,
+    # and reading its verdict with the wrong adapter is how a promotion gets
+    # decided on a misparse.
     verdict, findings, reviewed_files = get_adapter(
-        load_profile(_profile_path(ns)).get("provider")
+        _provider_for_job(ns, root.job_dir(ns.review), rev)
     ).extract_review(ev)
     rec = job.attach_review(
         state_path=_state_path(ns),

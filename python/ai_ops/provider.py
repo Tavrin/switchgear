@@ -84,34 +84,67 @@ def assert_pinned_version(
 
 
 CREDENTIAL_ENV = "OPENCODE_API_KEY"
-def installed_version(binary: str | None) -> str | None:
-    """The `--version` line this binary prints, or None if it is not installed.
+def probe_provider(binary: str | None, args: list[str], *, timeout: int = 30) -> str | None:
+    """Run a provider binary INSIDE bwrap and return its stdout, or None.
 
-    Shared by `providers` and `doctor` so the two cannot disagree about whether a
-    provider is present. Returns a `(unreadable: ...)` string rather than raising:
-    a binary that exists but will not run is a different diagnosis from an absent
-    one, and telling those apart is doctor's whole job.
+    `--version` and `--help` look harmless, which is why they were being run
+    directly on the host with the caller's entire environment inherited. Three
+    places in this repo state the rule they broke -- HANDOFF's invariant list,
+    THREAT-MODEL, and a comment in job.py -- all saying the provider is never
+    executed outside the sandbox, not even for a version string.
 
-    Deliberately NOT in compat.py. That module is the pin TABLE and the comparison
-    rules -- pure data and pure functions -- and a test guards it against
-    executing anything, because an orphaned host-side version check living there
-    was a real bug (glm-F6). Probing a binary is a provider concern; this is where
-    "which executable is this, and is it live" already lives.
+    Returns a `(unreadable: ...)` marker rather than raising when the binary
+    exists but will not run: a binary that is present and broken is a different
+    diagnosis from an absent one, and telling those apart is doctor's job.
     """
     import subprocess
+    import tempfile
+
+    from .sandbox import build_probe_argv
 
     if not binary or not os.path.exists(binary):
         return None
+    home = tempfile.mkdtemp(prefix="aiops-probe-")
     try:
-        out = subprocess.run(
-            [os.path.realpath(binary), "--version"],
-            capture_output=True, text=True, timeout=30,
-            stdin=subprocess.DEVNULL,
+        argv = build_probe_argv(
+            synth_home=home,
+            provider_argv=[os.path.realpath(binary), *args],
         )
-        lines = [ln.strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
-        return lines[-1] if lines else None
+        out = subprocess.run(
+            argv,
+            capture_output=True, text=True, timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            # Constructed, never inherited: the whole point is that the host
+            # environment does not reach the provider.
+            env={"PATH": "/usr/bin:/bin", "HOME": home},
+        )
+        return out.stdout or ""
     except Exception as exc:
         return f"(unreadable: {type(exc).__name__})"
+    finally:
+        from .paths import safe_rmtree
+
+        try:
+            safe_rmtree(home, must_be_under=tempfile.gettempdir(),
+                        label="provider probe workspace")
+        except Exception:
+            pass
+
+
+def installed_version(binary: str | None) -> str | None:
+    """The `--version` line this binary prints, or None if it is not installed.
+
+    Shared by `providers`, `doctor` and `capabilities` so they cannot disagree
+    about whether a provider is present. Runs inside the sandbox -- see
+    probe_provider.
+    """
+    out = probe_provider(binary, ["--version"])
+    if out is None:
+        return None
+    if out.startswith("(unreadable:"):
+        return out
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return lines[-1] if lines else None
 
 
 CREDENTIAL_DIR = os.path.expanduser("~/.config/ai-ops/credentials")

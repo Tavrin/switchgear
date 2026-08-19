@@ -30,6 +30,55 @@ def _exists(path: str) -> bool:
     return os.path.exists(path)
 
 
+def build_probe_argv(*, synth_home: str, provider_argv: Sequence[str]) -> list[str]:
+    """The smallest sandbox that can ask a provider binary a question.
+
+    Used for `--version` and `--help`. Those look harmless, which is exactly why
+    they were being run straight on the host with the caller's whole environment
+    inherited -- from `providers`, from `doctor`, and from `capabilities`, the
+    command documented as safe to run when everything else is broken. Three
+    separate places in this repo state the rule that makes that wrong:
+    "Never execute the provider outside bwrap -- not even --version."
+
+    The mount set is deliberately smaller than a job's and smaller than the
+    credential-refresh one: no worktree, no git dir, no state store, no auth
+    directory, no prompt. The binary is given nothing to act on and nothing to
+    read. Network is unshared, because a version string needs none.
+    """
+    bwrap = require_bwrap()
+    argv: list[str] = [
+        bwrap,
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-ipc",
+        "--unshare-net",
+        "--die-with-parent",
+        "--new-session",
+        "--proc", "/proc",
+        "--dev", "/dev",
+        "--tmpfs", "/tmp",
+    ]
+    for src, dst in (("/usr", "/usr"), ("/bin", "/bin"), ("/lib", "/lib"),
+                     ("/lib64", "/lib64"), ("/etc/ssl", "/etc/ssl")):
+        if _exists(src):
+            argv.extend(["--ro-bind", src, dst])
+    argv.extend(["--bind", synth_home, synth_home])
+    argv.extend(["--setenv", "HOME", synth_home])
+    argv.extend(["--setenv", "PATH", "/usr/bin:/bin"])
+    # The provider itself, plus whatever else it needs to start (Codex ships
+    # helper binaries beside its executable).
+    for path in provider_argv:
+        if os.path.isabs(path) and _exists(path):
+            argv.extend(["--ro-bind", path, path])
+            sibling = os.path.dirname(os.path.realpath(path))
+            if _exists(sibling):
+                argv.extend(["--ro-bind", sibling, sibling])
+    argv.extend(["--chdir", synth_home])
+    argv.append("--")
+    argv.extend(list(provider_argv))
+    return argv
+
+
 def build_credential_refresh_argv(
     *, auth_dir: str, synth_home: str, provider_argv: Sequence[str]
 ) -> list[str]:

@@ -112,6 +112,17 @@ def _resolve_effort(requested: str | None, adapter, model: dict) -> str | None:
     return requested
 
 
+def _started_at_iso(job_dir: str) -> str:
+    """The job's real start, from the marker create_job_dirs wrote."""
+    try:
+        with open(os.path.join(job_dir, "started_at"), encoding="utf-8") as fh:
+            return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(float(fh.read().strip())))
+    except (OSError, ValueError):
+        # No marker means no start time. Falling back to "now" would restore the
+        # exact bug this replaces, so be honest and let the caller see the gap.
+        return _now()
+
+
 def _reclaim_sandbox_home(home: str, state_root: str) -> None:
     """Delete the per-job synthetic HOME once the record is written.
 
@@ -648,7 +659,12 @@ def run_job(
             "queued_s": queued_s,
             "dir": ident.realpath,
             "exit": result.returncode,
-            "started": _now(),
+            # The REAL start, read back from the marker written at job creation.
+            # Both of these used to be _now() on adjacent lines, so `started` was
+            # the moment the record was built: identical to `finished` in 33 of
+            # 33 real records, including jobs that ran for three minutes. Any
+            # consumer deriving duration or ordering from the record got zero.
+            "started": _started_at_iso(dirs["job"]),
             "finished": _now(),
             "generation": 0,
             "attempt": int((envelope or {}).get("attempt") or 1),
