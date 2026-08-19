@@ -23,12 +23,71 @@ from .state import read_json
 # Terminal statuses that mean the job did NOT do its work. Shared so the exit-code
 # mapping, provider health and any future consumer cannot drift apart -- they had
 # already drifted once between cmd_run_like and cmd_review.
+#
+# `refused` and `review_failed` are deliberately still here although
+# project_status cannot produce them and the schema no longer lists them. This
+# set decides EXIT CODES, so it must fail safe: an unexpected status reaching it
+# should map to failure, never to success. Being a superset costs nothing;
+# being a subset would report a bad job as a good one.
 FAILURE_STATUSES = frozenset(
     {"provider_error", "timeout", "dirty", "refused", "review_failed"}
 )
 
 # States derived from liveness rather than from a persisted record.
 DERIVED_STATES = frozenset({"running", "queued", "died", "cancelled", "unknown"})
+
+# --- the four orthogonal facts behind `status` --------------------------------
+#
+# `status` answers four unrelated questions with one word: did the process do its
+# work (ok / provider_error / timeout), is the worktree still what it was
+# (dirty), is there a frozen change, and has anything accepted it
+# (awaiting_review). That is serviceable for a CLI and poor as an infrastructure
+# protocol -- a caller wanting "did the provider fail?" has to know that `dirty`
+# outranks it, and a job that BOTH errored and left a dirty tree reports only the
+# dirty half.
+#
+# So the facts are recorded separately and `status` is derived from them. It is
+# still the primary field and its values have not changed; nothing that reads it
+# needs to know this happened.
+
+EXECUTION_COMPLETED = "completed"
+EXECUTION_PROVIDER_ERROR = "provider_error"
+EXECUTION_TIMEOUT = "timeout"
+
+INTEGRITY_CLEAN = "clean"
+INTEGRITY_DIRTY = "dirty"
+
+CHANGE_NONE = "none"
+CHANGE_FROZEN = "frozen"
+
+ACCEPTANCE_NOT_REQUIRED = "not_required"
+ACCEPTANCE_AWAITING_REVIEW = "awaiting_review"
+ACCEPTANCE_ACCEPTED = "accepted"
+
+
+def project_status(
+    *, execution: str, integrity: str, acceptance: str, change: str = CHANGE_NONE
+) -> str:
+    """The four facts -> the one `status` value callers already branch on.
+
+    The precedence is not arbitrary and must not be reordered: it reproduces
+    exactly what the old flat assignment produced, including the cases where two
+    things went wrong at once. A timed-out job that also left the tree dirty
+    reported `timeout` before this existed, and still does.
+
+    `change` is not consulted. A frozen delta is a fact about the job, not an
+    outcome -- it is `awaiting_review` that says something is waiting on a
+    decision -- and folding it in here would make `status` mean a fifth thing.
+    """
+    if execution == EXECUTION_TIMEOUT:
+        return "timeout"
+    if execution == EXECUTION_PROVIDER_ERROR:
+        return "provider_error"
+    if integrity == INTEGRITY_DIRTY:
+        return "dirty"
+    if acceptance == ACCEPTANCE_AWAITING_REVIEW:
+        return "awaiting_review"
+    return "ok"
 
 
 def _liveness(path: str) -> bool | None:

@@ -80,15 +80,47 @@
     },
     "status": {
       "type": "string",
+      "description": "the single outcome word, DERIVED from execution/integrity/change/acceptance. Kept as the primary field; see those four for the facts behind it.",
       "enum": [
         "ok",
-        "refused",
         "dirty",
         "timeout",
         "provider_error",
-        "awaiting_review",
-        "review_failed"
+        "awaiting_review"
       ]
+    },
+    "execution": {
+      "type": "object",
+      "description": "did the process do its work? Independent of tree integrity and of acceptance.",
+      "additionalProperties": false,
+      "required": ["outcome"],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["completed", "provider_error", "timeout"]
+        }
+      }
+    },
+    "change": {
+      "type": "object",
+      "description": "is there a frozen delta from this job? `none` for a readonly job, which produces an answer rather than a change.",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "type": "string", "enum": ["none", "frozen"] }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "description": "has anything accepted this job's change? `not_required` for readonly. Switchgear's own gate only; a caller's project review and merge decision are not this field.",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["not_required", "awaiting_review", "accepted"]
+        }
+      }
     },
     "mode": {
       "type": "string",
@@ -129,6 +161,11 @@
     "integrity": {
       "type": "object",
       "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["clean", "dirty"],
+          "description": "the verdict over the digests below, so a caller need not recompute what this job already decided"
+        },
         "git_identity_before": {
           "type": "string"
         },

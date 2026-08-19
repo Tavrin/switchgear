@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from . import broker as brokermod
 from . import commands as cmdlib
-from . import events, identity, lease, process, provider, review, sandbox, state
+from . import events, identity, jobstate, lease, process, provider, review, sandbox, state
 from .digest import sha256_json
 from .errors import DirtyWorktree, ProviderError, Refuse
 from .paths import require_disjoint
@@ -761,17 +761,25 @@ def run_job(
         after_tree = identity.tree_digest(ident)
         id_changed = before_id != after_id
 
-        status = "ok"
+        # Four independent facts, recorded separately, with `status` derived from
+        # them at the end. Previously one variable answered all four questions,
+        # so a job that both errored AND left the tree dirty reported only
+        # whichever branch ran first. See jobstate.project_status for the
+        # precedence, which is unchanged.
+        execution = jobstate.EXECUTION_COMPLETED
+        integrity_outcome = jobstate.INTEGRITY_CLEAN
+        change_state = jobstate.CHANGE_NONE
+        acceptance = jobstate.ACCEPTANCE_NOT_REQUIRED
         err = ""
         handoff = None
         if result.truncated:
-            status = "provider_error"
+            execution = jobstate.EXECUTION_PROVIDER_ERROR
             err = "provider output exceeded the capture bound (evidence truncated)"
         elif result.timed_out:
-            status = "timeout"
+            execution = jobstate.EXECUTION_TIMEOUT
             err = f"timed out after {timeout}s"
         elif id_changed:
-            status = "dirty"
+            integrity_outcome = jobstate.INTEGRITY_DIRTY
             err = "git identity changed"
         else:
             # The RESULT path goes through the adapter, not a hardcoded event
@@ -782,15 +790,19 @@ def run_job(
                 result.stdout, require_handoff=(mode == "bounded-write")
             )
             if verr:
-                status = "provider_error"
+                execution = jobstate.EXECUTION_PROVIDER_ERROR
                 err = verr
-            if status == "ok" and result.returncode not in (0, None):
+            if execution == jobstate.EXECUTION_COMPLETED and result.returncode not in (0, None):
                 # A well-formed handoff object is a claim by the provider, not
                 # evidence of success. A crashed write is never promotable.
-                status = "provider_error"
+                execution = jobstate.EXECUTION_PROVIDER_ERROR
                 err = f"provider exited {result.returncode}"
 
-        if mode == "bounded-write" and status == "ok":
+        _clean_so_far = (
+            execution == jobstate.EXECUTION_COMPLETED
+            and integrity_outcome == jobstate.INTEGRITY_CLEAN
+        )
+        if mode == "bounded-write" and _clean_so_far:
             # post-write commands inside the same sandbox
             for item in (envelope or {}).get("commands") or []:
                 argv = cmdlib.resolve_command(item["verb"], item.get("args") or [])
@@ -807,22 +819,33 @@ def run_job(
                 )
                 cr = process.run_sandboxed(cmd_bwrap, env=env, timeout_s=min(30, timeout))
                 if cr.returncode != 0 or cr.timed_out:
-                    status = "provider_error"
+                    execution = jobstate.EXECUTION_PROVIDER_ERROR
                     err = "post-write command failed"
                     break
             identity.assert_gitdir_pointer_intact(ident)
             after2 = identity.inspect_worktree(ident.realpath)
             if not identity.same_core(ident, after2):
-                status = "dirty"
+                integrity_outcome = jobstate.INTEGRITY_DIRTY
                 err = "identity changed after commands"
             after = after2
             after_id = identity.git_identity_digest(ident)
             after_tree = identity.tree_digest(ident)
             if after_id != before_id:
-                status = "dirty"
+                integrity_outcome = jobstate.INTEGRITY_DIRTY
                 err = "git identity changed"
-            if status == "ok":
-                status = "awaiting_review"
+            if (execution == jobstate.EXECUTION_COMPLETED
+                    and integrity_outcome == jobstate.INTEGRITY_CLEAN):
+                # A bounded write that got this far has a delta the controller
+                # will freeze, and nothing has accepted it yet.
+                change_state = jobstate.CHANGE_FROZEN
+                acceptance = jobstate.ACCEPTANCE_AWAITING_REVIEW
+
+        status = jobstate.project_status(
+            execution=execution,
+            integrity=integrity_outcome,
+            acceptance=acceptance,
+            change=change_state,
+        )
 
         record = {
             # Bumped only for a CHANGE THAT BREAKS A READER. Additive keys do not
@@ -832,7 +855,17 @@ def run_job(
             # and must stay readable.
             "schema_version": SCHEMA_VERSION,
             "job_id": job_id,
+            # The one word callers already branch on, DERIVED from the four facts
+            # below rather than assigned directly. Its values and its precedence
+            # are unchanged.
             "status": status,
+            # The four facts `status` used to answer all at once. Separate
+            # because they are independent: a job can complete cleanly and still
+            # be awaiting a decision, and one that both errored and left a dirty
+            # tree used to report only whichever branch happened to run first.
+            "execution": {"outcome": execution},
+            "change": {"state": change_state},
+            "acceptance": {"state": acceptance},
             "mode": mode,
             "role": role,
             # The ADAPTER that ran this job, which is not derivable from the
@@ -869,6 +902,9 @@ def run_job(
             "generation": 0,
             "attempt": int((envelope or {}).get("attempt") or 1),
             "integrity": {
+                # The verdict over the digests below, so a caller does not have
+                # to compare them itself to learn what this job already decided.
+                "outcome": integrity_outcome,
                 "git_identity_before": before_id,
                 "git_identity_after": after_id,
                 "tree_before": before_tree,

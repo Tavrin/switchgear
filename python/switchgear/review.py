@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from . import jobstate
 from .errors import Refuse
 from .schema import validate
 from .state import atomic_write_json, read_json
@@ -147,7 +148,19 @@ def promote(
             f"review reports {len(blocking)} disqualifying finding(s) despite a "
             f"promote verdict: {claims}"
         )
-    subject["status"] = "ok"
+    # Promotion is an ACCEPTANCE transition and nothing else: the process
+    # outcome, the tree integrity and the frozen delta are all already decided
+    # and none of them change here. Keeping `status` in step is what callers
+    # branching on it expect, and it is derived from the same facts.
+    subject["acceptance"] = {"state": jobstate.ACCEPTANCE_ACCEPTED}
+    subject["status"] = jobstate.project_status(
+        execution=(subject.get("execution") or {}).get(
+            "outcome", jobstate.EXECUTION_COMPLETED),
+        integrity=(subject.get("integrity") or {}).get(
+            "outcome", jobstate.INTEGRITY_CLEAN),
+        acceptance=jobstate.ACCEPTANCE_ACCEPTED,
+        change=(subject.get("change") or {}).get("state", jobstate.CHANGE_FROZEN),
+    )
     subject["review"] = review_artifact
     subject["generation"] = generation + 1
     atomic_write_json(subject_path, subject)

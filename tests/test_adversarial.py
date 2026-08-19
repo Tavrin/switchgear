@@ -2928,6 +2928,90 @@ class NormalizedStream(unittest.TestCase):
         self.assertEqual(out["v"], 1)
 
 
+class StatusProjectionUnit(unittest.TestCase):
+    """`status` is derived from four facts, and its meaning has not changed.
+
+    The precedence encoded in project_status is not a design choice made here --
+    it reproduces what the old flat assignment produced, including when two
+    things went wrong at once. If it is ever reordered, callers branching on
+    `status` change behaviour silently.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def test_the_precedence_is_the_one_the_flat_assignment_had(self):
+        from switchgear import jobstate as js
+
+        cases = [
+            # (execution, integrity, acceptance, expected)
+            ("completed", "clean", "not_required", "ok"),
+            ("completed", "clean", "accepted", "ok"),
+            ("completed", "clean", "awaiting_review", "awaiting_review"),
+            ("completed", "dirty", "not_required", "dirty"),
+            ("provider_error", "clean", "not_required", "provider_error"),
+            ("timeout", "clean", "not_required", "timeout"),
+            # Two things wrong at once. The old code reached these by `elif`, so
+            # the earlier branch won; that is preserved exactly.
+            ("timeout", "dirty", "not_required", "timeout"),
+            ("provider_error", "dirty", "not_required", "provider_error"),
+            ("completed", "dirty", "awaiting_review", "dirty"),
+        ]
+        for execution, integrity, acceptance, expected in cases:
+            with self.subTest(execution=execution, integrity=integrity, acceptance=acceptance):
+                self.assertEqual(
+                    js.project_status(execution=execution, integrity=integrity,
+                                      acceptance=acceptance),
+                    expected,
+                )
+
+    def test_every_projected_value_is_in_the_schema_enum(self):
+        """A derived field that can produce a value the schema rejects would fail
+        at write time, on the job that finally hit the combination."""
+        import itertools
+        import json as _json
+
+        from switchgear import jobstate as js
+
+        schema = _json.loads(
+            (ROOT / "python" / "switchgear" / "data" / "schemas" / "result.schema.json").read_text()
+        )
+        allowed = set(schema["properties"]["status"]["enum"])
+        produced = {
+            js.project_status(execution=e, integrity=i, acceptance=a, change=c)
+            for e, i, a, c in itertools.product(
+                ["completed", "provider_error", "timeout"],
+                ["clean", "dirty"],
+                ["not_required", "awaiting_review", "accepted"],
+                ["none", "frozen"],
+            )
+        }
+        self.assertTrue(produced <= allowed, f"not in enum: {produced - allowed}")
+
+    def test_the_enum_has_no_value_nothing_can_produce(self):
+        """`refused` and `review_failed` sat in the enum and were assigned
+        nowhere -- a documented outcome the code could not reach, which is the
+        same class of false claim as a comment describing a check that does not
+        exist. A Refuse aborts before a record is written, so `refused` could
+        never land."""
+        import json as _json
+
+        from switchgear import jobstate as js
+
+        schema = _json.loads(
+            (ROOT / "python" / "switchgear" / "data" / "schemas" / "result.schema.json").read_text()
+        )
+        allowed = set(schema["properties"]["status"]["enum"])
+        reachable = {
+            js.project_status(execution=e, integrity=i, acceptance=a)
+            for e in ("completed", "provider_error", "timeout")
+            for i in ("clean", "dirty")
+            for a in ("not_required", "awaiting_review", "accepted")
+        }
+        self.assertEqual(allowed, reachable,
+                         f"enum values the code cannot produce: {allowed - reachable}")
+
+
 class CorrelationUnit(unittest.TestCase):
     """Caller-supplied labels: carried, bounded, and inert.
 

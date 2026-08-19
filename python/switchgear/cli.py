@@ -78,6 +78,12 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             "schema_version": record.get("schema_version"),
             "job_id": record["job_id"],
             "status": record["status"],
+            # The four facts `status` projects. A caller asking "did the provider
+            # fail?" no longer has to know that `dirty` outranks it.
+            "execution": record.get("execution"),
+            "integrity_outcome": (record.get("integrity") or {}).get("outcome"),
+            "change": record.get("change"),
+            "acceptance": record.get("acceptance"),
             "mode": record["mode"],
             "role": record["role"],
             "model": record["model"]["id"],
