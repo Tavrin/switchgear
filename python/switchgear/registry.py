@@ -7,7 +7,10 @@ from typing import Any
 
 from .errors import Refuse
 
-_ROOT = Path(__file__).resolve().parents[2]
+# Package-relative: see schema.py. These registries are controller-owned —
+# part of the tool, not of the consuming project — so shipping them inside
+# the package is also where they belong.
+_ROOT = Path(__file__).resolve().parent / "data"
 
 
 def load_models() -> dict[str, Any]:
@@ -23,7 +26,7 @@ def load_commands() -> dict[str, Any]:
 def registry_digest() -> str:
     """Digest of the controller-owned model registry as it is right now.
 
-    Frozen onto a subject job so a later edit to models/registry.json cannot
+    Frozen onto a subject job so a later edit to switchgear/data/models/registry.json cannot
     relabel model families to manufacture reviewer independence.
     """
     from .digest import sha256_bytes

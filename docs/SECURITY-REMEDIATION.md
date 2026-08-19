@@ -239,7 +239,7 @@ committed `__main__.py`. No security decision stays in the shell wrapper.
 - **Severity:** high
 - **Mechanism:** profile catalog can claim any `model_family`.
 - **Root cause:** RC3 + RC5.
-- **Strategy:** controller-owned `models/registry.json`. Profile may
+- **Strategy:** controller-owned `switchgear/data/models/registry.json`. Profile may
   only name IDs. Family/vendor come from the registry. Subject freezes
   independence policy + model identity at implement time. Review uses
   the subject's freeze, not a later profile.

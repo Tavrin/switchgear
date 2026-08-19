@@ -1,0 +1,8 @@
+Switchgear
+Copyright 2026 Etienne Doux
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product runs third-party coding-agent CLIs as external processes. It does
+not bundle, link against, or redistribute them, and they remain under their own
+licences and terms.

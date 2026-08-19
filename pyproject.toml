@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "switchgear"
+version = "0.1.0"
+description = "Run one coding-agent job inside an OS sandbox and get a record of what happened."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Etienne Doux" }]
+keywords = ["agents", "sandbox", "bubblewrap", "claude-code", "codex", "evidence"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Security",
+]
+
+# Exactly one runtime dependency, and it is load-bearing: every record, review
+# artifact, lease token and task envelope is schema-validated before it is
+# trusted, and schema.py refuses to start without it rather than degrading to a
+# shallow check. Everything else is the standard library plus programs already
+# on the machine (bwrap, git, and whichever agent CLIs you point it at).
+#
+# This said `dependencies = []` with a comment claiming there were none, until
+# installing into a clean virtualenv proved otherwise. It only ever worked
+# because jsonschema happened to be present system-wide.
+dependencies = ["jsonschema>=4.0"]
+
+[project.urls]
+Homepage = "https://github.com/etiennedoux/switchgear"
+Source = "https://github.com/etiennedoux/switchgear"
+Issues = "https://github.com/etiennedoux/switchgear/issues"
+
+[project.scripts]
+switchgear = "switchgear.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["switchgear*"]
+
+[tool.setuptools.package-data]
+switchgear = ["../../python/switchgear/data/schemas/*.json", "../../models/*.json", "../../commands/*.json"]

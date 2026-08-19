@@ -26,7 +26,7 @@ br_pattern='(^|[^A-Za-z0-9_-])br([^A-Za-z0-9_-]|$)'
 # has been deleted would otherwise reduce coverage silently, so the set actually
 # scanned is printed and must not be empty.
 SCAN=()
-for d in bin lib python adapters policies skills models commands; do
+for d in bin lib python adapters policies skills; do
   if [ -d "$ROOT/$d" ]; then SCAN+=("$ROOT/$d"); fi
 done
 [ ${#SCAN[@]} -gt 0 ] || { echo "FAIL: no generic-substrate directories found" >&2; exit 1; }

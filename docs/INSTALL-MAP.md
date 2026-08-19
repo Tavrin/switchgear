@@ -59,7 +59,7 @@ This table is the destination list after Stage 2/3 decisions.
 - `bin/ai-cmd`, `bin/ai-ro`, `lib/*.sh` — **deleted** in the N2 remediation.
   They were the pre-Python host-side command path (`os.execvp` from a
   user-supplied profile, no sandbox) and are superseded by
-  `python/switchgear/commands.py` + `commands/registry.json`, which execute inside
+  `python/switchgear/commands.py` + `switchgear/data/commands/registry.json`, which execute inside
   the same bwrap as the provider. Do not reintroduce them.
 - any `bwrap` production wrapper
 - anything that **replaces** the live OpenCode wrapper, helper, readonly

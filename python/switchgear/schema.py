@@ -11,8 +11,10 @@ try:
 except ImportError as exc:  # pragma: no cover - fail closed
     raise SystemExit("switchgear: REFUSING — jsonschema is required (no shallow fallback)") from exc
 
-_ROOT = Path(__file__).resolve().parents[2]
-_SCHEMA_DIR = _ROOT / "schemas"
+# Package-relative, so an installed copy finds its own data. This used to
+# resolve to parents[2] -- the REPO root -- which works from a checkout and
+# breaks the moment the package is installed anywhere else.
+_SCHEMA_DIR = Path(__file__).resolve().parent / "data" / "schemas"
 _CACHE: dict[str, dict[str, Any]] = {}
 
 

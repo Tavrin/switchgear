@@ -30,6 +30,20 @@ def _state_path(ns: argparse.Namespace) -> str:
     return os.path.abspath(p)
 
 
+def _optional_state_path(ns) -> str | None:
+    """The state root if one is configured, None if not — without complaining.
+
+    `_state_path` prints a refusal and exits, which is right for a command that
+    needs a state root. `capabilities` and `doctor` are documented as answering
+    when nothing is configured, and calling the dying version made them print
+    "switchgear: REFUSING — state root required" to stderr and then succeed
+    anyway. That contradicts the guarantee capabilities itself publishes ("treat
+    any refusal as fail-closed"), and it was the first line a new user saw.
+    """
+    p = ns.state or os.environ.get("SWITCHGEAR_STATE")
+    return os.path.abspath(p) if p else None
+
+
 def _profile_path(ns: argparse.Namespace) -> str:
     if ns.profile:
         return os.path.abspath(ns.profile)
@@ -1046,10 +1060,7 @@ def cmd_capabilities(ns: argparse.Namespace) -> int:
         # A caller asking what the tool can do should get an answer even with a
         # broken or absent profile -- that is when they need it most.
         pass
-    try:
-        state_path = _state_path(ns)
-    except SystemExit:
-        state_path = None
+    state_path = _optional_state_path(ns)
 
     out = capmod.describe(build_parser(), profile, state_path)
     if ns.json:
@@ -1171,11 +1182,9 @@ def cmd_doctor(ns: argparse.Namespace) -> int:
     """
     from . import doctor
 
-    try:
-        state = _state_path(ns)
-    except Exception:
-        state = None  # doctor must run on a machine with no state root at all
-    out = doctor.run_all(state)
+    # doctor must run on a machine with nothing configured yet — that is when it
+    # is most useful — and must not print a refusal on the way to succeeding.
+    out = doctor.run_all(_optional_state_path(ns))
 
     if ns.json:
         print(json.dumps(out, indent=2))

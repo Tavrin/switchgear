@@ -102,7 +102,7 @@ def _resolve_effort(requested: str | None, adapter, model: dict) -> str | None:
             "it cannot be inferred from the provider. Measure it (send a "
             "deliberate nonsense value; most providers answer with the accepted "
             f"list) and add `effort_values` to {model_id!r} in "
-            "models/registry.json, or drop `effort` from this role."
+            "switchgear/data/models/registry.json, or drop `effort` from this role."
         )
     if requested not in values:
         raise Refuse(

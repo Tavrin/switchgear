@@ -79,8 +79,8 @@ def check_registry() -> list[dict[str, Any]]:
     except Exception as exc:
         return [_check(
             "registry.models", FAIL, f"{type(exc).__name__}: {exc}",
-            "models/registry.json is unreadable or not valid JSON; restore it from "
-            "git (`git checkout -- models/registry.json`).",
+            "switchgear/data/models/registry.json is unreadable or not valid JSON; restore it from "
+            "git (`git checkout -- switchgear/data/models/registry.json`).",
         )]
 
     for name in sorted(_ADAPTERS):
@@ -155,7 +155,7 @@ def check_credentials() -> list[dict[str, Any]]:
             prec = provider_record(pool)
         except Refuse as exc:
             out.append(_check(f"credential.{pool}", FAIL, str(exc),
-                              "fix the provider entry in models/registry.json"))
+                              "fix the provider entry in switchgear/data/models/registry.json"))
             continue
         try:
             # on_expired left unset: doctor must not trigger a token refresh as a
@@ -320,7 +320,7 @@ def check_effort() -> list[dict[str, Any]]:
             + (" ..." if len(unmeasured) > 6 else ""),
             "measure one by sending a deliberate nonsense value (most providers "
             "answer with the accepted list) and add `effort_values` to that "
-            "model in models/registry.json.",
+            "model in switchgear/data/models/registry.json.",
         ))
     return out
 

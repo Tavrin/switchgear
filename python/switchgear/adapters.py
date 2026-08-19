@@ -87,7 +87,7 @@ def parse_lenient(text: str) -> tuple[list[dict[str, Any]], int]:
 # Effort values are a property of the MODEL, not of the provider, so an adapter
 # declares only the MECHANISM -- whether this CLI has an effort control and how
 # the value is spelled on its command line. The accepted VALUES live per model in
-# models/registry.json, which is where controller-owned measured facts belong.
+# switchgear/data/models/registry.json, which is where controller-owned measured facts belong.
 #
 # That split was forced by measurement rather than chosen for tidiness. The
 # OpenAI API's generic enumeration lists `none, minimal, low, medium, high,

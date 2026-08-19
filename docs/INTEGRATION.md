@@ -353,7 +353,7 @@ forced by measurement, not chosen for tidiness: `gpt-5.6-codex` accepts `minimal
 and `gpt-5.6-sol` refuses it — one provider, one flag, two different sets. So an
 adapter declares only the *mechanism* (does this CLI have an effort control, how
 is the value spelled, and where a bad value gets caught), while the *values* live
-per model in `models/registry.json` alongside every measured entry:
+per model in `switchgear/data/models/registry.json` alongside every measured entry:
 
 ```jsonc
 "codex/gpt-5.6-sol": {

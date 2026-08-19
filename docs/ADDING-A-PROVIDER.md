@@ -65,7 +65,7 @@ Facts behind the table, all measured against recording servers with no spend:
 
 ## The three edits
 
-### 1. `models/registry.json` — the data
+### 1. `switchgear/data/models/registry.json` — the data
 
 A provider record and at least one model. This is controller-owned: a profile
 may name these ids, never define them.

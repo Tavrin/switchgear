@@ -226,7 +226,7 @@ reviewer job's `dir` to match the subject's `dir`, its mode to be `readonly`, an
 lists `bin/ai-cmd`, and lines 10-12 map `bin/ai-ro` and `lib/*` into `~/.local/`.
 
 **Mechanism (source).** The remediation moved command execution into `commands.py` — absolute
-argv0 from a controller-owned `commands/registry.json`, forbidden shell/interpreter bases, arity
+argv0 from a controller-owned `switchgear/data/commands/registry.json`, forbidden shell/interpreter bases, arity
 bounds, option-injection and path-bearing-argument refusal, executed **inside the same bwrap**.
 That is a real improvement. But `bin/ai-cmd` survives untouched and bypasses all of it:
 
@@ -326,9 +326,9 @@ presence of a well-formed handoff object is a claim by the provider, not evidenc
 `registry.model_record` (`python/switchgear/registry.py:22-36`).
 
 **Mechanism (source).** Moving `model_family` out of the mutable profile into a controller-owned
-`models/registry.json` (F14) is a genuine improvement, and the subject correctly freezes its own
+`switchgear/data/models/registry.json` (F14) is a genuine improvement, and the subject correctly freezes its own
 model record. But the **reviewer's** record resolves its family from the registry file read fresh
-at reviewer-job time, and the registry is re-read on every call. An edit to `models/registry.json`
+at reviewer-job time, and the registry is re-read on every call. An edit to `switchgear/data/models/registry.json`
 between subject creation and review can relabel the reviewer's family so a `required`
 `different_family` is satisfied while both models actually share a family.
 
