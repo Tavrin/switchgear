@@ -100,13 +100,13 @@ Same shape as macOS but further away: no `/proc`, no bwrap, and the closest
 containment primitives (job objects, AppContainer) are a larger gap from the
 mount-based model than Seatbelt is. WSL2 is Linux and therefore Option 1.
 
-## What about atelier?
+## What about the orchestrator?
 
-Different repo, different answer, and it is not settled here. atelier is the
+Different repo, different answer, and it is not settled here. the orchestrator is the
 orchestration layer above this one; its portability depends on its own
-dependencies, not on bwrap. But note the coupling: if atelier runs natively on
+dependencies, not on bwrap. But note the coupling: if the orchestrator runs natively on
 macOS while switchgear runs inside a Linux VM, then **paths and process identity
-cross a boundary** — atelier's worktree paths, its process fence
+cross a boundary** — the orchestrator's worktree paths, its process fence
 (`linux-proc-start:<bootId>:<startTime>`, which switchgear publishes from the
 launch record) and the state root all have to be meaningful on both sides. The
 simplest arrangement by a distance is to run both inside the same Linux VM.

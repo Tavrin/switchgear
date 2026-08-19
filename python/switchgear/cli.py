@@ -70,7 +70,7 @@ def _profile_path(ns: argparse.Namespace) -> str:
 
 def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
     if as_json:
-        # Stable machine-readable contract for programmatic callers (atelier
+        # Stable machine-readable contract for programmatic callers (the orchestrator
         # adapters, MCP wrappers, CI). Keep these keys additive-only.
         print(json.dumps({
             "job_id": record["job_id"],
@@ -394,7 +394,7 @@ def cmd_lease(ns: argparse.Namespace) -> int:
 # switchgear blocked for the whole job, so every long run had to be hand-
 # backgrounded by its caller. A launch returns a job id immediately; the caller
 # then polls `status` and reads `logs --format digest` only if something looks
-# wrong. That is the same detached-job shape atelier's codex lane already
+# wrong. That is the same detached-job shape the orchestrator's codex lane already
 # expects, and unlike a stdout pipe it survives the caller going away.
 
 
@@ -1321,7 +1321,7 @@ def _fence_identity(ns) -> str | None:
     """pid identity as `linux-proc-start:<bootId>:<startTime>`.
 
     A pid alone is not an identity -- pids are recycled, which is why the launch
-    record carries starttime and boot_id too. This is exactly the shape atelier's
+    record carries starttime and boot_id too. This is exactly the shape the orchestrator's
     process fencing uses, so it is published rather than left to be rebuilt.
     """
     meta_path = os.path.join(_launch_dir(_state_path(ns)), f"{ns.job}.json")
@@ -1410,7 +1410,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
         "tokens": fin.get("tokens", 0),
         "costUSD": fin.get("costUSD", 0.0),
         "elapsed_s": round((ref - started), 1) if started and ref else None,
-        # atelier's process-fence identity shape. It already has this triple in
+        # the orchestrator's process-fence identity shape. It already has this triple in
         # the launch record; handing it over beats having the adapter re-derive
         # it, and re-derivation after the process is gone is impossible.
         "fence": _fence_identity(ns),

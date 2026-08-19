@@ -1,7 +1,7 @@
 """Provider adapters: the seam where provider-specific shapes stop.
 
 Everything above this module -- the digest, `logs`, `status`, and anything
-atelier consumes -- works on a NORMALIZED vocabulary. Everything below it is one
+the orchestrator consumes -- works on a NORMALIZED vocabulary. Everything below it is one
 provider's private format. That is the structural advantage over `the old Codex wrapper`,
 which passes Codex's raw format through and would need the digest written once
 per provider.
@@ -15,13 +15,13 @@ The normalized vocabulary, from docs/OBSERVABILITY.md:
                           "costUSD": float, "tokens": int, "exitSummary": str}
 
 `status` is one of completed / completed_empty / needs_input. `needs_input` is
-load-bearing for atelier: it parks the ticket back to the operator rather than
+load-bearing for the orchestrator: it parks the ticket back to the operator rather than
 recording a failure.
 
 `sessionId` is the single most load-bearing field: without a durable session
 identifier there is no resume, and a reply to a finished job cannot exist.
 
-`changed_files` is deliberately NOT part of this vocabulary. Atelier derives the
+`changed_files` is deliberately NOT part of this vocabulary. The orchestrator derives the
 result manifest from git itself and validates the landed tree at merge; it never
 trusts an agent-reported file list. The rail keeps its own freeze delta for its
 own gates -- that is a different thing, computed by the controller from the
@@ -35,7 +35,7 @@ from typing import Any, Iterable
 
 from .errors import ProviderError
 
-# Atelier truncates emitted lines at 400 chars (dispatch.mjs:4711). Match it, and
+# The orchestrator truncates emitted lines at 400 chars (dispatch.mjs:4711). Match it, and
 # bound at WRITE time rather than summarising after: a bound applied later has
 # already let the full text through whatever was in between.
 TEXT_LIMIT = 400
@@ -43,7 +43,7 @@ TEXT_LIMIT = 400
 TERMINAL_COMPLETED = "completed"
 TERMINAL_EMPTY = "completed_empty"
 TERMINAL_NEEDS_INPUT = "needs_input"
-# Not one of atelier's three success outcomes. A stream that stopped without a
+# Not one of the orchestrator's three success outcomes. A stream that stopped without a
 # terminal event is the "claims done, evidence truncated" case, which their
 # tripwires treat as suspicious -- over-reporting truncation is the right
 # default, so this never reports as completed.
@@ -1188,7 +1188,7 @@ class CodexAdapter(ProviderAdapter):
       on its terminal event). Resume information is therefore available from the
       moment the job starts.
     - Codex reports NO COST, only tokens. costUSD is 0.0 rather than invented,
-      which is why an atelier lane would set reportsCost false for this provider.
+      which is why an orchestrator lane would set reportsCost false for this provider.
     """
 
     name = "codex"
@@ -1578,7 +1578,7 @@ def _finish_events(
     While the job runs: `progress` with counters and NO terminal event, so an
     adapter tailing for `finished` never transitions early. Once it is over:
     errors first; then truncation (`sawTerminal` false is never `completed` --
-    "claims done, evidence truncated" is the case atelier tripwires on); then a
+    "claims done, evidence truncated" is the case the orchestrator tripwires on); then a
     provider-declared abnormal stop (`failure`); then empty-vs-completed by
     whether the model actually said anything.
     """
@@ -1618,7 +1618,7 @@ def _finish_events(
 def _tool_target(part: dict[str, Any]) -> str:
     """A short, human-meaningful subject for a tool call.
 
-    Kept minimal on purpose: atelier renders tool events as plain text, so a
+    Kept minimal on purpose: the orchestrator renders tool events as plain text, so a
     large payload here buys nothing and costs context everywhere downstream.
     """
     state = part.get("state") if isinstance(part.get("state"), dict) else {}

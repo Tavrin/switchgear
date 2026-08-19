@@ -96,11 +96,24 @@ off the stream rather than hardcoding it.
   sandbox home can hold a live access token. `.gitignore` covers the usual
   shapes; check `git status` before committing anyway.
 - **Do not weaken a guard to make a test pass.** If `test_no_machine_paths.sh`,
-  the bare-`rmtree` check or the no-provider-execution-outside-bwrap check fails,
-  it has found something. Two of those caught regressions by the author within
-  minutes of landing. (`test_no_project_nouns.sh` ships with an empty noun list
-  and so cannot fail by default — it is there for consumers who want to keep
-  their own project's names out of a reusable substrate.)
+  `test_no_dangling_doc_links.sh`, the bare-`rmtree` check or the
+  no-provider-execution-outside-bwrap check fails, it has found something. Three
+  of those caught regressions by the author within minutes of landing, and the
+  doc-link gate found a fourth on the run that introduced it.
+- **`test_no_project_nouns.sh` ships with an empty noun list, so by default it
+  cannot fail.** That is not a spare guard: 14 references to a private consuming
+  project reached the tree past a release-readiness pass precisely because the
+  list was empty. If you develop against a consuming project, keep a list outside
+  the repo — committing one would publish the names it exists to exclude — and
+  point the gate at it:
+
+  ```console
+  $ export SWITCHGEAR_PROJECT_NOUNS=~/.config/switchgear/project-nouns.txt
+  $ bash tests/policy/test_no_project_nouns.sh
+  ```
+
+  Note it scans `bin/`, `python/` and `skills/` only. Docs may cite a real
+  consumer as a worked example; the substrate itself must name nobody.
 - **Scope discipline.** Fix what was asked. If you find something else that looks
   serious, report it with evidence and stop; do not expand into it.
 

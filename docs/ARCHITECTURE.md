@@ -3,13 +3,13 @@
 Generic provider/worker substrate. Not a manager.
 
 ```
-manager (out of scope)
+caller (out of scope: orchestrator, CI, shell, human, another agent)
     │ profile + envelope + leased cwd
     ▼
 switchgear (contracts, integrity, process, leases, review predicates)
-    │ adapter
+    │ adapter, one per provider binary
     ▼
-OpenCode (first provider)
+OpenCode · Claude Code · Codex · Grok
 ```
 
 Project policy (tracker, tiers, product gates, locks, deploy, model taste)
@@ -25,12 +25,8 @@ trees, schema authority, or sandbox construction safely.
 
 Bash remaining: `bin/switchgear` is a tiny launcher that `exec`s
 `/usr/bin/python3` on the committed `__main__.py`. No security decision
-is encoded in the shell wrapper.
-
-Stage-0 `lib/*.sh` files remain in the tree as historical artifacts from
-the reviewed baseline. They are not sourced.
-
-See `docs/SECURITY-REMEDIATION.md` for finding dispositions.
+is encoded in the shell wrapper. The shell files that remain are tests
+and policy gates under `tests/`; nothing under `python/` sources shell.
 
 ## Data flow
 

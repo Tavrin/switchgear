@@ -893,10 +893,10 @@ class RailTests(unittest.TestCase):
         events = (self.state / "jobs" / job_id / "evidence" / "events.jsonl").read_bytes()
         self.assertTrue(events, "job produced no evidence")
 
-    def test_atelier_workspace_token_is_not_special_cased(self):
-        """Decision, recorded once (atelier ATT-007 asks for it explicitly).
+    def test_orchestrator_workspace_token_is_not_special_cased(self):
+        """Decision, recorded once, because the consuming orchestrator asked for it.
 
-        atelier writes `.atelier-workspace.json` at the worktree root during
+        The orchestrator writes `.orchestrator-workspace.json` at the worktree root during
         dispatch. switchgear does NOT exclude that filename from its integrity
         digest, and must not: excluding a name creates a hiding place, which is
         precisely the finding that put untracked and ignored content into the
@@ -905,10 +905,10 @@ class RailTests(unittest.TestCase):
         No special case is needed, because the per-job delta is before-vs-after
         fingerprints. A token written BEFORE the job has the same fingerprint
         after, so it is never attributed to the job -- while a worker that
-        modifies it does show up, which is exactly what atelier refuses at merge.
+        modifies it does show up, which is exactly what the orchestrator refuses at merge.
         """
-        token = self.primary / ".atelier-workspace.json"
-        token.write_text(json.dumps({"workspaceId": "att-007-token"}))
+        token = self.primary / ".orchestrator-workspace.json"
+        token.write_text(json.dumps({"workspaceId": "workspace-token"}))
 
         p = run_cli(
             self.args("--json", "scout", str(self.primary), "look"),
@@ -919,7 +919,7 @@ class RailTests(unittest.TestCase):
         job_id = json.loads(p.stdout)["job_id"]
         rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
         changed = (rec.get("freeze") or {}).get("changed_files") or []
-        self.assertNotIn(".atelier-workspace.json", changed)
+        self.assertNotIn(".orchestrator-workspace.json", changed)
         # And it is still there -- the rail did not eat the orchestrator's token.
         self.assertTrue(token.exists())
 
@@ -1930,7 +1930,7 @@ class RailTests(unittest.TestCase):
             self.assertIn("DO THE TASK", composed, name)
 
     def test_no_provider_binary_is_executed_outside_the_sandbox(self):
-        """An invariant stated in three places — HANDOFF's list, THREAT-MODEL,
+        """An invariant stated in three places — INVARIANTS, THREAT-MODEL,
         and a comment in job.py — and broken by `--version`, which looks
         harmless. It was run straight on the host with the caller's whole
         environment inherited, from `providers`, `doctor` AND `capabilities`:

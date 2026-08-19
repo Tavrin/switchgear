@@ -1,11 +1,11 @@
 """Execution-profile pinning by CONTENT, not by path.
 
-atelier's ATT-006 records an execution profile at first spawn -- a digest of the
-spawn environment plus the resolved executable -- and enforces it on resume. For
+A consuming orchestrator records an execution profile at first spawn -- a digest
+of the spawn environment plus the resolved executable -- and enforces it on resume. For
 this rail a resolved-path pin would be worthless: `~/.local/bin/switchgear` is a
 stable path that is a symlink into the working tree, so it always resolves and
 its content changes with every edit. That is the "latest version wins" drift
-atelier had to pin away for codex, one level deeper.
+the orchestrator had to pin away for codex, one level deeper.
 
 And the launcher alone is not the program. It is an 11-line stub whose only job
 is to resolve symlinks and exec `python/switchgear/`; digesting just the resolved

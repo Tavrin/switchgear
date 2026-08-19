@@ -1,7 +1,12 @@
 # Observability without context flooding
 
-Design note for the delegation-visibility work. Two requirements that pull in
-opposite directions, and must both be met:
+> **This is a dated design note, not a reference.** It records the reasoning and
+> the measurements behind the observability design, including one correction made
+> during implementation. The work it describes has landed. Where it and the code
+> disagree, the code is right; `switchgear capabilities` and the schemas are the
+> executable contract, and `docs/INTEGRATION.md` is the caller-facing one.
+
+Two requirements that pull in opposite directions, and must both be met:
 
 1. **You cannot see what a delegated agent is doing.** Unlike a native Claude
    subagent, whose events the host harness renders inline as they happen, a
@@ -22,11 +27,15 @@ stream on disk; several projections over it; the cheap one is the default.
 |---|---|---|
 | `codex-companion` | yes — a `.log` grows during the run | no `logs`/`tail` subcommand; you must find the path in the launch JSON |
 | `the old OpenCode wrapper` | yes — `opencode run --format json > "$out"` appends as it goes | nothing surfaces it |
-| **switchgear** | **no** — stdout is buffered to a `tempfile.TemporaryFile()` and `evidence/events.jsonl` is only written after the process exits | nothing to reach |
+| **switchgear, as measured** | **no** — stdout was buffered to a `tempfile.TemporaryFile()` and `evidence/events.jsonl` was only written after the process exited | nothing to reach |
 
-So for Codex the data exists and the ergonomics don't. For switchgear the data
-does not exist yet. That is the first thing to fix, because everything else
-depends on it.
+So for Codex the data existed and the ergonomics didn't. For switchgear the data
+did not exist at all. That was the first thing to fix, because everything else
+depended on it.
+
+**Since fixed.** Evidence now streams as it arrives (`job.py`, `process.py`), and
+`logs`/`status` surface it. The rest of this note describes the design that got
+there, and the one wrong turn taken on the way.
 
 ---
 
@@ -85,8 +94,8 @@ enabling change: nothing else here is possible without it.
 | Projection | Who it's for | Guarantee |
 |---|---|---|
 | **summary** — the existing `--json` record | a delegating agent, always | bounded, ~50-100 tokens |
-| **digest** — STRUCTURED: state, counters, tokens/cost, parsed failures | an agent that needs to know *what happened*, or is debugging a failure | **hard byte cap**, states when it truncated. Not prose — see the atelier section for why |
-| **full** — the raw stream | a human terminal, a TUI, atelier's UI, a file tail | unbounded — never for agent context |
+| **digest** — STRUCTURED: state, counters, tokens/cost, parsed failures | an agent that needs to know *what happened*, or is debugging a failure | **hard byte cap**, states when it truncated. Not prose — see the orchestrator section for why |
+| **full** — the raw stream | a human terminal, a TUI, the orchestrator's UI, a file tail | unbounded — never for agent context |
 
 ### Enforcement, not advice
 
@@ -111,19 +120,19 @@ status   {sessionId}                 # REQUIRED: without it resume cannot exist
                                      # NB: the SOURCE field is `sessionID` (capital
                                      # ID) and appears on EVERY provider event, not
                                      # on a dedicated status event -- see below
-tool     {name, target}              # rendered as text by atelier; keep minimal
-text     {content}                   # truncate at write time (atelier uses 400 chars)
+tool     {name, target}              # rendered as text by the orchestrator; keep minimal
+text     {content}                   # truncate at write time (the orchestrator uses 400 chars)
 finished {status, exit, exitSummary, turns, costUSD, tokens}
          # status: completed | completed_empty | needs_input
          # needs_input parks the ticket back to the operator -- load-bearing
 ```
 
-`changed_files` is deliberately absent: atelier derives the result manifest from
+`changed_files` is deliberately absent: the orchestrator derives the result manifest from
 git itself and ignores agent-reported file lists. Keep it internally if useful.
 
 This is the structural advantage over `the old Codex wrapper`, which passes Codex's raw
 format through: one viewer, one digest implementation, and one `normalizeLine`
-in atelier work for OpenCode, Codex and Grok alike. Provider-specific shapes stay
+in the orchestrator work for OpenCode, Codex and Grok alike. Provider-specific shapes stay
 inside each adapter's `parse()`.
 
 Cost and token counters are already present in real OpenCode `step_finish`
@@ -132,14 +141,14 @@ gives the quota work its input.
 
 ---
 
-## Consumption by atelier
+## Consumption by the orchestrator
 
 Confirmed against the consuming orchestrator's source, with file:line
 references so it can be re-verified. This section is **fact**, not inference.
 
 ### Write to the codex adapter shape
 
-Atelier supports both models, per adapter. The claude lane is stdout-as-pipe
+The orchestrator supports both models, per adapter. The claude lane is stdout-as-pipe
 (`server/lib/agents/claude.mjs:99-127`). The codex lane is exactly what switchgear
 already does: a detached background job whose stdout yields only a job id, after
 which the adapter polls job-state JSON/log files and can reattach after a daemon
@@ -158,7 +167,7 @@ what they had to pin away for codex.
 > **Watch out:** `~/.local/bin/switchgear` is currently a symlink into the
 > working tree. The *path* is stable but its *content* changes with every edit.
 >
-> Atelier's ruling on this (their words): profile pinning for the switchgear
+> The orchestrator's ruling on this (their words): profile pinning for the switchgear
 > adapter needs **a content digest of the launcher, not just a resolved path** —
 > "same class as the codex 'latest wins' drift we pinned away, one level
 > deeper." Pinning a path that always resolves is worthless when what it
@@ -171,7 +180,7 @@ what they had to pin away for codex.
 
 ### Event vocabulary — corrected
 
-The straw man was missing fields atelier actually consumes
+The straw man was missing fields the orchestrator actually consumes
 (`claude.mjs:113-147`):
 
 | Field | Why |
@@ -180,12 +189,12 @@ The straw man was missing fields atelier actually consumes
 | `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
 | terminal `status` ∈ `completed` / `completed_empty` / `needs_input` | `needs_input` is load-bearing: it parks the ticket back to the operator |
 | `exitSummary` text | shown on the record |
-| `text{content}` | mid-run display; atelier truncates to 400 chars per line (measured in the consuming orchestrator) |
+| `text{content}` | mid-run display; the orchestrator truncates to 400 chars per line (measured in the consuming orchestrator) |
 
-**Drop `changed_files` from the atelier-facing contract.** Atelier never trusts
+**Drop `changed_files` from the orchestrator-facing contract.** The orchestrator never trusts
 agent-reported file lists: it derives the result manifest itself from git at
 finalization (a tracked change in the consuming orchestrator) and validates the landed tree against it at merge
-(a tracked change in the consuming orchestrator). Keep it for our own viewer if useful; atelier will ignore it.
+(a tracked change in the consuming orchestrator). Keep it for our own viewer if useful; the orchestrator will ignore it.
 
 `tool{name,target}` is rendered only as text there — keep it minimal.
 
@@ -230,18 +239,18 @@ durable session/thread identifier surfaced in events, or resume cannot exist.
 
 ### The verify collision is shared, and unresolved on both sides
 
-Atelier has the *same* problem. Since a tracked change in the consuming orchestrator verification runs in a fresh
+The orchestrator has the *same* problem. Its verification runs in a fresh
 detached checkout with pre/post probes, and the post status uses
 `--untracked-files=all --ignored=matching` — so a Python suite creating
-`__pycache__` there would raise `EATELIER_VERIFICATION_MUTATED_WORKTREE`. Their
+`__pycache__` there would raise its verification-mutated-worktree error. Their
 golden suite is Node-based and hermetic, so they have not paid this cost yet;
 their own review flagged "verify in a pristine checkout against non-fixture
 projects" as untested.
 
-**Therefore: do not treat atelier as the layer that absorbs this.** Both layers
+**Therefore: do not treat the orchestrator as the layer that absorbs this.** Both layers
 currently demand side-effect-free verify commands (`PYTHONDONTWRITEBYTECODE`,
 `CARGO_TARGET_DIR`, npm cache redirection). A shared out-of-tree-cache convention
-is an open design item, and atelier has said it would likely adopt whatever
+is an open design item, and the orchestrator has said it would likely adopt whatever
 switchgear settles on.
 
 Their suggested shape was "digest over tracked content only + an explicit
@@ -255,7 +264,7 @@ non-tracked content in the *integrity* digest, and add an explicit, operator-own
 invalidating the freeze. That preserves the anti-hiding property while making
 verify survivable.
 
-### Context budget — atelier solved it, copy the approach
+### Context budget — the orchestrator solved it, copy the approach
 
 Bounded **at write time, not summarised after**: the full stream goes only to an
 append-only per-dispatch JSONL on disk; emitted lines truncate to 400 chars;
@@ -266,7 +275,7 @@ the file, a delegating agent reads the record.
 **Their one correction to the tiering above, and it is important:** make the
 bounded tier **structured** — state, exit summary, parsed failures, counters —
 **not a prose summary**. Prose self-reports from the worker are exactly what
-atelier distrusts; they tripwire agents whose self-report claims tests passed
+the orchestrator distrusts; they tripwire agents whose self-report claims tests passed
 when verify says otherwise.
 
 That matches what this rail learned independently today: `handoff.changes` came

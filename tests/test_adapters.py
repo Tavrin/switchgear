@@ -99,7 +99,7 @@ class Vocabulary(unittest.TestCase):
         self.adapter = get_adapter("opencode")
 
     def test_a_run_with_no_assistant_text_is_completed_empty(self):
-        """Not a success to report as one -- atelier distinguishes the two."""
+        """Not a success to report as one -- the orchestrator distinguishes the two."""
         evs = [
             {"type": "step_start", "sessionID": "ses_x", "part": {}},
             {"type": "step_finish", "sessionID": "ses_x", "part": {"reason": "stop"}},
@@ -118,7 +118,7 @@ class Vocabulary(unittest.TestCase):
 
         A run that ended without the provider closing its stream has produced no
         evidence of completion, however much assistant text it emitted first.
-        Reporting `completed` there is what atelier's tripwires exist to catch,
+        Reporting `completed` there is what the orchestrator's tripwires exist to catch,
         and over-reporting truncation is the right default.
         """
         evs = [
@@ -1021,7 +1021,7 @@ class EffortResolution(unittest.TestCase):
 
 
 class ExecutionPinning(unittest.TestCase):
-    """Content pin, not path pin (atelier ATT-006, owner ruling)."""
+    """Content pin, not path pin (owner ruling: content pin, not path pin)."""
 
     def test_digest_covers_the_package_not_just_the_launcher(self):
         """The launcher is an 11-line stub that execs the package.

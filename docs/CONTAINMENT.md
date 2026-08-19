@@ -73,25 +73,55 @@ of.
 
 ## Resource bounds
 
-`RLIMIT_FSIZE` (default 256MiB) is set in a `preexec_fn` before `bwrap` starts,
-so the kernel inherits it to every process in the sandbox. It bounds both any
-single file the worker writes and the stdout/stderr spool. Polling for size
-cannot do this: a worker writes 500MB well inside any poll interval. Output is
-captured through temp files rather than pipes, so unbounded provider output
-cannot be buffered into controller memory.
+`RLIMIT_FSIZE` (default 256MiB) is applied by prefixing the launch with
+`prlimit --fsize=`, so the kernel inherits it to every process in the sandbox.
+It is deliberately *not* a `preexec_fn`: that runs between `fork` and `exec` in a
+process that may hold locks a thread was holding at fork time, which is unsafe in
+a controller that drains output on threads.
+
+It bounds any single file the worker writes. Polling for size cannot do this: a
+worker writes 500MB well inside any poll interval.
+
+**It does not bound the stdout spool**, because evidence is streamed through a
+pipe and a pipe is not a file — the drain's own byte cap does that. See
+`docs/OBSERVABILITY.md`. `RLIMIT_FSIZE` still bounds the files the worker writes
+into its worktree, which is its actual job.
 
 The worker runs in its own session and process group (`start_new_session`,
 `--new-session`), and `--die-with-parent` plus a descendant walk means SIGKILL of
 the controller leaves **zero** surviving `bwrap` or provider processes (measured).
 
+## The uid boundary
+
+Read-only jobs get a real one; bounded-write jobs deliberately do not. That
+asymmetry is an ownership problem, not an oversight.
+
+**Read-only.** When the machine can establish it, the payload runs as a subuid:
+`--userns-block-fd` plus a two-range `newuidmap`/`newgidmap` map, then
+`setpriv --reuid 1`. A write to a file owned by the invoking user is then refused
+by the kernel rather than by policy. `userns.capability()` reports whether this
+machine can do it and `job.py` gates on that — a machine without `/etc/subuid`
+entries or the setuid map helpers gets mount and network isolation only.
+`switchgear capabilities` reports which of the two this machine gives you.
+
+> `--unshare-user --uid N` on its own looks like this and is not. Measured: your
+> files appear owned by the sandbox uid and stay writable. It confines nothing.
+> That is why the map helpers are load-bearing.
+
+**Bounded-write.** Same uid as the invoking user. A worker must produce files the
+controller then reads, freezes and commits; files written by a subuid are owned by
+that subuid, and handing them back needs privileges Switchgear does not have.
+Closing this needs idmapped mounts, ACLs, or an ownership fix-up at collection —
+an ownership model, not a flag. Until then, for a bounded-write job the isolation
+is the mount and network namespace: anything writable by the invoking uid *and
+visible in the namespace* is writable by the job, and the defence is that almost
+nothing is visible.
+
 ## What this is not
 
-- **Not a uid boundary.** There is no `--unshare-user`; the job runs as the
-  invoking user. The isolation is the mount and network namespace. Anything
-  writable by that uid and visible in the namespace is writable by the job — the
-  defence is that almost nothing is visible.
+- **Not a uid boundary for bounded-write jobs.** See above.
 - **Not a defence against a malicious `bwrap`, kernel or upstream.**
-- **Not a substitute for pointing it at the right directory.** See INSTALL-MAP.
+- **Not a substitute for pointing it at the right directory.**
 
 ## Policy
 

@@ -84,11 +84,16 @@ provider JSON is never evaluated. Handoff and results only under
 - **Review is a probabilistic signal, not an authority boundary.** The same model
   on the same diff with the same prompt returned `needs_changes` on one run and
   `promote` on the next, documenting the same two real defects both times. Never
-  make it the only gate; the human merge decision stays upstream in atelier.
+  make it the only gate; the human merge decision stays upstream in the orchestrator.
 - **Provider permission semantics can change upstream.** They are depth, not the
   boundary — which is why the boundary is the kernel's.
-- **Not a uid boundary** (no user namespace): anything the invoking user can
-  write *and* that is visible inside the namespace is writable by the job.
+- **No uid boundary for bounded-write jobs.** Read-only jobs run as a subuid
+  where the machine supports it, so the kernel refuses writes to the invoking
+  user's files. Bounded-write cannot: the controller must read back and commit
+  what the worker produced, and subuid-owned files cannot be handed back without
+  privileges this tool does not have. For those jobs, anything the invoking user
+  can write *and* that is visible inside the namespace is writable by the job.
+  See `CONTAINMENT.md`.
 - **A hostile upstream** sees the prompts and the diff. Injection reaching the
   prompt is a real risk; the containment limits what it can *do*, not what it can
   *say*.
@@ -121,4 +126,11 @@ provider JSON is never evaluated. Handoff and results only under
 ## Install-time risk
 
 Installing over a live wrapper, agent file or skill would change a running
-manager. This repo must not do that. See `INSTALL-MAP.md`.
+manager underneath itself. This repo must not do that: it installs as a package
+plus one launcher and owns nothing else on the machine.
+
+A related and sharper case, because it is easy to get wrong in a lab: if the
+launcher on `PATH` is a symlink into a working tree, its *path* is stable while
+its *content* changes with every edit. Pin a released copy for anything beyond
+local iteration — a caller that digests the launcher is pinning nothing
+otherwise.

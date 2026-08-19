@@ -15,6 +15,9 @@ bash "$ROOT/tests/policy/test_no_machine_paths.sh"
 echo "== noun gate =="
 bash "$ROOT/tests/policy/test_no_project_nouns.sh"
 
+echo "== doc link gate =="
+bash "$ROOT/tests/policy/test_no_dangling_doc_links.sh"
+
 echo "== provider discovery (no hardcoded installs) =="
 /usr/bin/python3 "$ROOT/tests/test_discovery.py"
 

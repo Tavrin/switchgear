@@ -50,11 +50,11 @@ Switchgear's side of the contract an orchestrator adapter needs. It was written
 against one real consumer, but nothing in it is specific to that consumer:
 
 - **Capabilities** the lane declares: `canResume: true` (sessionId-based),
-  `commitsOwnWork: false` (the git dir is a read-only mount, so atelier's
+  `commitsOwnWork: false` (the git dir is a read-only mount, so the orchestrator's
   finalizer commits), `liveInput: false` (no stdin into the sandbox; replies are
   cold resumes), `liveStream: true` (the events file is tailable),
   `reportsCost: true`.
-- **`finished.status`** maps 1:1 onto atelier's outcome states — except
+- **`finished.status`** maps 1:1 onto the orchestrator's outcome states — except
   `sawTerminal: false`, which is **never** `completed`. A run that ended without
   the provider closing its stream reports `failed` with a truncation
   `exitSummary`, however much assistant text it emitted first. "Claims done,
@@ -66,7 +66,7 @@ against one real consumer, but nothing in it is specific to that consumer:
   than guessing — an adapter tailing for `finished` must not transition early.
 - **`turns` and `costUSD` are totals**, not deltas.
 - **`status.fence`** publishes the launch record's pid identity as
-  `linux-proc-start:<bootId>:<startTime>` — atelier's own process-fence shape. A
+  `linux-proc-start:<bootId>:<startTime>` — the orchestrator's own process-fence shape. A
   pid alone is not an identity, and it cannot be re-derived once the process is
   gone.
 
@@ -88,9 +88,9 @@ launcher alone is an 11-line stub, so digesting only the executable freezes the
 one file that never changes. Digesting the digest list rather than the bytes
 means a rename moves the pin too.
 
-### `.atelier-workspace.json`
+### `.orchestrator-workspace.json`
 
-atelier writes its workspace identity token at the worktree root during dispatch.
+the orchestrator writes its workspace identity token at the worktree root during dispatch.
 **switchgear does not exclude that filename from its integrity digest, and must
 not.** Excluding a name creates a hiding place — precisely the finding that put
 untracked and ignored content into the digest to begin with.
@@ -98,9 +98,9 @@ untracked and ignored content into the digest to begin with.
 No special case is needed. The per-job delta is before-vs-after fingerprints, so
 a token written before the job has the same fingerprint after and is never
 attributed to the job, while a worker that *modifies* it does appear in the
-delta — which is exactly what atelier refuses at merge.
+delta — which is exactly what the orchestrator refuses at merge.
 
-This depends on atelier writing the token **before** invoking switchgear.
+This depends on the orchestrator writing the token **before** invoking switchgear.
 Confirmed in their code, not assumed: the token is written at worktree
 preparation (`its worktree-preparation step`) strictly before `agent.launch` (`:6279`), on
 every path — verify, post-merge and merge-scratch checkouts all write it at
@@ -556,11 +556,11 @@ An adapter needs four things, all already available:
    processes (pid namespace + `--die-with-parent`).
 4. **result** — read `result.json`, or the `--json` object on stdout.
 
-For **atelier** specifically the mapping is direct: `write` corresponds to a
+For **the orchestrator** specifically the mapping is direct: `write` corresponds to a
 dispatch into an isolated worktree; `awaiting_review` is the state before the
-merge gate; `promote` is a verification step, not a merge — atelier's
+merge gate; `promote` is a verification step, not a merge — the orchestrator's
 human-clicked merge remains the only path to main. switchgear adds an OS boundary
-*under* atelier's worktree isolation; it does not replace the merge gate, the
+*under* the orchestrator's worktree isolation; it does not replace the merge gate, the
 event log, or verification from the real test suite.
 
 ## Multiple providers (OpenRouter, swarms)

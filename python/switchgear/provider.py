@@ -89,8 +89,8 @@ def probe_provider(binary: str | None, args: list[str], *, timeout: int = 30) ->
 
     `--version` and `--help` look harmless, which is why they were being run
     directly on the host with the caller's entire environment inherited. Three
-    places in this repo state the rule they broke -- HANDOFF's invariant list,
-    THREAT-MODEL, and a comment in job.py -- all saying the provider is never
+    places in this repo state the rule they broke -- INVARIANTS, THREAT-MODEL,
+    and a comment in job.py -- all saying the provider is never
     executed outside the sandbox, not even for a version string.
 
     Returns a `(unreadable: ...)` marker rather than raising when the binary

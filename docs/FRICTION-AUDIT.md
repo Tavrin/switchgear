@@ -1,7 +1,7 @@
 # Friction audit: another project's Codex failure catalogue, checked against this rail
 
-Source: `docs/agents/CODEX_LANE_FAILURE_MODES.md` in a private project's repository — 559 lines
-written from one continuous ~24-hour session, roughly 40 Codex lanes and 35
+Source: a 559-line Codex lane failure catalogue held in a private project's
+repository, written from one continuous ~24-hour session, roughly 40 Codex lanes and 35
 merges, plus a 126-entry lessons store. It is a failure catalogue rather than a
 retrospective: each entry records what went wrong, the evidence, what was
 changed, and whether the change actually holds.
