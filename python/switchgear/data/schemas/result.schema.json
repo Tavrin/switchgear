@@ -427,6 +427,32 @@
     "spend_unrecorded": {
       "type": "string",
       "description": "set when this job's cost could not be appended to the ledger; the daily budget is under-counting by this job"
+    },
+    "delegation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "what this job's worker asked its in-sandbox delegation socket for, and what it was refused. Null when delegation was not enabled.",
+      "additionalProperties": false,
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "denied": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "denied_detail": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

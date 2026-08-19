@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from . import broker as brokermod
 from . import commands as cmdlib
+from . import delegate as delegatemod
 from . import events, identity, jobstate, lease, process, provider, review, sandbox, state
 from .digest import sha256_json
 from .errors import DirtyWorktree, ProviderError, Refuse
@@ -691,6 +692,31 @@ def run_job(
             _assert_no_credentials(src)
             session_binds.append((src, os.path.join(dirs["home"], rel)))
 
+        # In-sandbox delegation, off unless an operator turned it on. Readonly
+        # children only, and only in this job's own worktree: a nested writer
+        # would need a second worktree, and creating one is orchestration.
+        deleg_policy = delegatemod.policy_for(quotamod.load_budget())
+        deleg_broker = None
+        deleg_sock = None
+        if deleg_policy["enabled"] and mode == "readonly":
+            deleg_sock = os.path.join(dirs["job"], "delegate.sock")
+            deleg_broker = delegatemod.DelegationBroker(
+                unix_socket=deleg_sock,
+                parent_job=job_id,
+                worktree=ident.realpath,
+                state_path=root.path,
+                profile_path=profile_path,
+                provider_path=provider_path,
+                roles=deleg_policy["roles"],
+                max_children=deleg_policy["max_children"],
+                max_depth=deleg_policy["max_depth"],
+                depth=int(os.environ.get("SWITCHGEAR_DELEGATION_DEPTH") or 0),
+                # Same reasoning as the credential broker: under the uid boundary
+                # the worker is not this user, and 0600 would lock it out of its
+                # own socket. Safe because the job directory is 0700 and ours.
+                socket_mode=0o666 if uid_boundary else 0o600,
+            )
+
         bwrap_argv = sandbox.build_bwrap_argv(
             ident=ident,
             policy=policy,
@@ -698,6 +724,7 @@ def run_job(
             provider_argv=inner_prefix + inner,
             command_binds=extra_binds,
             broker_socket=broker_sock,
+            delegate_socket=deleg_sock,
             session_binds=session_binds,
             uid_boundary=bool(uid_boundary),
         )
@@ -731,14 +758,29 @@ def run_job(
             env = dict(env)
             env.update(usernsmod.payload_env())
 
-        result = process.run_sandboxed(
-            bwrap_argv,
-            env=env,
-            timeout_s=timeout,
-            stdout_path=ev_path,
-            stderr_path=err_path,
-            userns=uid_boundary,
-        )
+        if deleg_broker is not None:
+            with deleg_broker:
+                result = process.run_sandboxed(
+                    bwrap_argv,
+                    env=env,
+                    timeout_s=timeout,
+                    stdout_path=ev_path,
+                    stderr_path=err_path,
+                    userns=uid_boundary,
+                )
+            # Read after the socket is torn down, so the counts cannot still be
+            # moving while they are being written into the record.
+            delegation_summary = deleg_broker.summary()
+        else:
+            delegation_summary = None
+            result = process.run_sandboxed(
+                bwrap_argv,
+                env=env,
+                timeout_s=timeout,
+                stdout_path=ev_path,
+                stderr_path=err_path,
+                userns=uid_boundary,
+            )
         # process set is the bwrap pid ns; after return it is dead
 
         identity.assert_gitdir_pointer_intact(ident)
@@ -941,6 +983,10 @@ def run_job(
                     adapter.credential_in_sandbox and cred is not None and bk is not None
                 ),
             ),
+            # What this job's worker asked its delegation socket for, including
+            # what it was refused. A worker probing its own boundary is a fact
+            # about that worker and belongs in the evidence, not just in a log.
+            "delegation": delegation_summary,
             "policy_digest": policy.digest,
             "profile_digest": profile_digest,
             "error": err or None,

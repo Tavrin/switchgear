@@ -33,6 +33,9 @@ echo "== credential classes (api-key + oauth) =="
 echo "== uid boundary (the worker is not you) =="
 /usr/bin/python3 "$ROOT/tests/test_uid_boundary.py"
 
+echo "== in-sandbox delegation (the client is the untrusted worker) =="
+/usr/bin/python3 "$ROOT/tests/test_delegation.py"
+
 echo "== guarded recursive deletes =="
 /usr/bin/python3 "$ROOT/tests/test_safe_delete.py"
 

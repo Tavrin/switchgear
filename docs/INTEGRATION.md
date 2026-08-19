@@ -147,6 +147,45 @@ not have a ceiling.
 Absent budget file means unlimited, and `quota` says so rather than implying a
 limit exists.
 
+### Delegation from inside the sandbox (off by default)
+
+An agent with ordinary host access can already call this CLI recursively — that
+is the first-class recursive case above. A worker running *inside* a sandbox
+cannot: it has no CLI, no state root and no credential, which is the point.
+
+The wrong fix is to mount them in. Instead the capability stays controller-side
+and the sandbox gets a socket, exactly as the credential broker does:
+
+```json
+{"delegation": {"enabled": true, "roles": ["scout"], "max_children": 2, "max_depth": 1}}
+```
+
+With that set, a read-only job's sandbox gains
+`/run/switchgear-delegate.sock`, speaking JSON over HTTP:
+
+```
+POST /delegate       {"role": "scout", "prompt": "..."}  -> {"job_id": "..."}
+GET  /delegate/<id>                                      -> {"state": ..., "answer": ...}
+```
+
+**The client is the untrusted worker**, so the protocol is deliberately anaemic.
+It names a role from the operator's allowlist and supplies a prompt. It cannot
+choose a model, a mode, a directory, a timeout, an effort or a budget — and
+unknown fields are *refused*, not ignored, so it cannot probe for one that is
+silently accepted. `GET` is scoped to that job's own children; otherwise the
+socket would be a read primitive over the whole state root, handed to the process
+the state root is hidden from.
+
+**Children are read-only, without exception.** A nested writer needs a second
+worktree — leases are exclusive, and two writers on one worktree is what the
+lease exists to refuse — and Switchgear does not create worktrees, because that
+is orchestration. A worker needing a writing subagent must escalate to you.
+
+Off unless an operator enables it, and when off the socket is **absent** rather
+than present-and-refusing: a worker should not be able to tell the feature
+exists. Every request, granted or denied, lands on the record under `delegation`
+— a worker probing its own boundary is a fact worth keeping.
+
 ### Who accepts a change
 
 The same operator-owned file decides which layer holds semantic acceptance:

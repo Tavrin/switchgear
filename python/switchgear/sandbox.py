@@ -12,6 +12,10 @@ TRUSTED_BWRAP = BWRAP
 
 # Fixed in-sandbox path for the brokered upstream socket.
 BROKER_SOCKET_PATH = "/run/switchgear-broker.sock"
+# Where a delegation socket appears, when an operator has enabled delegation.
+# Absent from the sandbox entirely otherwise -- not present-and-refusing, since
+# a worker should not be able to tell that the feature exists.
+DELEGATE_SOCKET_PATH = "/run/switchgear-delegate.sock"
 BROKER_RELAY_PORT = 8_099
 
 
@@ -189,6 +193,7 @@ def build_bwrap_argv(
     provider_argv: Sequence[str],
     command_binds: Sequence[str] | None = None,
     broker_socket: str | None = None,
+    delegate_socket: str | None = None,
     session_binds: Sequence[tuple[str, str]] | None = None,
     uid_boundary: bool = False,
     no_network: bool = False,
@@ -229,6 +234,12 @@ def build_bwrap_argv(
         # ALL outbound reachability except the one brokered upstream.
         argv.append("--unshare-net")
         argv.extend(["--bind", broker_socket, BROKER_SOCKET_PATH])
+    if delegate_socket:
+        # Same shape as the credential broker, for the same reason: the
+        # capability stays controller-side and the worker gets a socket. It can
+        # ask for a subagent; it cannot construct one, and it still cannot see
+        # the CLI, the state root or any credential.
+        argv.extend(["--bind", delegate_socket, DELEGATE_SOCKET_PATH])
     # Without a broker the provider needs the host network to reach its API.
     for src, dst in (
         ("/usr", "/usr"),

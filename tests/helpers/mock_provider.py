@@ -237,6 +237,51 @@ def main() -> int:
                        "tokens": {"total": 1}, "cost": 0.0}})
         return 0
 
+    if beh == "delegate-probe":
+        # A worker that goes looking for the delegation socket from INSIDE the
+        # sandbox, and reports what it found. Proves two opposite things
+        # depending on the operator's policy: that the socket is genuinely
+        # reachable when delegation is on, and that it is ABSENT (not present
+        # and refusing) when it is off.
+        import socket as _socket
+
+        sid = "ses_mock000000000000000000"
+        sock_path = "/run/switchgear-delegate.sock"
+        if not os.path.exists(sock_path):
+            found = "no-delegate-socket"
+        else:
+            # The worker is hostile by assumption, so probe for the thing it
+            # would actually try: a role it was not granted.
+            body = json.dumps({"role": os.environ.get("MOCK_DELEGATE_ROLE", "implement"),
+                               "prompt": "do my bidding"}).encode()
+            req = (b"POST /delegate HTTP/1.1\r\nHost: d\r\n"
+                   b"Content-Type: application/json\r\n"
+                   b"Content-Length: " + str(len(body)).encode() +
+                   b"\r\nConnection: close\r\n\r\n" + body)
+            try:
+                s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+                s.settimeout(20)
+                s.connect(sock_path)
+                s.sendall(req)
+                raw = b""
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    raw += chunk
+                s.close()
+                status = raw.split(b" ")[1].decode() if b" " in raw else "?"
+                found = f"delegate-reachable status={status}"
+            except OSError as exc:
+                found = f"delegate-unreachable {type(exc).__name__}"
+        emit({"type": "step_start", "sessionID": sid})
+        emit({"type": "text", "sessionID": sid,
+              "part": {"type": "text", "sessionID": sid, "text": found}})
+        emit({"type": "step_finish", "sessionID": sid,
+              "part": {"type": "step-finish", "reason": "stop", "sessionID": sid,
+                       "tokens": {"total": 1}, "cost": 0.0}})
+        return 0
+
     if beh == "spawn-orphan":
         # A provider that leaves a long-lived child behind, which is exactly what
         # Codex does: every job spawns an app-server, which spawns the MCP

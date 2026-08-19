@@ -106,6 +106,9 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             "freeze": record.get("freeze"),
             "review": record.get("review"),
             "provider_calls": record.get("provider_calls"),
+            # What the worker asked its delegation socket for, refusals included.
+            # Null when delegation was not enabled for this job.
+            "delegation": record.get("delegation"),
             # Measured, from the provider's own per-step figures. A caller
             # deciding whether to keep delegating needs the real number, and it
             # is already in the persisted record.

@@ -105,8 +105,12 @@ class DoctorUnit(unittest.TestCase):
     def test_credentials_never_leak_the_token(self):
         """Doctor output is exactly what someone pastes into a bug report."""
         blob = json.dumps(doctor.check_credentials())
-        for cred in doctor.check_credentials():
-            self.assertNotIn("token", cred["detail"].lower())
+        # NOT a ban on the word "token": the expired-credential remedy has to say
+        # "run any grok command to refresh the session -- switchgear never reads
+        # the refresh token", which is the useful part of the message. Banning
+        # the word made this test fail purely because a real credential on the
+        # host happened to expire, while proving nothing about leakage. What
+        # matters is that no secret VALUE appears, which the loop below checks.
         # Any real installed secret on this machine must not appear in output.
         from switchgear.credentials import load_credential
         from switchgear.registry import load_models, provider_record
