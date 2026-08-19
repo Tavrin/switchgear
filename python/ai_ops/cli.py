@@ -1312,6 +1312,15 @@ def cmd_status(ns: argparse.Namespace) -> int:
     """
     if getattr(ns, "full", False):
         jd, _, res_path = _job_paths(ns)
+        # This returned before the guard, so an unknown job leaked a raw errno
+        # with no remedy — the one case _require_known_job exists for.
+        _require_known_job(ns, jd)
+        if not os.path.isfile(res_path):
+            _die(
+                f"job {ns.job} has not finished, so it has no full record yet "
+                f"(state: {_live_state(ns)}). Use `ai-opencode status {ns.job}` "
+                "for the live view, or `wait` for the finished one."
+            )
         print(json.dumps(read_json(res_path), indent=2))
         return 0
 
@@ -1426,6 +1435,15 @@ def cmd_logs(ns: argparse.Namespace) -> int:
 
 def cmd_promote(ns: argparse.Namespace) -> int:
     root = StateRoot(_state_path(ns))
+    for which, job_id in (("review", ns.review), ("subject", ns.subject)):
+        jd = root.job_dir(job_id)
+        if not os.path.isdir(jd):
+            _die(f"no such {which} job: {job_id} (`ai-opencode jobs` lists them)")
+        if not os.path.isfile(os.path.join(jd, "result.json")):
+            _die(
+                f"the {which} job {job_id} has no result record, so it has not "
+                "finished. Promotion needs both jobs complete."
+            )
     rev = read_json(os.path.join(root.job_dir(ns.review), "result.json"))
     validate(rev, "result.schema.json")
     ev = open(rev["artifacts"]["events"], "rb").read()
@@ -1635,8 +1653,11 @@ def main(argv: list[str] | None = None) -> int:
         ns = parser.parse_args(argv)
         return int(ns.func(ns))
     except Refuse as exc:
+        # exc.code, not a hardcoded 1: a Refuse carries the exit code the
+        # contract promises for its case (DirtyWorktree is 2). Refuse itself
+        # still defaults to 1.
         print(f"ai-opencode: REFUSING — {exc}", file=sys.stderr)
-        return 1
+        return exc.code
     except RailError as exc:
         print(f"ai-opencode: {exc}", file=sys.stderr)
         return exc.code

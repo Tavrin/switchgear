@@ -10,7 +10,7 @@ from . import broker as brokermod
 from . import commands as cmdlib
 from . import events, identity, lease, process, provider, review, sandbox, state
 from .digest import sha256_json
-from .errors import ProviderError, Refuse
+from .errors import DirtyWorktree, ProviderError, Refuse
 from .paths import require_disjoint
 from .policy import CompiledPolicy, compile_policy
 from .profile import load_profile
@@ -573,7 +573,19 @@ def run_job(
         identity.assert_gitdir_pointer_intact(ident)
         after = identity.inspect_worktree(ident.realpath)
         if not identity.same_core(ident, after):
-            raise Refuse("worktree identity changed during job")
+            # NOT a bare Refuse. This raised before the record was built, so no
+            # result.json was written and the job later read `died`/`unknown` --
+            # and the caller got exit 1, a generic refusal. Four lines below,
+            # the WEAKER integrity violation (`id_changed`) sets status="dirty"
+            # and exit 2, which is what the published exit table promises for
+            # "worktree integrity changed during the job". The stronger
+            # violation reported as the vaguer failure.
+            raise DirtyWorktree(
+                "worktree identity changed during the job: the directory this "
+                "job was running in is no longer the same worktree (device, "
+                "inode or git dir moved). Nothing was promoted. Check whether "
+                "something recreated or replaced the worktree while the job ran."
+            )
         after_id = identity.git_identity_digest(ident)
         after_tree = identity.tree_digest(ident)
         id_changed = before_id != after_id
@@ -747,10 +759,21 @@ def run_job(
             )
             record["cost_usd"] = float(fin.get("costUSD") or 0.0)
             quotamod.record_spend(root.path, job_id, model["id"], record["cost_usd"])
-        except Exception:
+        except Exception as exc:
             # Accounting must never fail a job that already ran and already cost
             # money: losing the record is bad, losing the work as well is worse.
-            pass
+            #
+            # But it must not fail SILENTLY either. spend.jsonl is the only thing
+            # assert_within_budget reads, so a swallowed failure here means the
+            # daily ceiling quietly stops counting this job — under-counting a
+            # money limit, invisibly. Flag it on the record and say so.
+            record["spend_unrecorded"] = f"{type(exc).__name__}: {exc}"[:200]
+            print(
+                f"ai-opencode: WARNING — this job's cost was NOT recorded to the "
+                f"ledger ({type(exc).__name__}). The daily budget is now "
+                "under-counting; check the state root is writable.",
+                file=sys.stderr,
+            )
 
         # Does the worker's own output contain something that looks like a
         # secret? The rail guards credentials going IN and was indifferent to
@@ -882,7 +905,12 @@ def attach_review(
         # the tree moved since the review, so this IS what was reviewed -- and
         # deriving it from the tree means a caller cannot pass a sanitised copy.
         try:
-            reviewed_content = identity.worktree_diff(live)[:2_000_000]
+            # The FULL diff the reviewer was given, not a shorter slice of it.
+            # This used to be a bare [:2_000_000] while cmd_review attaches up to
+            # identity.MAX_DIFF_BYTES (5MB) to the reviewer -- so content placed
+            # past 2MB was read by the reviewer and invisible to this gate. The
+            # gate is sold as failing CLOSED; above 2MB it failed open.
+            reviewed_content = identity.worktree_diff(live)
         except Exception:
             # Never lose a promotion to the scan's own failure; but an
             # unavailable diff means the scan proves nothing, so say so rather

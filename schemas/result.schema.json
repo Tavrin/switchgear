@@ -228,6 +228,10 @@
       "items": {
         "type": "object"
       }
+    },
+    "spend_unrecorded": {
+      "type": "string",
+      "description": "set when this job's cost could not be appended to the ledger; the daily budget is under-counting by this job"
     }
   }
 }

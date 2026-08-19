@@ -143,11 +143,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not _path_allowed(self.path, b.allowed_paths):
             self._deny(403, f"path not allowed: {self.path}")
             return
-        if b.max_calls is not None and b.attempts >= b.max_calls:
-            # Denied, not throttled: a runaway agent that is merely slowed down
-            # still spends the budget, just later.
-            self._deny(429, f"provider call ceiling reached ({b.max_calls} per job)")
-            return
         length = int(self.headers.get("content-length") or 0)
         if length > MAX_BODY:
             self._deny(413, "request too large")
@@ -162,7 +157,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if requested not in b.allowed_models:
                 self._deny(403, f"model not allowed: {requested!r}")
                 return
-        b.attempts += 1
+        # Denied, not throttled: a runaway agent that is merely slowed down still
+        # spends the budget, just later. Claimed atomically -- the check and the
+        # increment used to be separate statements, so concurrent requests each
+        # passed the check before any incremented.
+        if not b.claim_attempt():
+            self._deny(429, f"provider call ceiling reached ({b.max_calls} per job)")
+            return
         self._forward("POST", payload)
 
     def _forward(self, method: str, payload: bytes | None) -> None:
@@ -215,10 +216,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not _path_allowed(self.path, b.allowed_get_paths):
             self._deny(403, f"GET not proxied: {self.path}")
             return
-        if b.max_calls is not None and b.attempts >= b.max_calls:
+        if not b.claim_attempt():
             self._deny(429, f"provider call ceiling reached ({b.max_calls} per job)")
             return
-        b.attempts += 1
         self._forward("GET", None)
 
     def log_message(self, *args) -> None:
@@ -296,6 +296,13 @@ class CredentialBroker:
         # was the only bound, and every one of those calls was billed. None means
         # no ceiling configured.
         self.max_calls = max_calls
+        # The ceiling is checked and incremented as one step. The server is a
+        # ThreadingUnixStreamServer with daemon_threads, so concurrent requests
+        # could each pass `attempts >= max_calls` before any of them incremented
+        # -- the ceiling over-ran by up to the number of requests in flight. It
+        # is a spend control that INTEGRATION.md describes as denying rather
+        # than throttling, so an over-run is real money.
+        self._attempt_lock = threading.Lock()
         # ATTEMPTS, not forwards. `forwarded` means "a model answered" and
         # live.sh's retry rule depends on exactly that meaning: forwarded == 0
         # is how it tells infrastructure failure from a real defect. But a
@@ -321,6 +328,19 @@ class CredentialBroker:
         cred = self.credential
         token = cred.token if hasattr(cred, "token") else str(cred)
         return f"{self.auth_scheme} {token}".strip() if self.auth_scheme else token
+
+    def claim_attempt(self) -> bool:
+        """Take one call against the per-job ceiling. False if it is exhausted.
+
+        Counts ATTEMPTS, not successes: `forwarded` means a model answered, and
+        a loop whose calls all fail upstream would never trip a ceiling that
+        counted successes.
+        """
+        with self._attempt_lock:
+            if self.max_calls is not None and self.attempts >= self.max_calls:
+                return False
+            self.attempts += 1
+            return True
 
     @property
     def base_url(self) -> str:

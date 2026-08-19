@@ -1414,6 +1414,96 @@ class RailTests(unittest.TestCase):
         rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
         self.assertEqual(rec["review"]["verdict"], "promote")
 
+    # --- audit regressions ----------------------------------------------------
+
+    def test_the_call_ceiling_holds_under_concurrent_requests(self):
+        """It was check-then-increment across a ThreadingUnixStreamServer, so
+        concurrent requests each passed the check before any incremented. It is
+        a spend control described as denying rather than throttling, so an
+        over-run is real money."""
+        import threading
+
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.broker import CredentialBroker
+        from ai_ops.credentials import Credential
+
+        bk = CredentialBroker(Credential(token="x", cls="api-key", source="t"),
+                              upstream="https://example.invalid", max_calls=10)
+        granted, lock = [], threading.Lock()
+
+        def hammer():
+            for _ in range(50):
+                ok = bk.claim_attempt()
+                with lock:
+                    granted.append(ok)
+
+        threads = [threading.Thread(target=hammer) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sum(granted), 10, "the ceiling over-ran")
+        self.assertEqual(bk.attempts, 10)
+
+    def test_started_is_the_real_start_not_the_record_build_time(self):
+        """Both were _now() on adjacent lines: identical in 33 of 33 real
+        records, including jobs that ran for minutes."""
+        p = run_cli(self.args("--json", "scout", str(self.primary), "look"),
+                    env={"AI_OPS_MOCK_BEHAVIOR": "slow-stream", "AI_OPS_MOCK_EXTRA": "2"})
+        rec = json.loads((self.state / "jobs" / json.loads(p.stdout)["job_id"]
+                          / "result.json").read_text())
+        self.assertNotEqual(rec["started"], rec["finished"],
+                            "started is still the record-build time")
+
+    def test_a_bad_envelope_refuses_instead_of_a_traceback(self):
+        """main() catches only Refuse/RailError, and these reads were bare
+        json.loads(open(...)) outside any handler."""
+        missing = run_cli(self.args("run", "--envelope", "/nonexistent/env.json"))
+        self.assertNotIn("Traceback", missing.stderr)
+        self.assertIn("ai-opencode: REFUSING", missing.stderr)
+
+        bad = self.tmp / "bad.json"
+        bad.write_text("{ not json")
+        malformed = run_cli(self.args("run", "--envelope", str(bad)))
+        self.assertNotIn("Traceback", malformed.stderr)
+        self.assertIn("not valid JSON", malformed.stderr)
+
+    def test_status_full_and_promote_guard_unknown_jobs(self):
+        """Both returned before the guard and leaked a raw errno with no
+        remedy — the one case that guard exists for."""
+        ghost = "00000000-0000-4000-8000-0000000000ee"
+        full = run_cli(self.args("status", ghost, "--full"))
+        self.assertIn("ai-opencode: REFUSING", full.stderr)
+        self.assertNotIn("Errno", full.stderr)
+
+        prom = run_cli(self.args("promote", "--subject", ghost, "--review", ghost))
+        self.assertIn("ai-opencode: REFUSING", prom.stderr)
+        self.assertIn("jobs", prom.stderr, "the refusal must name how to list them")
+
+    def test_a_dirty_worktree_exits_2_not_1(self):
+        """The published table says 2 means 'worktree integrity changed during
+        the job'. The STRONGER violation used to raise a bare Refuse and exit 1
+        while the weaker one correctly produced dirty/2."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops.errors import DirtyWorktree, Refuse
+
+        exc = DirtyWorktree("x")
+        self.assertEqual(exc.code, 2)
+        self.assertIsInstance(exc, Refuse, "it is still fail-closed")
+        self.assertEqual(Refuse("y").code, 1, "plain refusals stay 1")
+
+    def test_unrecordable_spend_is_flagged_not_swallowed(self):
+        """spend.jsonl is the only thing assert_within_budget reads, so a
+        swallowed write failure means the daily ceiling silently under-counts."""
+        import inspect
+
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import job as jobmod
+
+        src = inspect.getsource(jobmod)
+        self.assertIn("spend_unrecorded", src)
+        self.assertIn("under-counting", src)
+
     # --- atomic writes under concurrency --------------------------------------
 
     def test_concurrent_writers_to_one_path_do_not_corrupt_each_other(self):
