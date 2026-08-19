@@ -95,3 +95,32 @@ past the version its fixture came from, but re-capturing is a human step.
 The soak test passes at 60 jobs against a concurrency cap of 3, with the cap
 holding exactly. That is a synthetic load on one machine for a few minutes. It is
 not evidence about a week of real use.
+
+## 11. Unsettled: where evidence becomes authority
+
+Not a defect — an architectural question that has to be answered before
+Switchgear sits underneath another system that also has gates.
+
+Switchgear's `promote` binds a change to reviewer-attested evidence: the tree
+still matches what was reviewed, the reviewer named the files it covered, the
+independence rules held. An orchestrator above it typically has gates of its own:
+project verification, review at an exact head, merge eligibility, the human merge
+decision.
+
+Stacked, those are either defence in depth or two partially overlapping sources
+of truth, and which one you get is not automatic. The distinction that needs
+drawing is between:
+
+- **worker-execution trust** — did this agent do what the record says, inside the
+  boundary? Switchgear owns this.
+- **project-verification trust** — do the project's own gates pass on the result?
+  The caller owns this, and notably needs protection from the *verification
+  commands themselves*, not only from the coding agent. Switchgear's sandbox does
+  not cover that; it is not in the loop.
+- **workflow and merge authority** — should this land? Never Switchgear's.
+
+The temptation is to conclude "Switchgear owns all isolation, the orchestrator
+owns all workflow". That is too simple: verification runs outside Switchgear and
+needs its own containment. Until this is settled, a caller should treat
+`promote` as evidence that the *worker* did what is claimed, not as permission
+to merge.

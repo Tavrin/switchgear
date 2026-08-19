@@ -1,12 +1,19 @@
-# Integrating switchgear
+# Integrating Switchgear
 
-switchgear is a **sandboxed execution rail**, not an orchestrator. It runs one
+**Switchgear executes agents. It does not orchestrate them.** It runs one
 provider job inside an OS boundary and produces evidence. Scheduling, boards,
 queues, merge policy and human review belong to whatever calls it.
 
-It is designed to be driven by **any** agent or tool, with
-atelier as the first-class consumer but
-not a dependency. switchgear imports nothing from atelier and works standalone.
+Callers are peers, not a hierarchy. An orchestrator, a shell script, CI, a human
+at a terminal, and an AI agent delegating to another agent are all the same kind
+of client and get the same contract. Switchgear imports nothing from any of them
+and depends on none of them; the sections below that name a specific orchestrator
+do so because that is where a behaviour was measured, not because it is
+privileged.
+
+That includes the recursive case, which is first-class rather than a special
+feature: an agent may use Switchgear to obtain another agent, and that agent may
+do the same.
 
 ## The contract
 
@@ -37,7 +44,7 @@ cost_usd`.
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
 
-### The atelier lane contract
+### The orchestrator lane contract
 
 Switchgear's side of the contract an orchestrator adapter needs. It was written
 against one real consumer, but nothing in it is specific to that consumer:
