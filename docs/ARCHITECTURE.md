@@ -13,8 +13,10 @@ OpenCode · Claude Code · Codex · Grok
 ```
 
 Project policy (tracker, tiers, product gates, locks, deploy, model taste)
-stays in the **profile** and the **manager**. The adapter does not interpret
-the envelope `project` object.
+stays in the **profile** and the **caller**. Switchgear does not interpret a
+caller's own vocabulary at all: the envelope's `correlation` object is persisted
+onto the result and handed back verbatim, and is never read for policy, routing
+or permissions.
 
 ## Language disposition
 

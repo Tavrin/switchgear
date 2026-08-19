@@ -122,5 +122,67 @@ class RealBoundary(unittest.TestCase):
         self.assertIn("SIGKILL", src)
 
 
+class RealizedFacts(unittest.TestCase):
+    """`security` must report what the job GOT, not what it asked for.
+
+    The two cases that matter are identical in the policy and in the request: a
+    readonly job on a machine that can establish the boundary, and the same job
+    on a machine that cannot. If the record cannot tell them apart it is
+    describing intent, and a caller that tests it learns nothing.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="aiops-facts-"))
+        self.state = self.tmp / "state"
+        out = subprocess.run(["bash", str(ROOT / "tests" / "helpers" / "make-synthetic-repo"),
+                              str(self.tmp / "syn")], capture_output=True, text=True)
+        self.vals = dict(l.split("=", 1) for l in out.stdout.splitlines() if "=" in l)
+        self.profile = self.tmp / "p.json"
+        self.profile.write_text((ROOT / "project-profiles" / "example.json").read_text())
+        subprocess.run([PYTHON, str(MAIN), "--state", str(self.state),
+                        "state", "provision", str(self.state)], capture_output=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _scout(self, **env):
+        p = subprocess.run(
+            [PYTHON, str(MAIN), "--profile", str(self.profile), "--state", str(self.state),
+             "--provider", str(MOCK), "--json", "scout", self.vals["PRIMARY"], "x"],
+            capture_output=True, text=True, timeout=180,
+            env=dict(os.environ, SWITCHGEAR_MOCK_BEHAVIOR="ok", **env))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)["security"]
+
+    @unittest.skipUnless(available(), "this machine cannot establish a uid boundary")
+    def test_it_reports_the_boundary_when_the_machine_has_one(self):
+        sec = self._scout()
+        self.assertEqual(sec["identity"]["uid_boundary"], "subuid")
+        self.assertEqual(sec["identity"]["payload_uid"], userns.PAYLOAD_UID)
+
+    def test_it_reports_same_user_when_the_boundary_is_unavailable(self):
+        """The half that proves the field is not a restatement of the request.
+        Same profile, same role, same mode -- only the machine's capability
+        differs, and the record must say so."""
+        sec = self._scout(SWITCHGEAR_NO_UID_BOUNDARY="1")
+        self.assertEqual(sec["identity"]["uid_boundary"], "same-user")
+        self.assertIsNone(sec["identity"]["payload_uid"])
+
+    def test_namespace_facts_come_from_the_argv_that_was_built(self):
+        """Read back off the constructed sandbox argv. A field populated from the
+        policy would report the same value whether or not the flag was passed."""
+        sec = self._scout()
+        self.assertEqual(sec["containment"]["backend"], "bwrap")
+        for ns in ("mount_namespace", "pid_namespace", "ipc_namespace", "uts_namespace"):
+            self.assertTrue(sec["containment"][ns], ns)
+        # The hermetic mock has no broker, so there is no network namespace to
+        # claim -- and the record must not claim one. This is the case that would
+        # silently read `true` from an intent-derived field.
+        self.assertFalse(sec["containment"]["network_namespace"])
+        self.assertFalse(sec["network"]["broker_only"])
+        self.assertEqual(sec["credential"]["posture"], "none")
+        self.assertFalse(sec["credential"]["enters_worker"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

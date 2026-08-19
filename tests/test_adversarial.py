@@ -2829,5 +2829,79 @@ class MultiProviderUnit(unittest.TestCase):
 
 
 
+class CorrelationUnit(unittest.TestCase):
+    """Caller-supplied labels: carried, bounded, and inert.
+
+    Inert is the property under test. The moment a caller-supplied string could
+    reach a model choice, a path or a limit, it stops being a label on the
+    security boundary and becomes an input to it.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def test_it_is_handed_back_verbatim(self):
+        from switchgear.job import _correlation
+
+        self.assertEqual(
+            _correlation({"correlation": {"workflow": "nightly", "task": "T-91"}}),
+            {"workflow": "nightly", "task": "T-91"},
+        )
+
+    def test_absent_stays_absent(self):
+        """Not an empty dict: a record should not grow a field the caller never
+        set, or `correlation` becomes unusable as a "did they label this?" test."""
+        from switchgear.job import _correlation
+
+        self.assertIsNone(_correlation(None))
+        self.assertIsNone(_correlation({}))
+
+    def test_it_is_bounded_in_count_and_size(self):
+        from switchgear.errors import Refuse
+        from switchgear.job import (CORRELATION_MAX_KEYS, CORRELATION_MAX_VALUE,
+                                    _correlation)
+
+        too_many = {f"k{i}": "v" for i in range(CORRELATION_MAX_KEYS + 1)}
+        with self.assertRaises(Refuse):
+            _correlation({"correlation": too_many})
+        with self.assertRaises(Refuse):
+            _correlation({"correlation": {"k": "v" * (CORRELATION_MAX_VALUE + 1)}})
+
+    def test_non_string_values_are_refused_not_coerced(self):
+        """Coercing would put whatever the caller sent into a record whose shape
+        this tool guarantees."""
+        from switchgear.errors import Refuse
+        from switchgear.job import _correlation
+
+        for bad in ({"k": 1}, {"k": None}, {"k": {"nested": "no"}}, ["not", "a", "map"]):
+            with self.assertRaises(Refuse):
+                _correlation({"correlation": bad})
+
+    def test_nothing_in_the_job_path_reads_it(self):
+        """The inertness guarantee, enforced structurally rather than trusted.
+
+        `correlation` may appear where it is validated, stored on the record and
+        projected for the caller -- nowhere else. If a future change routes,
+        gates or names anything from it, this fails and the guarantee gets
+        re-argued instead of quietly lost.
+        """
+        import re
+
+        src = (ROOT / "python" / "switchgear" / "job.py").read_text()
+        lines = [
+            (i, ln) for i, ln in enumerate(src.splitlines(), 1)
+            if re.search(r"\bcorrelation\b", ln)
+        ]
+        self.assertTrue(lines, "correlation vanished from job.py")
+        allowed = re.compile(
+            r"(CORRELATION_MAX|def _correlation|_correlation\(envelope\)|"
+            r'correlation = _correlation|record\["correlation"\]|if correlation|'
+            r'\.get\("correlation"\)|#|"""|\'\'\'|correlation must be|correlation has|'
+            r"correlation key and value|correlation entry|It labels a job)"
+        )
+        offenders = [f"{i}: {ln.strip()}" for i, ln in lines if not allowed.search(ln)]
+        self.assertEqual(offenders, [], "correlation reached the job path:\n" + "\n".join(offenders))
+
+
 if __name__ == "__main__":
     unittest.main()

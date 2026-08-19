@@ -73,6 +73,9 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
         # Stable machine-readable contract for programmatic callers (the orchestrator
         # adapters, MCP wrappers, CI). Keep these keys additive-only.
         print(json.dumps({
+            # Contract version of the record this projects. Absent on records
+            # written before it existed, which stay readable.
+            "schema_version": record.get("schema_version"),
             "job_id": record["job_id"],
             "status": record["status"],
             "mode": record["mode"],
@@ -100,6 +103,15 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             # Provenance for a continued session: a caller reading only this
             # record would otherwise not know the model already had context.
             "resumed": record.get("resumed"),
+            # What containment this job actually got. A caller states its own
+            # requirement ("brokered credential, no direct network, real uid
+            # boundary") and tests it here, rather than knowing how this tool
+            # builds namespaces -- or assuming the request was honoured.
+            "security": record.get("security"),
+            # The caller's own identifiers, handed back verbatim. Switchgear
+            # never reads them; without this a supervisor that loses context is
+            # left with a state root of anonymous uuids.
+            "correlation": record.get("correlation"),
         }, indent=2))
         return
     # status first, and error when there is one. Text mode used to print
@@ -652,8 +664,32 @@ def cmd_run_like(ns: argparse.Namespace, mode: str, role: str, directory: str, p
     return jobstate.exit_code_for(rec["status"])
 
 
+def _with_correlation(ns: argparse.Namespace, envelope: dict[str, Any] | None):
+    """Fold any `--correlation k=v` flags into the envelope.
+
+    A flag as well as an envelope key because the command that most needs this
+    has no envelope: `scout` takes a directory and a prompt, and fanning out ten
+    scouts is precisely when a caller needs its own labels back. Flags win over
+    an envelope's own `correlation`, being the more specific instruction.
+    """
+    pairs = getattr(ns, "correlation", None)
+    if not pairs:
+        return envelope
+    out: dict[str, str] = dict((envelope or {}).get("correlation") or {})
+    for item in pairs:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise Refuse(
+                f"--correlation takes key=value, got {item!r}. "
+                'For example: --correlation workflow=nightly --correlation task=T-91'
+            )
+        out[key] = value
+    return dict(envelope or {}, correlation=out)
+
+
 def cmd_scout(ns: argparse.Namespace) -> int:
-    return cmd_run_like(ns, "readonly", "scout", ns.dir, ns.prompt, None)
+    return cmd_run_like(ns, "readonly", "scout", ns.dir, ns.prompt,
+                        _with_correlation(ns, None))
 
 
 def _tracked_paths(ident) -> list[str]:
@@ -676,6 +712,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
         env = _read_envelope(ns.envelope)
         validate(env, "task-envelope.schema.json")
         prompt = env.get("goal") or prompt
+    env = _with_correlation(ns, env)
     # Give the reviewer the controller's frozen diff. It has no shell and no git,
     # so without this it cannot see the change at all -- a live reviewer looped
     # 35 times and timed out trying.
@@ -823,7 +860,8 @@ def cmd_write(ns: argparse.Namespace) -> int:
         _die("envelope mode must be bounded-write")
     if env.get("role") != ns.role:
         _die("envelope role mismatch")
-    return cmd_run_like(ns, "bounded-write", ns.role, ns.dir, env.get("goal") or "write", env)
+    return cmd_run_like(ns, "bounded-write", ns.role, ns.dir, env.get("goal") or "write",
+                        _with_correlation(ns, env))
 
 
 def cmd_run(ns: argparse.Namespace) -> int:
@@ -835,7 +873,8 @@ def cmd_run(ns: argparse.Namespace) -> int:
         ns.dir = env["cwd"]
         ns.envelope = ns.envelope
         return cmd_write(ns)
-    return cmd_run_like(ns, mode, env["role"], env["cwd"], env.get("goal") or "", env)
+    return cmd_run_like(ns, mode, env["role"], env["cwd"], env.get("goal") or "",
+                        _with_correlation(ns, env))
 
 
 # --- projections over the one stream ------------------------------------------
@@ -1554,6 +1593,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="launch detached; print the job id at once and poll with `status`",
     )
+    sc.add_argument(
+        "--correlation",
+        action="append",
+        metavar="KEY=VALUE",
+        help="your own label for this job, repeatable. Persisted on the record and handed back verbatim; never interpreted",
+    )
     sc.set_defaults(func=cmd_scout)
 
     rv = sub.add_parser("review", help="read-only review of a worktree's uncommitted change")
@@ -1565,6 +1610,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--background",
         action="store_true",
         help="launch detached; print the job id at once and poll with `status`",
+    )
+    rv.add_argument(
+        "--correlation",
+        action="append",
+        metavar="KEY=VALUE",
+        help="your own label for this job, repeatable. Persisted on the record and handed back verbatim; never interpreted",
     )
     rv.set_defaults(func=cmd_review)
 
@@ -1578,6 +1629,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="launch detached; print the job id at once and poll with `status`",
     )
+    wr.add_argument(
+        "--correlation",
+        action="append",
+        metavar="KEY=VALUE",
+        help="your own label for this job, repeatable. Persisted on the record and handed back verbatim; never interpreted",
+    )
     wr.set_defaults(func=cmd_write)
 
     rn = sub.add_parser("run", help="dispatch by envelope; mode/role/cwd come from the envelope")
@@ -1587,6 +1644,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--background",
         action="store_true",
         help="launch detached; print the job id at once and poll with `status`",
+    )
+    rn.add_argument(
+        "--correlation",
+        action="append",
+        metavar="KEY=VALUE",
+        help="your own label for this job, repeatable. Persisted on the record and handed back verbatim; never interpreted",
     )
     rn.set_defaults(func=cmd_run)
 

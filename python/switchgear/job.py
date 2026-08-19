@@ -19,6 +19,60 @@ from .schema import validate
 from .state import StateRoot, atomic_write_json, new_job_id, read_json
 
 
+# Contract version of the durable job record. See the note where it is written.
+SCHEMA_VERSION = 1
+
+# A caller's own identifiers, carried through and handed back. Bounded so a
+# record cannot be used as a side-channel store, and NEVER read for policy,
+# routing or permissions -- see _correlation().
+CORRELATION_MAX_KEYS = 16
+CORRELATION_MAX_KEY = 64
+CORRELATION_MAX_VALUE = 512
+
+
+def _correlation(envelope: dict | None) -> dict[str, str] | None:
+    """Validate and pass through the caller's own identifiers.
+
+    Switchgear job ids are uuids. A supervisor driving a dozen jobs holds the
+    id-to-intent map only in its own context, so losing that context leaves a
+    state root of anonymous uuids -- and recovery, deduplication and cancelling a
+    whole wave are all downstream of not having this.
+
+    It is deliberately inert. Switchgear persists it and returns it and does
+    nothing else with it: the moment a caller-supplied string could influence a
+    model, a path or a limit, it would be an input to the security boundary
+    rather than a label on it. Bounded in count and length because it is written
+    into a record this tool guarantees the shape of.
+    """
+    raw = (envelope or {}).get("correlation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise Refuse(
+            "correlation must be an object of string keys to string values, "
+            'e.g. {"workflow": "nightly", "task": "T-91"}'
+        )
+    if len(raw) > CORRELATION_MAX_KEYS:
+        raise Refuse(
+            f"correlation has {len(raw)} keys, limit is {CORRELATION_MAX_KEYS}. "
+            "It labels a job; it is not a place to store the caller's state."
+        )
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise Refuse(
+                f"correlation key and value must both be strings; got "
+                f"{type(k).__name__} -> {type(v).__name__}"
+            )
+        if len(k) > CORRELATION_MAX_KEY or len(v) > CORRELATION_MAX_VALUE:
+            raise Refuse(
+                f"correlation entry {k[:CORRELATION_MAX_KEY]!r} exceeds the limit "
+                f"({CORRELATION_MAX_KEY}-char key, {CORRELATION_MAX_VALUE}-char value)."
+            )
+        out[k] = v
+    return out
+
+
 def _now() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
@@ -170,6 +224,64 @@ def _assert_no_credentials(store: str) -> None:
                 )
 
 
+def _security_facts(
+    *,
+    bwrap_argv: list[str],
+    uid_boundary: dict | None,
+    broker_socket: str | None,
+    credential_in_sandbox: bool,
+) -> dict[str, Any]:
+    """What containment this job ACTUALLY got, not what it asked for.
+
+    Every field here is read back off the argv that was really constructed, or
+    off the capability probe that really ran. That direction matters: a policy
+    says what was wanted, and until now the record said nothing at all about what
+    was achieved. A caller could not distinguish a job that ran under a uid
+    boundary from one on a machine that cannot establish one, because both
+    requested the same thing and neither was recorded.
+
+    So a consumer can state a REQUIREMENT ("brokered credential, no direct
+    network, real uid boundary") and test it against the outcome, instead of
+    knowing how this tool builds namespaces. Do not populate any of it from the
+    policy: the moment one field reports intent, none of them can be trusted.
+    """
+    flags = set(bwrap_argv)
+    return {
+        "containment": {
+            "backend": os.path.basename(bwrap_argv[0]) if bwrap_argv else None,
+            # bwrap always creates a mount namespace; the rest are per-flag.
+            "mount_namespace": True,
+            "pid_namespace": "--unshare-pid" in flags,
+            "ipc_namespace": "--unshare-ipc" in flags,
+            "uts_namespace": "--unshare-uts" in flags,
+            "network_namespace": "--unshare-net" in flags,
+        },
+        "identity": {
+            # "same-user" is the honest answer for bounded-write, and for a
+            # readonly job on a machine without subuid ranges or the setuid map
+            # helpers. Those two cases are indistinguishable in the policy and
+            # must not be indistinguishable here.
+            "uid_boundary": "subuid" if uid_boundary else "same-user",
+            "payload_uid": (uid_boundary or {}).get("payload_uid"),
+        },
+        "credential": {
+            "posture": (
+                "in-sandbox-access-token" if credential_in_sandbox
+                else "brokered" if broker_socket
+                else "none"
+            ),
+            "enters_worker": bool(credential_in_sandbox),
+        },
+        "network": {
+            # Both halves are required: a network namespace with no broker is
+            # unreachable, and a broker without the namespace is not the only
+            # route out.
+            "broker_only": bool(broker_socket) and "--unshare-net" in flags,
+            "direct": "--unshare-net" not in flags,
+        },
+    }
+
+
 def run_job(
     *,
     profile_path: str,
@@ -238,6 +350,9 @@ def run_job(
     # must cost nothing, so it is refused before the job directory exists and
     # before the budget is touched.
     effort = _resolve_effort(spec.get("effort"), adapter, model)
+    # Same reasoning as effort: a malformed label must cost nothing, so it is
+    # refused before the job directory exists and before the budget is touched.
+    correlation = _correlation(envelope)
 
     # Before any work, and before any job directory exists: a budget checked
     # after the spend is an audit, not a control.
@@ -654,6 +769,12 @@ def run_job(
                 status = "awaiting_review"
 
         record = {
+            # Bumped only for a CHANGE THAT BREAKS A READER. Additive keys do not
+            # move it -- the CLI already promises additive-only JSON, and a
+            # version that increments on every addition tells a consumer nothing.
+            # Absent means 1: records written before this existed are still valid
+            # and must stay readable.
+            "schema_version": SCHEMA_VERSION,
             "job_id": job_id,
             "status": status,
             "mode": mode,
@@ -699,11 +820,21 @@ def run_job(
             },
             "review": None,
             "process": {"pid": result.pid, "timed_out": result.timed_out},
+            "security": _security_facts(
+                bwrap_argv=bwrap_argv,
+                uid_boundary=uid_boundary,
+                broker_socket=broker_sock,
+                credential_in_sandbox=bool(
+                    adapter.credential_in_sandbox and cred is not None and bk is not None
+                ),
+            ),
             "policy_digest": policy.digest,
             "profile_digest": profile_digest,
             "error": err or None,
             "lease_uuid": token_uuid,
         }
+        if correlation:
+            record["correlation"] = correlation
         if resume_session:
             # A resumed job is a NEW job with its own sandbox, evidence and
             # cost -- but it is not independent history, and a reviewer reading

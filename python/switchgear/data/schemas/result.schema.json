@@ -15,9 +15,68 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "contract version of this record. Absent means 1 (records predate the field). Bumped only for a change that breaks a reader; additive keys do not move it."
+    },
     "job_id": {
       "type": "string",
       "minLength": 1
+    },
+    "correlation": {
+      "type": "object",
+      "description": "the caller's own identifiers, exactly as supplied on the envelope. Never interpreted by Switchgear.",
+      "maxProperties": 16,
+      "propertyNames": { "maxLength": 64 },
+      "additionalProperties": { "type": "string", "maxLength": 512 }
+    },
+    "security": {
+      "type": "object",
+      "description": "containment ACTUALLY realized for this job, read back off the constructed sandbox argv and the capability probe -- not the requested policy. A caller states a requirement and tests it against this.",
+      "additionalProperties": false,
+      "required": ["containment", "identity", "credential", "network"],
+      "properties": {
+        "containment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "backend": { "type": ["string", "null"] },
+            "mount_namespace": { "type": "boolean" },
+            "pid_namespace": { "type": "boolean" },
+            "ipc_namespace": { "type": "boolean" },
+            "uts_namespace": { "type": "boolean" },
+            "network_namespace": { "type": "boolean" }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "uid_boundary": { "type": "string", "enum": ["subuid", "same-user"] },
+            "payload_uid": { "type": ["integer", "null"] }
+          }
+        },
+        "credential": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "posture": {
+              "type": "string",
+              "enum": ["brokered", "in-sandbox-access-token", "none"]
+            },
+            "enters_worker": { "type": "boolean" }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "broker_only": { "type": "boolean" },
+            "direct": { "type": "boolean" }
+          }
+        }
+      }
     },
     "status": {
       "type": "string",

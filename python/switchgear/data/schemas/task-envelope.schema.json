@@ -48,6 +48,12 @@
     },
     "attempt": { "type": "integer", "minimum": 1 },
     "parent_job": { "type": "string", "minLength": 1 },
-    "project": { "type": "object" }
+    "correlation": {
+      "type": "object",
+      "description": "the caller's own identifiers, persisted onto the result and handed back verbatim. Switchgear never reads it for policy, routing or permissions. Bounded: at most 16 entries, 64-char keys, 512-char values.",
+      "maxProperties": 16,
+      "propertyNames": { "maxLength": 64 },
+      "additionalProperties": { "type": "string", "maxLength": 512 }
+    }
   }
 }
