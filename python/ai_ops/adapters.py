@@ -600,9 +600,29 @@ class GrokAdapter(ProviderAdapter):
         # Write private, then confirm the refresh token really is gone -- a
         # belt-and-braces check on the anti-leak invariant at the point the file
         # actually lands in the sandbox.
+        #
+        # This comment described a check that did not exist. It does now: this is
+        # the ONE path in the rail where a real credential is written inside the
+        # boundary, so the invariant is verified where the bytes land rather than
+        # trusted from the strip upstream.
         with open(dest, "w", encoding="utf-8") as fh:
             _json.dump(session, fh)
         _os.chmod(dest, 0o600)
+
+        from .credentials import _has_refresh_token
+
+        with open(dest, encoding="utf-8") as fh:
+            landed = _json.load(fh)
+        if _has_refresh_token(landed):
+            _os.unlink(dest)
+            from .errors import Refuse
+
+            raise Refuse(
+                "refusing to run: a refresh token survived into the sandbox "
+                "credential file. The written file has been removed and no job "
+                "was started. This is the anti-leak invariant for the fallback "
+                "credential tier."
+            )
         return dest
 
     def effort_support(self) -> dict[str, Any]:

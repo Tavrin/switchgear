@@ -191,6 +191,7 @@ def build_bwrap_argv(
     broker_socket: str | None = None,
     session_binds: Sequence[tuple[str, str]] | None = None,
     uid_boundary: bool = False,
+    no_network: bool = False,
 ) -> list[str]:
     """Build the sandbox command line.
 
@@ -215,6 +216,12 @@ def build_bwrap_argv(
         "--tmpfs",
         "/tmp",
     ]
+    if no_network and not broker_socket:
+        # A sandbox with nothing to reach. Post-write gate commands take this:
+        # they are built with no broker socket, and --unshare-net was only added
+        # WHEN one was present -- so a verification command had host networking
+        # inside a job whose worker had none.
+        argv.append("--unshare-net")
     if broker_socket:
         # With the credential broker reachable over a bind-mounted unix socket,
         # the sandbox needs no network of its own. Unix sockets are filesystem

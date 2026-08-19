@@ -267,15 +267,24 @@ Done (2026-08-18): credential classes with per-provider `allowed_paths` and an
 opened-per-provider GET surface; per-provider binary pinning and version
 assertion; `isolation_env` behind the adapter seam; the free redirect probe.
 
-Open:
+Settled since this was written — all three, and the outcomes were not all what
+this section expected:
 
-1. **The Grok tier decision** above — access token inside the sandbox, or leave
-   Grok fail-closed until xAI offers a delegated-auth mode.
-2. **Probe Codex and Claude Code** for placeholder acceptance, the same way and
-   for free, before assuming either tier applies to them.
-3. **Controller-side refresh**, once a token endpoint is measured per provider
-   rather than written from documentation. Until then an expired session refuses
-   with an instruction to re-login, and the refresh token stays unread.
+1. **The Grok tier decision:** resolved as FALLBACK. Grok validates its session
+   locally, so the access token is written inside the sandbox (refresh token
+   stripped, egress still broker-locked). Both lanes are live.
+2. **Placeholder acceptance for Codex and Claude Code:** probed, and both accept
+   one — so both run at the FULL tier, credential never entering the sandbox.
+   Three of four providers are full tier; only Grok is not.
+3. **Controller-side refresh: implemented.** An expired session no longer refuses
+   with "re-login"; the provider's own CLI is invoked, inside the sandbox, on a
+   COPY of its auth directory, and agent-ops still never reads the refresh token
+   itself. The claim that "the refresh token stays unread" survives; the claim
+   that an expired session refuses does not, and this section said so long after
+   it stopped being true.
+
+Still open: nothing in this list. See `docs/HANDOFF.md` §7 for what remains
+across the project.
 
 ## Prior art (researched 2026-08-18) — the pattern is proven, with two corrections
 

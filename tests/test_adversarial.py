@@ -1414,6 +1414,27 @@ class RailTests(unittest.TestCase):
         rec = json.loads((self.state / "jobs" / job_id / "result.json").read_text())
         self.assertEqual(rec["review"]["verdict"], "promote")
 
+    def test_a_gate_command_has_no_more_reach_than_the_worker(self):
+        """--unshare-net was only added when a broker socket was present, and
+        post-write gate commands are built without one — so a verification
+        command had host networking inside a job whose worker had none."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from ai_ops import identity, sandbox
+        from ai_ops.policy import compile_policy
+        from ai_ops.profile import load_profile
+
+        argv = sandbox.build_bwrap_argv(
+            ident=identity.inspect_worktree(str(self.primary)),
+            policy=compile_policy(load_profile(str(self.profile)), "readonly"),
+            synth_home=str(self.tmp / "h"),
+            provider_argv=["/bin/true"],
+            command_binds=[],
+            broker_socket=None,
+            session_binds=[],
+            no_network=True,
+        )
+        self.assertIn("--unshare-net", argv)
+
     # --- audit regressions ----------------------------------------------------
 
     def test_the_call_ceiling_holds_under_concurrent_requests(self):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import resource
+import shutil
 import signal
 import subprocess
 import threading
@@ -79,7 +79,10 @@ def run_sandboxed(
     """
     if not argv:
         raise Refuse("empty sandbox argv")
-    # First element must be trusted bwrap
+    # First element must be trusted bwrap. The check stays on bwrap's POSITION,
+    # not merely on argv[0], because the file-size limit is applied by prefixing
+    # prlimit below -- so this asserts what it always did: nothing gets between
+    # the caller and the sandbox except the one wrapper this function adds.
     if argv[0] != "/usr/bin/bwrap":
         raise Refuse("sandbox argv must start with /usr/bin/bwrap")
 
@@ -122,18 +125,27 @@ def run_sandboxed(
         # how one ends up passing a number that means nothing in the child.
         argv[1:1] = bwrap_flags(block_r, info_w)
     try:
-        def _apply_limits() -> None:
-            # RLIMIT_FSIZE is inherited by every process in the sandbox and is
-            # enforced by the kernel, so it bounds any single file the worker
-            # writes into its worktree. Polling for size cannot do this: a worker
-            # writes 500MB in 0.1s, far inside any poll interval. The stdout
-            # spool is bounded by the reader threads instead, since a pipe is not
-            # a file and RLIMIT_FSIZE does not apply to it.
-            resource.setrlimit(resource.RLIMIT_FSIZE, (max_file_bytes, max_file_bytes))
+        # RLIMIT_FSIZE is inherited by every process in the sandbox and is
+        # enforced by the kernel, so it bounds any single file the worker writes
+        # into its worktree. Polling for size cannot do this: a worker writes
+        # 500MB in 0.1s, far inside any poll interval. The stdout spool is
+        # bounded by the reader threads instead, since a pipe is not a file and
+        # RLIMIT_FSIZE does not apply to it.
+        #
+        # Applied by prefixing prlimit rather than by preexec_fn. preexec_fn runs
+        # between fork and exec, and CPython documents it as unsafe when the
+        # process has threads -- which this one does: the credential broker's
+        # serve_forever thread is already running when a job spawns. The failure
+        # mode is a deadlock in the child, and what rides on it is a stated
+        # kernel-enforced containment property.
+        launch = list(argv)
+        prlimit = shutil.which("prlimit")
+        if prlimit:
+            launch = [prlimit, f"--fsize={max_file_bytes}", "--"] + launch
 
         try:
             proc = subprocess.Popen(
-                list(argv),
+                launch,
                 # No stdin. A provider that reads stdin (codex exec announces
                 # "Reading additional input from stdin...") would otherwise
                 # inherit the CONTROLLER's stdin and block until the job timeout
@@ -148,7 +160,6 @@ def run_sandboxed(
                 start_new_session=True,
                 close_fds=True,
                 pass_fds=tuple(f for f in (block_r, info_w) if f is not None),
-                preexec_fn=_apply_limits,
             )
         except OSError as exc:
             raise Refuse(f"failed to start sandbox: {exc}") from exc

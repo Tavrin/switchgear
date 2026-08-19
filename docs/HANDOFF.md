@@ -28,11 +28,10 @@ from a controller-owned registry.
 
 ## 2. Where things stand
 
-Updated 2026-08-18 after the operability and hardening work. Suite: **348 tests
-across 11 suites** (`bash tests/run.sh`), green on this machine AND against a
+Updated 2026-08-18 after the operability and hardening work. Suite: **387 tests across 17 suites** (`bash tests/run.sh`), green on this machine AND against a
 synthetic clean HOME with no providers installed. CI runs it on every push.
 
-19 commands, 36 modules, ~10k lines.
+20 commands, 38 modules, ~10k lines.
 
 Installed here as `~/.local/bin/ai-opencode` → symlink to the working tree, so
 edits are live immediately.

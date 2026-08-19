@@ -629,6 +629,10 @@ def run_job(
                     synth_home=dirs["home"],
                     provider_argv=argv,
                     command_binds=extra_binds,
+                    # A gate command verifies the tree; it has no reason to
+                    # reach the network, and without this it had MORE reach
+                    # than the worker whose output it is checking.
+                    no_network=True,
                 )
                 cr = process.run_sandboxed(cmd_bwrap, env=env, timeout_s=min(30, timeout))
                 if cr.returncode != 0 or cr.timed_out:

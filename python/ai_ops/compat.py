@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 
 # Where each provider's binary is FOUND, expressed as patterns rather than as
 # paths on one machine.
@@ -203,7 +204,10 @@ def record_verified(provider: str, version: str) -> None:
     if version not in versions:
         versions.append(version)
     os.makedirs(os.path.dirname(VERIFIED_FILE), exist_ok=True)
-    tmp = VERIFIED_FILE + ".tmp"
+    # Unique per writer, for the reason state.atomic_write_json documents: a
+    # fixed temp name makes concurrent writers clobber or ENOENT each other. Two
+    # `providers verify` runs is enough.
+    tmp = f"{VERIFIED_FILE}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
     os.replace(tmp, VERIFIED_FILE)

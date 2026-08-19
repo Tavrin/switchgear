@@ -20,11 +20,13 @@ the cheapest way to guarantee it cannot leak is to never load it. The extractors
 below deliberately pull only the access token and the expiry, and a test asserts
 the refresh token's actual bytes appear nowhere in what this module returns.
 
-Consequence, accepted knowingly: an expired session refuses with an instruction
-to re-login rather than silently refreshing. Controller-side refresh is a real
-improvement and the structure is here for it, but it must be built against a
-measured token endpoint per provider -- writing three refresh flows from
-documentation is exactly the mistake this project keeps paying for.
+Consequence, and how it was resolved: an expired session used to refuse with an
+instruction to re-login. It no longer does. Rather than write three refresh
+flows from documentation -- exactly the mistake this project keeps paying for --
+the provider's OWN CLI performs the refresh, invoked inside the sandbox on a
+COPY of its auth directory. So the invariant above still holds unchanged:
+agent-ops never reads the refresh token, it only invokes the program that owns
+it. See refresh_via_own_cli below.
 
 THE ONE EXCEPTION, and it is scoped and named: a provider whose CLI validates
 its own session LOCALLY (measured: Grok) cannot be handed a placeholder, so its
@@ -40,6 +42,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -330,11 +333,33 @@ def refresh_via_own_cli(
         if exp is None or exp - time.time() <= EXPIRY_SKEW_S:
             return False
 
-        shutil.copy2(path, path + ".aiops-backup")
-        tmp = path + ".aiops-new"
-        shutil.copy2(refreshed, tmp)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)  # atomic
+        # A backup, because getting this wrong once already destroyed a live
+        # login on this machine. But it is a full OAuth session INCLUDING the
+        # refresh token, so it must not outlive the swap it exists to protect --
+        # it used to be left behind forever, a durable second copy nobody
+        # accounted for in the threat model.
+        backup = path + ".aiops-backup"
+        shutil.copy2(path, backup)
+        os.chmod(backup, 0o600)
+        try:
+            tmp = path + ".aiops-new"
+            shutil.copy2(refreshed, tmp)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)  # atomic
+            # Only once the replacement is in place and readable as the session
+            # it claims to be. If this fails the backup deliberately survives,
+            # and the operator is told where it is.
+            with open(path, encoding="utf-8") as fh:
+                json.load(fh)
+        except Exception:
+            print(
+                f"ai-opencode: WARNING — the refreshed session could not be "
+                f"verified; the previous one is kept at {backup}. Remove it once "
+                "you have confirmed the login works.",
+                file=sys.stderr,
+            )
+            raise
+        os.unlink(backup)
         return True
     finally:
         # Guarded. This one deletes a COPY of a real credential directory, and

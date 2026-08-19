@@ -113,12 +113,17 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
 
 
 def scan(text: str, where: str = "") -> list[dict[str, Any]]:
-    """Findings for one blob. Never returns the matched text verbatim.
+    """Findings for one blob, each carrying a BOUNDED excerpt of the match.
 
-    A finding quotes only a bounded, single-line EXCERPT, because the whole point
-    is to hand a human something to look at — but an unbounded quote would let
-    the injected instruction ride into whatever reads the finding, which for this
-    tool is frequently another model.
+    At most 120 characters, whitespace collapsed onto one line. That is
+    deliberately a quote rather than a redaction — the point is to hand a human
+    something to look at. What it must never be is unbounded, because a finding
+    is read by people and frequently by another model, and a full quote would let
+    the injected instruction ride along inside the report of itself.
+
+    (This line previously claimed the match was "never returned verbatim", which
+    the paragraph under it then contradicted. It is a bounded excerpt, and saying
+    so is the accurate version.)
     """
     if not text:
         return []

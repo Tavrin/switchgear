@@ -23,6 +23,7 @@ does not have a ceiling.
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import time
@@ -250,7 +251,12 @@ def rollup(state_path: str, since_ts: float = 0.0) -> dict[str, Any]:
     for day_rec in read_rollup(state_path):
         day = day_rec.get("day")
         cost = float(day_rec.get("cost_usd") or 0.0)
-        if since_ts and day and time.mktime(time.strptime(day, "%Y-%m-%d")) < since_ts:
+        # calendar.timegm, not time.mktime: the days are formatted with
+        # time.gmtime and day_start() is UTC, so parsing them as LOCAL time gave
+        # an offset-sized window where --rollup --today included or dropped the
+        # wrong day.
+        day_ts = calendar.timegm(time.strptime(day, "%Y-%m-%d")) if day else 0
+        if since_ts and day and day_ts < since_ts:
             continue
         compacted_total += cost
         compacted_jobs += int(day_rec.get("jobs") or 0)
