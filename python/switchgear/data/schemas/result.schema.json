@@ -154,6 +154,21 @@
     },
     "artifacts": {
       "type": "object",
+      "properties": {
+        "events": {
+          "type": ["string", "null"],
+          "description": "the provider's own stdout, byte for byte. Forensic evidence, not a contract: its shape is whichever agent CLI ran."
+        },
+        "events_normalized": {
+          "type": ["string", "null"],
+          "description": "the same run in Switchgear's provider-neutral vocabulary, one JSON object per line, each carrying `v`. This is the stream to consume. Null means it could not be written -- recompute with `logs --format normalized`."
+        },
+        "events_normalized_version": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "contract version of events_normalized"
+        }
+      },
       "additionalProperties": {
         "type": [
           "string",

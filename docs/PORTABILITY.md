@@ -102,7 +102,7 @@ mount-based model than Seatbelt is. WSL2 is Linux and therefore Option 1.
 
 ## What about the orchestrator?
 
-Different repo, different answer, and it is not settled here. the orchestrator is the
+Different repo, different answer, and it is not settled here. The orchestrator is the
 orchestration layer above this one; its portability depends on its own
 dependencies, not on bwrap. But note the coupling: if the orchestrator runs natively on
 macOS while switchgear runs inside a Linux VM, then **paths and process identity

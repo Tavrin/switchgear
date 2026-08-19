@@ -275,7 +275,7 @@ the file, a delegating agent reads the record.
 **Their one correction to the tiering above, and it is important:** make the
 bounded tier **structured** — state, exit summary, parsed failures, counters —
 **not a prose summary**. Prose self-reports from the worker are exactly what
-the orchestrator distrusts; they tripwire agents whose self-report claims tests passed
+The orchestrator distrusts; they tripwire agents whose self-report claims tests passed
 when verify says otherwise.
 
 That matches what this rail learned independently today: `handoff.changes` came

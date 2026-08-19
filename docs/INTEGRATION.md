@@ -36,11 +36,12 @@ switchgear --json [--profile P] [--state S] [--provider ABS] <command>
 | `cancel <job-id>` | stop a backgrounded job (pid + starttime + boot_id checked) | — |
 | `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | — |
 | `status <job-id> --full` | the whole persisted record (exists only once finished) | — |
-| `logs <job-id> [--format digest\|full]` | projections over `evidence/events.jsonl`; **digest is the default and is byte-capped in code** | — |
+| `logs <job-id> [--format digest\|normalized\|full]` | projections over the stream; **digest is the default and is byte-capped in code**. `normalized` is the same vocabulary uncapped; `full` is the raw provider stream | — |
 
-`--json` prints a stable object: `job_id, status, mode, role, model, dir, exit,
-error, artifacts{events,stderr,handoff}, freeze, review, provider_calls,
-cost_usd`.
+`--json` prints a stable object: `schema_version, job_id, status, mode, role,
+model, dir, exit, error, artifacts{events, events_normalized,
+events_normalized_version, stderr, handoff}, freeze, review, provider_calls,
+cost_usd, security, correlation`.
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
 
@@ -90,7 +91,7 @@ means a rename moves the pin too.
 
 ### `.orchestrator-workspace.json`
 
-the orchestrator writes its workspace identity token at the worktree root during dispatch.
+The orchestrator writes its workspace identity token at the worktree root during dispatch.
 **switchgear does not exclude that filename from its integrity digest, and must
 not.** Excluding a name creates a hiding place — precisely the finding that put
 untracked and ignored content into the digest to begin with.
@@ -530,7 +531,10 @@ Treat any refusal as fail-closed: no work was promoted.
 Each job writes `<state>/jobs/<job-id>/`:
 
 - `result.json` — the schema-validated record (the authoritative outcome)
-- `evidence/events.jsonl` — raw provider event stream, capped
+- `evidence/events.jsonl` — the provider's own stdout, byte for byte, capped.
+  Forensic evidence; **not** the integration contract
+- `evidence/events.v1.jsonl` — the same run in Switchgear's vocabulary. This is
+  the one to consume
 - `evidence/stderr` — provider stderr, capped
 - `evidence/handoff.json` — the worker's structured handoff (write jobs)
 
@@ -549,12 +553,35 @@ investigation is done.
 An adapter needs four things, all already available:
 
 1. **launch** — spawn `switchgear --json …`; the process is the job.
-2. **stream** — tail `artifacts.events`; it is newline-delimited JSON from the
-   provider. Map it to your own event shape.
+2. **stream** — tail `artifacts.events_normalized`. It is newline-delimited JSON
+   in *Switchgear's* vocabulary — `status` / `tool` / `text` / `finished` — one
+   object per line, each carrying `v` for the contract version. The same shape
+   comes out of `logs --format normalized`, which recomputes it and therefore
+   works while the job is still running.
 3. **stop** — kill the controller process. The sandbox dies with it: verified
    that SIGKILL of the controller leaves zero surviving `bwrap` or provider
    processes (pid namespace + `--die-with-parent`).
 4. **result** — read `result.json`, or the `--json` object on stdout.
+
+> **Do not consume `artifacts.events`.** That file is the provider's own stdout,
+> byte for byte: it is forensic evidence, and its shape is whichever agent CLI
+> happened to run. Parsing it means implementing OpenCode's, Claude's, Codex's
+> and Grok's event vocabularies in your code and re-implementing them whenever
+> one of those CLIs changes — which is precisely the work the adapter seam exists
+> to do once, here. An earlier version of this document told you to do that; it
+> was wrong.
+>
+> `events_normalized` is `null` only when the projection could not be written.
+> Fall back to `logs --format normalized`, and do not read the absence as an
+> empty run.
+
+Three views, and the difference between them is the one that matters:
+
+| | shape | bounded? | for |
+|---|---|---|---|
+| `logs --format digest` (default) | normalized | **yes**, hard byte cap | an agent's context |
+| `logs --format normalized` | normalized | no | a UI, a tail, a consumer |
+| `logs --format full` | **raw provider** | no | a human debugging, forensics |
 
 For **the orchestrator** specifically the mapping is direct: `write` corresponds to a
 dispatch into an isolated worktree; `awaiting_review` is the state before the

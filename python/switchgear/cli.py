@@ -1485,6 +1485,33 @@ def cmd_logs(ns: argparse.Namespace) -> int:
             sys.stdout.buffer.write(fh.read())
         return 0
 
+    if ns.format == "normalized":
+        # Unbounded, but provider-NEUTRAL -- which is the difference that
+        # matters. `full` is unbounded and provider-shaped, so consuming it
+        # means learning four event vocabularies; this is the same stream a
+        # persisted evidence/events.v1.jsonl holds, recomputed, so a caller can
+        # read it while the job is still running or if the projection could not
+        # be written. Still not for an agent's context: use the digest.
+        from .job import NORMALIZED_EVENTS_VERSION
+
+        _rec, norm = _projection(ns)
+        out = [dict(n, v=NORMALIZED_EVENTS_VERSION) for n in norm]
+        if ns.json:
+            print(json.dumps({
+                "job_id": ns.job,
+                "format": "normalized",
+                "v": NORMALIZED_EVENTS_VERSION,
+                "events": out,
+                # Stated rather than implied: the digest can truncate and this
+                # deliberately cannot, so a caller reading both sees the same
+                # key mean the same thing.
+                "truncated": False,
+            }, indent=2))
+            return 0
+        for ev in out:
+            print(json.dumps(ev, separators=(",", ":")))
+        return 0
+
     _rec, norm = _projection(ns)
     lines = [json.dumps(n, separators=(",", ":")) for n in norm]
     blob = "\n".join(lines)
@@ -1739,9 +1766,11 @@ def build_parser() -> argparse.ArgumentParser:
     lg.add_argument("job")
     lg.add_argument(
         "--format",
-        choices=["digest", "full"],
+        choices=["digest", "normalized", "full"],
         default="digest",
-        help="digest (bounded, default) or full (unbounded raw stream; never for agent context)",
+        help="digest (bounded, default), normalized (unbounded, provider-neutral; "
+             "for a UI or a tail), or full (unbounded RAW provider stream; never "
+             "for agent context)",
     )
     lg.set_defaults(func=cmd_logs)
 

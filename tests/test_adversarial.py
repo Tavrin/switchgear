@@ -2829,6 +2829,105 @@ class MultiProviderUnit(unittest.TestCase):
 
 
 
+class NormalizedStream(unittest.TestCase):
+    """The public event stream: provider-neutral, on disk, beside the raw one.
+
+    `evidence/events.jsonl` is the provider's stdout byte for byte, and the
+    caller contract used to point integrators straight at it -- so consuming
+    Switchgear meant learning OpenCode's, Claude's, Codex's and Grok's event
+    shapes, which is exactly the knowledge the adapter seam exists to absorb.
+
+    Standalone rather than a RailTests subclass: inheriting that fixture would
+    re-run its whole suite for four assertions.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="aiops-norm-"))
+        self.state = self.tmp / "state"
+        self.profile = self.tmp / "profile.json"
+        proc = subprocess.run(["bash", str(MAKE_REPO), str(self.tmp / "syn")],
+                              check=True, capture_output=True, text=True)
+        vals = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+        self.primary = Path(vals["PRIMARY"])
+        write_profile(self.profile, write_enabled=True)
+        p = run_cli(["--state", str(self.state), "state", "provision", str(self.state)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def args(self, *rest):
+        return ["--profile", str(self.profile), "--state", str(self.state),
+                "--provider", str(MOCK), *rest]
+
+    def _scout(self):
+        p = run_cli(
+            self.args("--json", "scout", str(self.primary), "look"),
+            env={"SWITCHGEAR_MOCK_BEHAVIOR": "slow-stream", "SWITCHGEAR_MOCK_EXTRA": "0"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def test_the_normalized_stream_is_written_and_versioned(self):
+        rec = self._scout()
+        arts = rec["artifacts"]
+        path = arts["events_normalized"]
+        self.assertTrue(path, "no normalized stream was written")
+        self.assertTrue(path.endswith("events.v1.jsonl"), path)
+        self.assertEqual(arts["events_normalized_version"], 1)
+
+        events = [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+        self.assertTrue(events)
+        # Every line self-describes its contract version, so a consumer holding
+        # one line out of context still knows how to read it.
+        for ev in events:
+            self.assertEqual(ev["v"], 1, ev)
+        kinds = {e["event"] for e in events}
+        self.assertIn("finished", kinds)
+        # The vocabulary is ours, not the provider's: the mock emits step_start /
+        # tool_use / text / step_finish and none of those names may survive.
+        self.assertFalse(
+            kinds & {"step_start", "step_finish", "tool_use", "part"},
+            f"provider event names reached the normalized stream: {kinds}",
+        )
+
+    def test_the_raw_stream_is_still_the_provider_verbatim(self):
+        """Normalizing on the way IN would mean the only durable copy had already
+        been through our parser. The forensic record must not become a
+        projection."""
+        rec = self._scout()
+        raw = Path(rec["artifacts"]["events"]).read_text()
+        self.assertIn("step_finish", raw)
+        self.assertIn("sessionID", raw)
+
+    def test_persisted_and_recomputed_projections_agree(self):
+        """The persisted file and `logs --format normalized` must not drift.
+
+        They come from one normalize() today. If someone later gives the
+        persisted stream its own writer, this is what notices.
+        """
+        rec = self._scout()
+        job = rec["job_id"]
+        on_disk = Path(rec["artifacts"]["events_normalized"]).read_text().strip()
+
+        p = run_cli(self.args("logs", job, "--format", "normalized"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), on_disk)
+
+    def test_normalized_is_not_capped_but_the_digest_is(self):
+        """Two different jobs: the digest is bounded for an agent's context, the
+        normalized stream is complete for a UI. Conflating them would either
+        flood a caller or silently drop events from a viewer."""
+        rec = self._scout()
+        job = rec["job_id"]
+        p = run_cli(self.args("--json", "logs", job, "--format", "normalized"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual(out["format"], "normalized")
+        self.assertFalse(out["truncated"])
+        self.assertEqual(out["v"], 1)
+
+
 class CorrelationUnit(unittest.TestCase):
     """Caller-supplied labels: carried, bounded, and inert.
 

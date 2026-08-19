@@ -224,6 +224,62 @@ def _assert_no_credentials(store: str) -> None:
                 )
 
 
+#: Contract version of the normalized event stream, and the filename it is
+#: written under. The version is in the NAME as well as in every line: a
+#: consumer that finds the file it knows how to read does not have to open it to
+#: discover whether it can.
+NORMALIZED_EVENTS_VERSION = 1
+NORMALIZED_EVENTS_NAME = f"events.v{NORMALIZED_EVENTS_VERSION}.jsonl"
+
+
+def _write_normalized_events(evidence_dir: str, adapter, raw: bytes | str) -> str | None:
+    """Project the raw provider stream into the normalized vocabulary, on disk.
+
+    `evidence/events.jsonl` is the provider's stdout byte for byte. That is the
+    right thing for it to be -- it is the forensic record, and normalizing on the
+    way in would mean the only durable copy had already been through our own
+    parser. But it left the adapter seam invisible from outside: the caller
+    contract told integrators to tail that file and map it themselves, so every
+    consumer had to learn four providers' event shapes, which is the exact
+    knowledge this tool exists to absorb.
+
+    So: raw stays raw, and this is the public shape beside it. Same normalize()
+    the digest and `status` already use, so the two cannot drift.
+
+    Returns None if the projection could not be written, and the record says so
+    rather than naming a file that is not there -- a missing artifact must never
+    be inferred to be an empty one. `logs --format normalized` recomputes from
+    the raw stream, so nothing is lost.
+    """
+    from .adapters import parse_lenient
+
+    path = os.path.join(evidence_dir, NORMALIZED_EVENTS_NAME)
+    try:
+        # The captured stream is bytes -- `errors="replace"` rather than strict
+        # because a projection must not fail on a provider that emitted one bad
+        # byte, and the raw stream keeps the original either way.
+        text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+        parsed, _ = parse_lenient(text)
+        normalized = adapter.normalize(parsed, run_ended=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for ev in normalized:
+                fh.write(json.dumps(dict(ev, v=NORMALIZED_EVENTS_VERSION),
+                                    separators=(",", ":")) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        return path
+    except Exception as exc:  # noqa: BLE001 - a projection must never fail a job
+        print(
+            f"switchgear: WARNING — could not write the normalized event stream "
+            f"({exc}). The raw stream is unaffected; recompute with "
+            f"`switchgear logs --format normalized`.",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _security_facts(
     *,
     bwrap_argv: list[str],
@@ -815,6 +871,12 @@ def run_job(
             "freeze": None,
             "artifacts": {
                 "events": ev_path,
+                # The public shape. `events` above is the provider's own bytes
+                # and is forensic evidence, not a contract.
+                "events_normalized": _write_normalized_events(
+                    dirs["evidence"], adapter, result.stdout
+                ),
+                "events_normalized_version": NORMALIZED_EVENTS_VERSION,
                 "stderr": err_path,
                 "handoff": os.path.join(dirs["evidence"], "handoff.json") if handoff else None,
             },
