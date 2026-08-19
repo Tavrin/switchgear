@@ -30,7 +30,7 @@ from .state import atomic_write_json, read_json
 
 #: How long a background job may wait for a slot before refusing. Bounded on
 #: purpose: an unbounded wait turns a full queue into a hang with no diagnosis.
-WAIT_S = int(os.environ.get("AI_OPS_CONCURRENCY_WAIT_S") or 600)
+WAIT_S = int(os.environ.get("SWITCHGEAR_CONCURRENCY_WAIT_S") or 600)
 
 _POLL_S = 2.0
 
@@ -147,7 +147,7 @@ def acquire(state_path: str, job_id: str, *, wait: bool) -> float:
                 f"concurrency limit reached: {in_use} of {cap} slots in use"
                 f"{waited}. Wait for a job to finish, raise max_concurrent_jobs in "
                 "the budget file, or run with --background to queue "
-                f"(up to {WAIT_S}s; AI_OPS_CONCURRENCY_WAIT_S overrides)."
+                f"(up to {WAIT_S}s; SWITCHGEAR_CONCURRENCY_WAIT_S overrides)."
             )
         # Jittered so a fan-out that all arrives together does not keep colliding
         # on the same tick.

@@ -1,19 +1,19 @@
-# Integrating agent-ops
+# Integrating switchgear
 
-agent-ops is a **sandboxed execution rail**, not an orchestrator. It runs one
+switchgear is a **sandboxed execution rail**, not an orchestrator. It runs one
 provider job inside an OS boundary and produces evidence. Scheduling, boards,
 queues, merge policy and human review belong to whatever calls it.
 
 It is designed to be driven by **any** agent or tool, with
-[atelier](https://github.com/etiennedoux/atelier) as the first-class consumer but
-not a dependency. agent-ops imports nothing from atelier and works standalone.
+atelier as the first-class consumer but
+not a dependency. switchgear imports nothing from atelier and works standalone.
 
 ## The contract
 
 Call the CLI. Everything is argv-only; nothing reaches a shell.
 
 ```
-ai-opencode --json [--profile P] [--state S] [--provider ABS] <command>
+switchgear --json [--profile P] [--state S] [--provider ABS] <command>
 ```
 
 | Command | Purpose | Terminal states |
@@ -39,8 +39,8 @@ change meaning. Without `--json` the output is `key=value` lines for humans.
 
 ### The atelier lane contract
 
-Spec: `atelier:specs/wave-3/agent-ops-adapter.md` (owner-confirmed, atelier main
-`04a3f07`). agent-ops's side of it:
+Spec: `atelier:specs/wave-3/switchgear-adapter.md` (owner-confirmed, atelier main
+`04a3f07`). switchgear's side of it:
 
 - **Capabilities** the lane declares: `canResume: true` (sessionId-based),
   `commitsOwnWork: false` (the git dir is a read-only mount, so atelier's
@@ -65,7 +65,7 @@ Spec: `atelier:specs/wave-3/agent-ops-adapter.md` (owner-confirmed, atelier main
 
 ### Execution profile pinning
 
-`ai-opencode execution-profile` returns the content pin an orchestrator records
+`switchgear execution-profile` returns the content pin an orchestrator records
 at first spawn and enforces on resume:
 
 ```json
@@ -73,9 +73,9 @@ at first spawn and enforces on resume:
 ```
 
 `launcherDigest` is sha256 over the resolved launcher **plus a deterministic walk
-of `python/ai_ops/`** — sorted relative paths, per-file digest, digest of the
+of `python/switchgear/`** — sorted relative paths, per-file digest, digest of the
 digest list, `__pycache__` excluded. Pinning by resolved path would be worthless
-here: `~/.local/bin/ai-opencode` is a stable path that symlinks into the working
+here: `~/.local/bin/switchgear` is a stable path that symlinks into the working
 tree, so it always resolves while its content changes with every edit. And the
 launcher alone is an 11-line stub, so digesting only the executable freezes the
 one file that never changes. Digesting the digest list rather than the bytes
@@ -84,7 +84,7 @@ means a rename moves the pin too.
 ### `.atelier-workspace.json`
 
 atelier writes its workspace identity token at the worktree root during dispatch.
-**agent-ops does not exclude that filename from its integrity digest, and must
+**switchgear does not exclude that filename from its integrity digest, and must
 not.** Excluding a name creates a hiding place — precisely the finding that put
 untracked and ignored content into the digest to begin with.
 
@@ -93,12 +93,12 @@ a token written before the job has the same fingerprint after and is never
 attributed to the job, while a worker that *modifies* it does appear in the
 delta — which is exactly what atelier refuses at merge.
 
-This depends on atelier writing the token **before** invoking agent-ops.
+This depends on atelier writing the token **before** invoking switchgear.
 Confirmed in their code, not assumed: the token is written at worktree
 preparation (`dispatch.mjs:6205`) strictly before `agent.launch` (`:6279`), on
 every path — verify, post-merge and merge-scratch checkouts all write it at
 creation. Recorded as a contract on their side, with the undertaking that
-agent-ops is told first if that ordering ever changes. If it ever lands
+switchgear is told first if that ordering ever changes. If it ever lands
 mid-dispatch, the token would read as worker-caused and this decision needs
 revisiting.
 
@@ -113,13 +113,13 @@ revisiting.
   `STALE` — a stale reading is worse than none, because it invites a confident
   wrong decision. Route on `min_remaining_percent`: the worst window, since a
   weekly pool at 3% is not rescued by a five-hour window that just reset.
-- **Measured spend.** The pool agent-ops actually bills (`opencode-go`) publishes
+- **Measured spend.** The pool switchgear actually bills (`opencode-go`) publishes
   no quota at all, so there is nothing to read — but every job's real cost comes
   back in its stream. `cost_usd` is on each record and appended to
   `<state>/spend.jsonl`.
 
-Limits are **operator-owned**, in `~/.config/ai-ops/budget.json`
-(`AI_OPS_BUDGET_FILE` overrides). They are never profile-declared, for the same
+Limits are **operator-owned**, in `~/.config/switchgear/budget.json`
+(`SWITCHGEAR_BUDGET_FILE` overrides). They are never profile-declared, for the same
 reason the model registry is not: a project that can raise its own ceiling does
 not have a ceiling.
 
@@ -202,7 +202,7 @@ records the cancellation so a later poll says `cancelled` rather than `died`.
 ### Finding out what the tool can do, from the tool
 
 ```
-ai-opencode --json capabilities
+switchgear --json capabilities
 ```
 
 Commands and their flags, providers with version/resume/effort/credential-tier,
@@ -234,7 +234,7 @@ unlimited** — nothing changes for anyone who has not opted in:
 
 A **foreground** job over the cap refuses immediately: a caller at a terminal
 wants to be told, not stalled. A **`--background`** job waits for a slot, bounded
-by `AI_OPS_CONCURRENCY_WAIT_S` (default 600) and then refuses — an unbounded wait
+by `SWITCHGEAR_CONCURRENCY_WAIT_S` (default 600) and then refuses — an unbounded wait
 turns a full queue into a hang with no diagnosis. Time spent waiting is recorded
 as `queued_s` on the job, so queueing shows up as queueing instead of silently
 inflating the job's apparent duration.
@@ -262,7 +262,7 @@ is policy, `transport` is upstream-unreachable. A network blip must not read as 
 model refusing requests.
 
 ```
-ai-opencode --state <root> quota --rollup [--today]
+switchgear --state <root> quota --rollup [--today]
 ```
 
 aggregates measured spend by provider, model and UTC day. One honesty note it
@@ -277,8 +277,8 @@ Nothing is ever removed unless you ask. `gc` is opt-in, reports by default, and
 needs a selector — a bare `gc` refuses rather than guessing what "clean up" meant.
 
 ```
-ai-opencode --state <root> gc --older-than 7d          # report only
-ai-opencode --state <root> gc --older-than 7d --yes    # actually delete
+switchgear --state <root> gc --older-than 7d          # report only
+switchgear --state <root> gc --older-than 7d --yes    # actually delete
 ```
 
 Protected regardless of the selector: anything `awaiting_review`; any job whose
@@ -288,7 +288,7 @@ whose **liveness could not be established at all**. That last one matters —
 `unknown` is not `dead`, and the rest of the rail never reads a missing record as
 a benign state.
 
-A cool-down floor (`AI_OPS_GC_MIN_AGE_S`, default 1h) applies **on top of** your
+A cool-down floor (`SWITCHGEAR_GC_MIN_AGE_S`, default 1h) applies **on top of** your
 selector, so `--older-than 1s` still does not mean "delete everything".
 
 Session stores need `--include-sessions` **in addition to** `--yes`: a job
@@ -389,7 +389,7 @@ The value actually sent is recorded on the job as `effort` (null when none was).
 ### Checking the install before you depend on it
 
 ```
-ai-opencode --state <root> --json doctor
+switchgear --state <root> --json doctor
 ```
 
 Every check reports `{name, status: pass|warn|fail, detail, remedy}`, and any
@@ -412,7 +412,7 @@ expiry, never the secret, so the output is safe to paste into a bug report.
 state root contains at all:
 
 ```
-ai-opencode --state <root> --json jobs --state-filter awaiting_review
+switchgear --state <root> --json jobs --state-filter awaiting_review
 ```
 
 Every row carries the job's **live** state, not merely what it last wrote — a job
@@ -442,9 +442,9 @@ answer. This is the right default for an agent driving the tool.
 **2. `--background` + `wait` — the same answer, later.**
 
 ```
-job=$(ai-opencode --json scout . "..." --background | jq -r .job_id)
+job=$(switchgear --json scout . "..." --background | jq -r .job_id)
 # ... launch others, do other work ...
-ai-opencode --json wait "$job"
+switchgear --json wait "$job"
 ```
 
 `wait` blocks until the job reaches a terminal state, then prints the **same
@@ -503,7 +503,7 @@ a bounded `exitSummary` and is a self-report, not evidence.
 Exit codes: `0` success · `1` refusal or provider error · `2` dirty (integrity
 changed) · `124` timeout.
 
-Every refusal is a single line on stderr beginning `ai-opencode: REFUSING — `.
+Every refusal is a single line on stderr beginning `switchgear: REFUSING — `.
 Treat any refusal as fail-closed: no work was promoted.
 
 ## What the caller must supply
@@ -512,7 +512,7 @@ Treat any refusal as fail-closed: no work was promoted.
   **not** overlap the target worktree or its git dir. The rail refuses overlap,
   because the per-job writable HOME lives under the state root.
 - **An absolute provider path.** There is no PATH lookup, ever. The live binary
-  is refused unless `AI_OPS_ALLOW_LIVE_PROVIDER=1` and the path matches the
+  is refused unless `SWITCHGEAR_ALLOW_LIVE_PROVIDER=1` and the path matches the
   pinned build.
 - **A profile** naming allowed models and role→model/mode bindings. Model
   families come from the controller-owned registry, never the profile.
@@ -528,7 +528,7 @@ Each job writes `<state>/jobs/<job-id>/`:
 - `evidence/handoff.json` — the worker's structured handoff (write jobs)
 
 `sandbox-home/` is reclaimed after the record is written; set
-`AI_OPS_KEEP_SANDBOX_HOME=1` to retain it for forensics.
+`SWITCHGEAR_KEEP_SANDBOX_HOME=1` to retain it for forensics.
 
 **Retaining it keeps whatever the sandbox held, including credentials.** For a
 fallback-tier provider (Grok today) that home contains a live access token at
@@ -541,7 +541,7 @@ investigation is done.
 
 An adapter needs four things, all already available:
 
-1. **launch** — spawn `ai-opencode --json …`; the process is the job.
+1. **launch** — spawn `switchgear --json …`; the process is the job.
 2. **stream** — tail `artifacts.events`; it is newline-delimited JSON from the
    provider. Map it to your own event shape.
 3. **stop** — kill the controller process. The sandbox dies with it: verified
@@ -552,7 +552,7 @@ An adapter needs four things, all already available:
 For **atelier** specifically the mapping is direct: `write` corresponds to a
 dispatch into an isolated worktree; `awaiting_review` is the state before the
 merge gate; `promote` is a verification step, not a merge — atelier's
-human-clicked merge remains the only path to main. agent-ops adds an OS boundary
+human-clicked merge remains the only path to main. switchgear adds an OS boundary
 *under* atelier's worktree isolation; it does not replace the merge gate, the
 event log, or verification from the real test suite.
 
@@ -569,8 +569,8 @@ openrouter/anthropic/claude-sonnet-4.5  -> https://openrouter.ai/api/v1
 Install one credential per provider, mode 600:
 
 ```
-~/.config/ai-ops/credentials/opencode-go
-~/.config/ai-ops/credentials/openrouter
+~/.config/switchgear/credentials/opencode-go
+~/.config/switchgear/credentials/openrouter
 ```
 
 Each job starts a broker bound to *that model's* upstream and credential, and
@@ -596,13 +596,13 @@ caller. Two constraints:
 
 | Variable | Effect |
 |---|---|
-| `AI_OPS_STATE`, `AI_OPS_PROFILE`, `AI_OPS_PROVIDER` | defaults for the flags |
-| `AI_OPS_WRITE=1` | required kill-switch for any bounded-write job |
-| `AI_OPS_ALLOW_LIVE_PROVIDER=1` | permit the pinned live provider |
-| `AI_OPS_PROVIDER_CREDENTIAL_FILE` | single-credential override; otherwise `~/.config/ai-ops/credentials/<provider>`, mode 600 enforced |
-| `AI_OPS_PROVIDER_UPSTREAM` | broker upstream base URL |
+| `SWITCHGEAR_STATE`, `SWITCHGEAR_PROFILE`, `SWITCHGEAR_PROVIDER` | defaults for the flags |
+| `SWITCHGEAR_WRITE=1` | required kill-switch for any bounded-write job |
+| `SWITCHGEAR_ALLOW_LIVE_PROVIDER=1` | permit the pinned live provider |
+| `SWITCHGEAR_PROVIDER_CREDENTIAL_FILE` | single-credential override; otherwise `~/.config/switchgear/credentials/<provider>`, mode 600 enforced |
+| `SWITCHGEAR_PROVIDER_UPSTREAM` | broker upstream base URL |
 | `AI_OPENCODE_TIMEOUT` | per-job timeout, bounded by the profile |
-| `AI_OPS_MIN_FREE_BYTES`, `AI_OPS_MAX_UNTRACKED_BYTES` | disk/digest bounds |
+| `SWITCHGEAR_MIN_FREE_BYTES`, `SWITCHGEAR_MAX_UNTRACKED_BYTES` | disk/digest bounds |
 
 ## What the caller must NOT assume
 

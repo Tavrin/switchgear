@@ -55,7 +55,7 @@ class CompiledPolicy:
         edit = self.tools.get("edit", "deny")
         head = [
             "---",
-            f"description: agent-ops {self.mode} rail ({role})",
+            f"description: switchgear {self.mode} rail ({role})",
             "mode: primary",
             "permission:",
             f"  edit: {edit}",
@@ -198,7 +198,7 @@ class CompiledPolicy:
     def to_opencode_runtime(self) -> dict[str, Any]:
         bash = self.tools.get("bash", "deny") == "allow"
         edit = self.tools.get("edit", "deny") == "allow"
-        agent = "ai-ops-bounded-write" if self.mode == "bounded-write" else "ai-ops-readonly"
+        agent = "switchgear-bounded-write" if self.mode == "bounded-write" else "switchgear-readonly"
         perm = {
             "bash": "deny" if not bash else "allow",
             "edit": "allow" if edit else "deny",

@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_ops.compat import PINNED_BINARY, PINNED_OPENCODE
-from ai_ops.provider import isolation_env
-from ai_ops.sandbox import TRUSTED_BWRAP, require_bwrap
+from switchgear.compat import PINNED_BINARY, PINNED_OPENCODE
+from switchgear.provider import isolation_env
+from switchgear.sandbox import TRUSTED_BWRAP, require_bwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 

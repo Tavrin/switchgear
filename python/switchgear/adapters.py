@@ -212,7 +212,7 @@ class ProviderAdapter:
         return list(provider_argv) + ["--version"]
 
     def agent_name(self, mode: str) -> str:
-        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        return "switchgear-bounded-write" if mode == "bounded-write" else "switchgear-readonly"
 
     def compose_prompt(self, prompt: str, instructions: str) -> str:
         """Providers with no agent-file mechanism must carry the role
@@ -424,14 +424,14 @@ class OpenCodeAdapter(ProviderAdapter):
             "--format",
             "json",
             "--title",
-            f"ai-opencode {role} {job_id}",
+            f"switchgear {role} {job_id}",
         ] + (["--variant", effort] if effort else []) + [prompt]
 
     def version_argv(self, provider_argv: list[str]) -> list[str]:
         return list(provider_argv) + ["--version"]
 
     def agent_name(self, mode: str) -> str:
-        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        return "switchgear-bounded-write" if mode == "bounded-write" else "switchgear-readonly"
 
     def isolation_env(
         self, synth_home: str, runtime: dict[str, Any], broker_base_url: str | None = None
@@ -713,7 +713,7 @@ class GrokAdapter(ProviderAdapter):
         return list(provider_argv) + ["--version"]
 
     def agent_name(self, mode: str) -> str:
-        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        return "switchgear-bounded-write" if mode == "bounded-write" else "switchgear-readonly"
 
     def isolation_env(
         self, synth_home: str, runtime: dict[str, Any], broker_base_url: str | None = None
@@ -775,7 +775,7 @@ class GrokAdapter(ProviderAdapter):
     def refresh_argv(self, provider_argv: list[str]) -> list[str] | None:
         """`grok models` refreshes an expired session in place -- measured:
         backdating expires_at then running it produced a NEW token and a new
-        expiry, with agent-ops never touching the refresh token."""
+        expiry, with switchgear never touching the refresh token."""
         return list(provider_argv) + ["models"]
 
     def session_id(self, events: Iterable[dict[str, Any]]) -> str | None:
@@ -1003,7 +1003,7 @@ class ClaudeCodeAdapter(ProviderAdapter):
         return list(provider_argv) + ["--version"]
 
     def agent_name(self, mode: str) -> str:
-        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        return "switchgear-bounded-write" if mode == "bounded-write" else "switchgear-readonly"
 
     def isolation_env(
         self, synth_home: str, runtime: dict[str, Any], broker_base_url: str | None = None
@@ -1308,7 +1308,7 @@ class CodexAdapter(ProviderAdapter):
         return list(provider_argv) + ["--version"]
 
     def agent_name(self, mode: str) -> str:
-        return "ai-ops-bounded-write" if mode == "bounded-write" else "ai-ops-readonly"
+        return "switchgear-bounded-write" if mode == "bounded-write" else "switchgear-readonly"
 
     def refresh_argv(self, provider_argv: list[str]) -> list[str] | None:
         """A cheap, no-model command that makes the CLI refresh its own session."""

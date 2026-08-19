@@ -32,7 +32,7 @@ from .state import StateRoot, read_json
 # only protects a chain whose reviewer recorded `review_of`; the floor bounds the
 # blast radius for anything written before that key existed, or by a caller that
 # does not set it. Mirrors MIN_FREE_BYTES: an operator-overridable safety margin.
-MIN_AGE_S = int(os.environ.get("AI_OPS_GC_MIN_AGE_S") or 3600)
+MIN_AGE_S = int(os.environ.get("SWITCHGEAR_GC_MIN_AGE_S") or 3600)
 
 
 def _dir_bytes(path: str) -> int:

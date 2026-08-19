@@ -22,12 +22,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "python" / "ai_ops" / "__main__.py"
+MAIN = ROOT / "python" / "switchgear" / "__main__.py"
 MOCK = ROOT / "tests" / "helpers" / "mock_provider.py"
 PYTHON = "/usr/bin/python3"
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import userns  # noqa: E402
+from switchgear import userns  # noqa: E402
 
 
 def available():
@@ -38,13 +38,13 @@ class Capability(unittest.TestCase):
     def test_it_reports_why_it_is_unavailable(self):
         """A silent 'unavailable' is indistinguishable from 'not attempted', and
         a boundary you cannot verify is not one."""
-        os.environ["AI_OPS_NO_UID_BOUNDARY"] = "1"
+        os.environ["SWITCHGEAR_NO_UID_BOUNDARY"] = "1"
         try:
             cap = userns.capability()
         finally:
-            os.environ.pop("AI_OPS_NO_UID_BOUNDARY", None)
+            os.environ.pop("SWITCHGEAR_NO_UID_BOUNDARY", None)
         self.assertFalse(cap["available"])
-        self.assertIn("AI_OPS_NO_UID_BOUNDARY", cap["reason"])
+        self.assertIn("SWITCHGEAR_NO_UID_BOUNDARY", cap["reason"])
 
     def test_the_payload_id_is_never_the_mapped_root(self):
         """inside-0 maps to the invoking user — it is exactly the identity this
@@ -75,7 +75,7 @@ class RealBoundary(unittest.TestCase):
             [PYTHON, str(MAIN), "--profile", str(self.profile), "--state", str(self.state),
              "--provider", str(MOCK), "--json", "scout", self.vals["PRIMARY"], "x"],
             capture_output=True, text=True, timeout=180,
-            env=dict(os.environ, AI_OPS_MOCK_BEHAVIOR=behaviour))
+            env=dict(os.environ, SWITCHGEAR_MOCK_BEHAVIOR=behaviour))
         return p, (json.loads(p.stdout) if p.stdout.strip().startswith("{") else {})
 
     def test_a_readonly_worker_does_not_run_as_the_invoking_user(self):
@@ -103,7 +103,7 @@ class RealBoundary(unittest.TestCase):
         trade a real property for a broken one."""
         import inspect
 
-        from ai_ops import job as jobmod
+        from switchgear import job as jobmod
 
         src = inspect.getsource(jobmod)
         marker = src[src.index("uid_boundary = None"):]
@@ -115,7 +115,7 @@ class RealBoundary(unittest.TestCase):
         invoking user while the caller believed it was confined."""
         import inspect
 
-        from ai_ops import process as procmod
+        from switchgear import process as procmod
 
         src = inspect.getsource(procmod.run_sandboxed)
         self.assertIn("Never unblock a namespace whose map failed", src)

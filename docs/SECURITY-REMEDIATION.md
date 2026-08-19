@@ -66,7 +66,7 @@ committed `__main__.py`. No security decision stays in the shell wrapper.
 - **Root cause:** RC1 + RC3 (decorative field).
 - **Strategy:** compiled policy always requires `bwrap` for live-provider
   execution. Backend is trusted `/usr/bin/bwrap` only. Construction failure
-  or missing binary → refuse **before** exec. No `AI_OPS_BWRAP` override.
+  or missing binary → refuse **before** exec. No `SWITCHGEAR_BWRAP` override.
 - **Probes:** missing/untrusted bwrap refuses; constructed argv includes
   `--ro-bind` of the target for READONLY.
 - **Status:** implemented
@@ -284,7 +284,7 @@ committed `__main__.py`. No security decision stays in the shell wrapper.
 - **Root cause:** RC6.
 - **Strategy:** hermetic tests pass an absolute committed mock via
   `--provider`. Live binary is refused unless
-  `AI_OPS_ALLOW_LIVE_PROVIDER=1` **and** the path equals the pinned
+  `SWITCHGEAR_ALLOW_LIVE_PROVIDER=1` **and** the path equals the pinned
   OpenCode binary. Missing mock fails. No PATH lookup for the provider.
 - **Probes:** missing mock fails; live path without allow fails.
 - **Status:** implemented

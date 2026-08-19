@@ -17,12 +17,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "python" / "ai_ops" / "__main__.py"
+MAIN = ROOT / "python" / "switchgear" / "__main__.py"
 PYTHON = "/usr/bin/python3"
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import capabilities as capmod  # noqa: E402
-from ai_ops.cli import build_parser  # noqa: E402
+from switchgear import capabilities as capmod  # noqa: E402
+from switchgear.cli import build_parser  # noqa: E402
 
 
 def run_cli(args, timeout=60):
@@ -37,8 +37,8 @@ class Honesty(unittest.TestCase):
     def test_the_provider_set_equals_the_adapter_registry(self):
         """The check that would have caught the model registry drifting. Adding
         a fifth provider without wiring it in must fail here."""
-        from ai_ops.adapters import _ADAPTERS
-        from ai_ops.compat import PINNED_PROVIDERS
+        from switchgear.adapters import _ADAPTERS
+        from switchgear.compat import PINNED_PROVIDERS
 
         reported = {p["provider"] for p in self.out["providers"]}
         self.assertEqual(reported, set(_ADAPTERS) | set(PINNED_PROVIDERS))
@@ -63,7 +63,7 @@ class Honesty(unittest.TestCase):
         self.assertEqual(undocumented, [], f"commands with no help: {undocumented}")
 
     def test_effort_matches_each_adapter(self):
-        from ai_ops.adapters import _ADAPTERS
+        from switchgear.adapters import _ADAPTERS
 
         for p in self.out["providers"]:
             adapter = _ADAPTERS.get(p["provider"])
@@ -72,7 +72,7 @@ class Honesty(unittest.TestCase):
                                  adapter.effort_support()["status"], p["provider"])
 
     def test_resume_matches_the_measured_session_stores(self):
-        from ai_ops.adapters import _ADAPTERS
+        from switchgear.adapters import _ADAPTERS
 
         for p in self.out["providers"]:
             adapter = _ADAPTERS.get(p["provider"])
@@ -82,7 +82,7 @@ class Honesty(unittest.TestCase):
     def test_the_exit_table_matches_the_one_the_code_uses(self):
         """Two copies of an exit-code table is how they drift; this asserts the
         published contract against jobstate.exit_code_for itself."""
-        from ai_ops.jobstate import exit_code_for
+        from switchgear.jobstate import exit_code_for
 
         self.assertEqual(exit_code_for("dirty"), 2)
         self.assertEqual(exit_code_for("timeout"), 124)
@@ -140,7 +140,7 @@ class Usable(unittest.TestCase):
         and hides that this is a platform limit, not a missing dependency."""
         import platform as plat
 
-        from ai_ops import doctor, sandbox
+        from switchgear import doctor, sandbox
 
         real_system, real_bwrap = plat.system, sandbox.TRUSTED_BWRAP
         plat.system = lambda: "Darwin"
@@ -159,17 +159,17 @@ class RemediesAreRunnable(unittest.TestCase):
     """A remedy that names a command which does not exist is worse than none.
 
     Found the hard way: the refusal for an unverified provider build said to run
-    `ai-opencode providers verify --provider claude`, and the parser only accepted
+    `switchgear providers verify --provider claude`, and the parser only accepted
     `--verify`. The remedy errored. Every one of these strings is written by
     someone confident it works, which is exactly why it needs a machine check.
     """
 
     def _invocations(self, text):
-        """Every `ai-opencode ...` command mentioned in a string."""
+        """Every `switchgear ...` command mentioned in a string."""
         import re
 
         out = []
-        for m in re.finditer(r"ai-opencode\s+([^`'\"\n.;]+)", text or ""):
+        for m in re.finditer(r"switchgear\s+([^`'\"\n.;]+)", text or ""):
             argv = m.group(1).split()
             # Trim trailing prose the regex swept up.
             while argv and argv[-1] in {"—", "-", "and", "or", "then", "to", "it"}:
@@ -200,7 +200,7 @@ class RemediesAreRunnable(unittest.TestCase):
         return True
 
     def test_every_doctor_remedy_names_a_real_command(self):
-        from ai_ops import doctor
+        from switchgear import doctor
 
         bad = []
         for check in doctor.run_all(None)["checks"]:

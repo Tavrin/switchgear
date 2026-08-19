@@ -2,13 +2,13 @@
 
 atelier's ATT-006 records an execution profile at first spawn -- a digest of the
 spawn environment plus the resolved executable -- and enforces it on resume. For
-this rail a resolved-path pin would be worthless: `~/.local/bin/ai-opencode` is a
+this rail a resolved-path pin would be worthless: `~/.local/bin/switchgear` is a
 stable path that is a symlink into the working tree, so it always resolves and
 its content changes with every edit. That is the "latest version wins" drift
 atelier had to pin away for codex, one level deeper.
 
 And the launcher alone is not the program. It is an 11-line stub whose only job
-is to resolve symlinks and exec `python/ai_ops/`; digesting just the resolved
+is to resolve symlinks and exec `python/switchgear/`; digesting just the resolved
 executable would pin the one file that never changes while missing everything
 that does. So the digest covers the launcher AND a deterministic walk of the
 package it execs.
@@ -21,7 +21,7 @@ import os
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(PACKAGE_DIR))
-LAUNCHER = os.path.join(ROOT, "bin", "ai-opencode")
+LAUNCHER = os.path.join(ROOT, "bin", "switchgear")
 
 
 def _file_digest(path: str) -> str:

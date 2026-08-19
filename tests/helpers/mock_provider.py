@@ -268,7 +268,7 @@ def main() -> int:
         # Stay alive briefly so the test can watch the heartbeat WHILE the job
         # runs. Without that the test would pass just as happily against a mock
         # that never spawned anything.
-        time.sleep(float(os.environ.get("AI_OPS_MOCK_HOLD") or "4"))
+        time.sleep(float(os.environ.get("SWITCHGEAR_MOCK_HOLD") or "4"))
         emit({"type": "step_finish", "sessionID": "ses_mock000000000000000000",
               "part": {"type": "step-finish", "reason": "stop",
                        "sessionID": "ses_mock000000000000000000",

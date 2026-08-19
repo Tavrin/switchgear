@@ -1,12 +1,12 @@
 # Friction audit: another project's Codex failure catalogue, checked against this rail
 
-Source: `docs/agents/CODEX_LANE_FAILURE_MODES.md` in the another project repo — 559 lines
+Source: `docs/agents/CODEX_LANE_FAILURE_MODES.md` in a private project's repository — 559 lines
 written from one continuous ~24-hour session, roughly 40 Codex lanes and 35
 merges, plus a 126-entry lessons store. It is a failure catalogue rather than a
 retrospective: each entry records what went wrong, the evidence, what was
 changed, and whether the change actually holds.
 
-Every entry below was **checked against agent-ops by running it**, not by reading
+Every entry below was **checked against switchgear by running it**, not by reading
 code and deciding it looked fine. Three of the checks failed, which is the reason
 to run them.
 
@@ -18,7 +18,7 @@ to run them.
 | **Unguarded `rm -rf`** — every recursive delete interpolated a variable | Flagged by the same human before it fired: an unset variable turns `rm -rf "$wt/.beads"` into `rm -rf /.beads` | `paths.safe_rmtree` guards all three recursive deletes here. Refuses anything outside a named root, the root itself, empty/relative/traversal paths, system roots, and symlinks resolving elsewhere. 13 execution-verified cases; a test greps for bare `rmtree` |
 | **Sandbox limits discovered by hitting them** — `.git` read-only, no GPU | Two lanes stopped dead on the git one before anyone wrote it down; a GPU-less sandbox produced false "wedged GPU" defect reports across four lanes (~6 wasted lane-rounds) | The rail now **injects** the limits into every worker's instructions, derived from the compiled policy: writability for this mode, the literal `index.lock: Read-only file system` error, brokered-only network, no GPU/display, empty per-job HOME, no stdin — and that hitting a limit is the boundary, not a defect. Verified live: asked to `git commit`, Claude Haiku named the limit and stopped |
 
-## Found in agent-ops while running their checks
+## Found in switchgear while running their checks
 
 Neither of these came from their catalogue directly. Both were found because
 their catalogue said to go and look.

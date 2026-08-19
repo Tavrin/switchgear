@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops.injection import blocks_promotion, scan, summarize  # noqa: E402
+from switchgear.injection import blocks_promotion, scan, summarize  # noqa: E402
 
 
 class Detects(unittest.TestCase):
@@ -131,7 +131,7 @@ class Policy(unittest.TestCase):
         material it reads was authored by the agent it is judging."""
         import json
 
-        from ai_ops.policy import compile_policy
+        from switchgear.policy import compile_policy
 
         profile = json.loads((ROOT / "project-profiles" / "example.json").read_text())
         text = compile_policy(profile, "readonly").role_instructions("review")
@@ -139,8 +139,8 @@ class Policy(unittest.TestCase):
         self.assertIn("HIGH-SEVERITY finding", text)
 
     def test_promote_refuses_when_the_diff_addresses_the_reviewer(self):
-        from ai_ops.errors import Refuse
-        from ai_ops.review import promote
+        from switchgear.errors import Refuse
+        from switchgear.review import promote
 
         with self.assertRaises(Refuse) as ctx:
             promote(

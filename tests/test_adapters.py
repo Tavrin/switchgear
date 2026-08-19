@@ -20,14 +20,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 FIXTURE = ROOT / "tests" / "fixtures" / "opencode-real-scout.jsonl"
 
-from ai_ops.adapters import (  # noqa: E402
+from switchgear.adapters import (  # noqa: E402
     TERMINAL_COMPLETED,
     TERMINAL_EMPTY,
     TERMINAL_FAILED,
     get_adapter,
     parse_lenient,
 )
-from ai_ops.errors import Refuse  # noqa: E402
+from switchgear.errors import Refuse  # noqa: E402
 
 
 class RealStream(unittest.TestCase):
@@ -446,7 +446,7 @@ class CodexRealStream(unittest.TestCase):
         while reporting "the workspace execution tool is unavailable"."""
         import os as _os
 
-        from ai_ops.compat import PINNED_PROVIDERS
+        from switchgear.compat import PINNED_PROVIDERS
 
         real = (PINNED_PROVIDERS.get("codex") or {}).get("path")
         if not real or not _os.path.exists(real):
@@ -468,8 +468,8 @@ class WriteLane(unittest.TestCase):
 
     def setUp(self):
         sys.path.insert(0, str(ROOT / "python"))
-        from ai_ops.policy import compile_policy
-        from ai_ops.profile import load_profile
+        from switchgear.policy import compile_policy
+        from switchgear.profile import load_profile
 
         prof = json.loads((ROOT / "project-profiles" / "example.json").read_text())
         prof["write_enabled"] = True
@@ -563,18 +563,18 @@ class WriteLane(unittest.TestCase):
         redundant in-process gate, not widening the boundary."""
         common = dict(provider_argv=["/x"], worktree="/w", model_id="p/m",
                       role="implement", job_id="j", prompt="do")
-        claude = get_adapter("claude").argv(agent="ai-ops-bounded-write", **common)
+        claude = get_adapter("claude").argv(agent="switchgear-bounded-write", **common)
         self.assertIn("--permission-mode", claude)
-        codex = get_adapter("codex").argv(agent="ai-ops-bounded-write", **common)
+        codex = get_adapter("codex").argv(agent="switchgear-bounded-write", **common)
         self.assertIn("workspace-write", codex)
-        grok = get_adapter("grok").argv(agent="ai-ops-bounded-write", **common)
+        grok = get_adapter("grok").argv(agent="switchgear-bounded-write", **common)
         self.assertIn("--always-approve", grok)
         # And a READONLY job must not carry any of them.
-        ro = get_adapter("codex").argv(agent="ai-ops-readonly", **common)
+        ro = get_adapter("codex").argv(agent="switchgear-readonly", **common)
         self.assertIn("read-only", ro)
         self.assertNotIn("workspace-write", ro)
         self.assertNotIn("--always-approve",
-                         get_adapter("grok").argv(agent="ai-ops-readonly", **common))
+                         get_adapter("grok").argv(agent="switchgear-readonly", **common))
 
 
 class ModelIdentityDerivation(unittest.TestCase):
@@ -591,7 +591,7 @@ class ModelIdentityDerivation(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "python"))
 
     def test_new_model_versions_classify_without_a_code_change(self):
-        from ai_ops.registry import model_record
+        from switchgear.registry import model_record
 
         for mid, family, vendor in [
             ("opencode-go/kimi-k2.7-code", "kimi", "moonshot"),
@@ -613,19 +613,19 @@ class ModelIdentityDerivation(unittest.TestCase):
     def test_a_curated_entry_still_wins(self):
         """Derivation is a default, not an override: a curated entry is how a
         family the rules get wrong gets fixed."""
-        from ai_ops.registry import model_record
+        from switchgear.registry import model_record
 
         rec = model_record("opencode-go/deepseek-v4-flash")
         self.assertEqual(rec["identity_source"], "registry")
 
     def test_the_single_vendor_provider_settles_the_vendor(self):
         """A model served by the Grok CLI is xAI's whatever it is called."""
-        from ai_ops.registry import model_record
+        from switchgear.registry import model_record
 
         self.assertEqual(model_record("grok/some-unreleased-thing")["vendor_family"], "xai")
 
     def test_a_vendor_segment_in_the_id_is_honoured(self):
-        from ai_ops.registry import model_record
+        from switchgear.registry import model_record
 
         rec = model_record("openrouter/anthropic/claude-sonnet-9")
         self.assertEqual(rec["vendor_family"], "anthropic")
@@ -633,8 +633,8 @@ class ModelIdentityDerivation(unittest.TestCase):
     def test_an_unknown_provider_still_refuses(self):
         """Derivation loosened MODELS, not providers: an unknown provider has no
         upstream and no credential, so it cannot be reached at all."""
-        from ai_ops.errors import Refuse
-        from ai_ops.registry import model_record
+        from switchgear.errors import Refuse
+        from switchgear.registry import model_record
 
         with self.assertRaises(Refuse):
             model_record("not-a-provider/some-model")
@@ -642,8 +642,8 @@ class ModelIdentityDerivation(unittest.TestCase):
     def test_the_deny_list_still_applies_to_derived_models(self):
         """A profile must not reach a denied model just because nobody curated
         an entry for it."""
-        from ai_ops.errors import Refuse
-        from ai_ops.registry import model_record
+        from switchgear.errors import Refuse
+        from switchgear.registry import model_record
 
         with self.assertRaises(Refuse):
             model_record("openai/gpt-4")
@@ -658,7 +658,7 @@ class ResumeContract(unittest.TestCase):
 
     def _argv(self, name, **over):
         base = dict(provider_argv=["/BIN"], worktree="/w", model_id="p/m",
-                    agent="ai-ops-readonly", role="scout", job_id="j", prompt="MSG")
+                    agent="switchgear-readonly", role="scout", job_id="j", prompt="MSG")
         base.update(over)
         return get_adapter(name).argv(**base)
 
@@ -711,8 +711,8 @@ class ResumeContract(unittest.TestCase):
         not a property of it."""
         import tempfile
 
-        from ai_ops.errors import Refuse
-        from ai_ops.job import _assert_no_credentials
+        from switchgear.errors import Refuse
+        from switchgear.job import _assert_no_credentials
 
         store = Path(tempfile.mkdtemp(prefix="store-"))
         (store / "sessions").mkdir()
@@ -746,7 +746,7 @@ class AddingAProvider(unittest.TestCase):
     def _minimal(self):
         """A complete adapter, written to the interface and nothing else. If
         this stops being short, the seam has regressed."""
-        from ai_ops.adapters import ProviderAdapter
+        from switchgear.adapters import ProviderAdapter
 
         class MistralAdapter(ProviderAdapter):
             name = "mistral"
@@ -780,7 +780,7 @@ class AddingAProvider(unittest.TestCase):
 
     def test_a_new_adapter_needs_only_the_required_methods(self):
         """Seven methods, no boilerplate: the optional surface is inherited."""
-        from ai_ops.adapters import EFFORT_UNSUPPORTED, validate_adapter
+        from switchgear.adapters import EFFORT_UNSUPPORTED, validate_adapter
 
         adapter = self._minimal()
         validate_adapter("mistral", adapter)  # must not raise
@@ -793,7 +793,7 @@ class AddingAProvider(unittest.TestCase):
         self.assertEqual(adapter.effort_support()["status"], EFFORT_UNSUPPORTED)
         self.assertFalse(adapter.credential_in_sandbox)
         self.assertEqual(adapter.version_argv(["/bin/x"]), ["/bin/x", "--version"])
-        self.assertEqual(adapter.agent_name("bounded-write"), "ai-ops-bounded-write")
+        self.assertEqual(adapter.agent_name("bounded-write"), "switchgear-bounded-write")
 
     def test_defaults_are_the_honest_negative_not_a_guess(self):
         """A provider that cannot resume must REFUSE to resume, not quietly
@@ -805,8 +805,8 @@ class AddingAProvider(unittest.TestCase):
     def test_an_incomplete_adapter_is_refused_at_registration(self):
         """Previously it registered fine and died of AttributeError partway
         through a job — after the sandbox was built and, live, after spending."""
-        from ai_ops.adapters import ProviderAdapter, validate_adapter
-        from ai_ops.errors import Refuse
+        from switchgear.adapters import ProviderAdapter, validate_adapter
+        from switchgear.errors import Refuse
 
         class HalfWritten(ProviderAdapter):
             name = "half"
@@ -821,8 +821,8 @@ class AddingAProvider(unittest.TestCase):
         self.assertIn("ADDING-A-PROVIDER", msg, "and where to look")
 
     def test_a_non_conforming_object_is_refused(self):
-        from ai_ops.adapters import validate_adapter
-        from ai_ops.errors import Refuse
+        from switchgear.adapters import validate_adapter
+        from switchgear.errors import Refuse
 
         class NotAnAdapter:
             name = "nope"
@@ -833,15 +833,15 @@ class AddingAProvider(unittest.TestCase):
     def test_a_name_mismatch_is_refused(self):
         """get_adapter keys off the registry key and the profile names the same
         string; a disagreement would pick the wrong adapter silently."""
-        from ai_ops.adapters import validate_adapter
-        from ai_ops.errors import Refuse
+        from switchgear.adapters import validate_adapter
+        from switchgear.errors import Refuse
 
         with self.assertRaises(Refuse) as ctx:
             validate_adapter("mistral-large", self._minimal())
         self.assertIn("mistral", str(ctx.exception))
 
     def test_every_shipped_adapter_passes_its_own_check(self):
-        from ai_ops.adapters import _ADAPTERS, validate_adapter
+        from switchgear.adapters import _ADAPTERS, validate_adapter
 
         for name, adapter in _ADAPTERS.items():
             validate_adapter(name, adapter)
@@ -849,7 +849,7 @@ class AddingAProvider(unittest.TestCase):
     def test_the_new_adapter_actually_builds_a_command_line(self):
         argv = self._minimal().argv(
             provider_argv=["/usr/bin/mistral"], worktree="/w",
-            model_id="mistral/mistral-large", agent="ai-ops-readonly",
+            model_id="mistral/mistral-large", agent="switchgear-readonly",
             role="scout", job_id="j", prompt="MSG")
         self.assertEqual(argv, ["/usr/bin/mistral", "run", "--json",
                                 "--model", "mistral-large", "MSG"])
@@ -864,7 +864,7 @@ class EffortContract(unittest.TestCase):
 
     def _argv(self, name, **over):
         base = dict(provider_argv=["/BIN"], worktree="/w", model_id="p/m",
-                    agent="ai-ops-readonly", role="scout", job_id="j", prompt="MSG")
+                    agent="switchgear-readonly", role="scout", job_id="j", prompt="MSG")
         base.update(over)
         return get_adapter(name).argv(**base)
 
@@ -872,7 +872,7 @@ class EffortContract(unittest.TestCase):
         """`unsupported` and `unmeasured` remain distinct states even though the
         VALUES moved to the registry: a provider with no effort control at all is
         a different fact from a model nobody has measured."""
-        from ai_ops.adapters import (
+        from switchgear.adapters import (
             EFFORT_SUPPORTED, EFFORT_UNMEASURED, EFFORT_UNSUPPORTED, _ADAPTERS,
         )
 
@@ -883,7 +883,7 @@ class EffortContract(unittest.TestCase):
     def test_a_provider_with_no_effort_control_defaults_to_unsupported(self):
         """The base class default, so a new harness cannot have an effort control
         invented for it by omission."""
-        from ai_ops.adapters import EFFORT_UNSUPPORTED, ProviderAdapter
+        from switchgear.adapters import EFFORT_UNSUPPORTED, ProviderAdapter
 
         self.assertEqual(ProviderAdapter().effort_support()["status"],
                          EFFORT_UNSUPPORTED)
@@ -892,7 +892,7 @@ class EffortContract(unittest.TestCase):
         """Effort VALUES are a per-model fact and live in the registry. An
         adapter that carried a value list would be wrong for some model in its
         own pool, and wrong silently."""
-        from ai_ops.adapters import _ADAPTERS
+        from switchgear.adapters import _ADAPTERS
 
         for name, adapter in _ADAPTERS.items():
             sup = adapter.effort_support()
@@ -905,7 +905,7 @@ class EffortContract(unittest.TestCase):
         """Measured: `--variant not-a-real-value` was accepted and the job ran to
         completion at full price. For this provider the rail is the only thing
         that can catch a bad value, so the adapter has to say so."""
-        from ai_ops.adapters import _ADAPTERS
+        from switchgear.adapters import _ADAPTERS
 
         self.assertEqual(_ADAPTERS["opencode"].effort_support()["validates"], "none")
 
@@ -913,7 +913,7 @@ class EffortContract(unittest.TestCase):
         """The measurement that forced this shape: one provider, two models, two
         different sets. gpt-5.6-codex accepts `minimal` live; gpt-5.6-sol refuses
         it and enumerated the rest in its own error."""
-        from ai_ops.registry import effort_values, model_record
+        from switchgear.registry import effort_values, model_record
 
         sol = effort_values(model_record("codex/gpt-5.6-sol"))
         codex_m = effort_values(model_record("codex/gpt-5.6-codex"))
@@ -925,7 +925,7 @@ class EffortContract(unittest.TestCase):
 
     def test_every_measured_model_records_how_it_was_measured(self):
         """An auditor must be able to weigh a value set, not just read it."""
-        from ai_ops.registry import effort_values, load_models
+        from switchgear.registry import effort_values, load_models
 
         for mid, rec in (load_models().get("models") or {}).items():
             if effort_values(rec):
@@ -935,7 +935,7 @@ class EffortContract(unittest.TestCase):
     def test_an_uncurated_model_has_no_effort_set(self):
         """Identity can be derived from an id by rule; an accepted-value set
         cannot. Unmeasured is the fail-closed default."""
-        from ai_ops.registry import effort_values, model_record
+        from switchgear.registry import effort_values, model_record
 
         self.assertIsNone(effort_values(model_record("grok/grok-9.9-invented")))
 
@@ -976,8 +976,8 @@ class EffortResolution(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "python"))
 
     def _resolve(self, requested, provider, model_id):
-        from ai_ops.job import _resolve_effort
-        from ai_ops.registry import model_record
+        from switchgear.job import _resolve_effort
+        from switchgear.registry import model_record
 
         return _resolve_effort(requested, get_adapter(provider), model_record(model_id))
 
@@ -992,7 +992,7 @@ class EffortResolution(unittest.TestCase):
         self.assertEqual(self._resolve("low", "codex", "codex/gpt-5.6-sol"), "low")
 
     def test_a_value_outside_the_model_set_is_refused(self):
-        from ai_ops.errors import Refuse
+        from switchgear.errors import Refuse
 
         with self.assertRaises(Refuse) as ctx:
             self._resolve("ultra", "claude", "claude/claude-sonnet-5")
@@ -1001,7 +1001,7 @@ class EffortResolution(unittest.TestCase):
 
     def test_the_same_value_can_be_valid_for_one_model_and_not_another(self):
         """The whole reason this is per model. Same provider, same flag."""
-        from ai_ops.errors import Refuse
+        from switchgear.errors import Refuse
 
         self.assertEqual(
             self._resolve("minimal", "codex", "codex/gpt-5.6-codex"), "minimal")
@@ -1010,7 +1010,7 @@ class EffortResolution(unittest.TestCase):
         self.assertIn("gpt-5.6-sol", str(ctx.exception))
 
     def test_an_unmeasured_model_is_refused_with_a_remedy(self):
-        from ai_ops.errors import Refuse
+        from switchgear.errors import Refuse
 
         with self.assertRaises(Refuse) as ctx:
             self._resolve("high", "opencode", "opencode-go/deepseek-v4-flash")
@@ -1032,9 +1032,9 @@ class ExecutionPinning(unittest.TestCase):
         """
         import tempfile
 
-        from ai_ops import pinning
+        from switchgear import pinning
 
-        pkg = Path(tempfile.mkdtemp(prefix="pin-")) / "ai_ops"
+        pkg = Path(tempfile.mkdtemp(prefix="pin-")) / "switchgear"
         pkg.mkdir()
         (pkg / "a.py").write_text("x = 1\n")
         launcher = pkg.parent / "launch.sh"
@@ -1055,9 +1055,9 @@ class ExecutionPinning(unittest.TestCase):
     def test_bytecode_is_excluded_so_the_digest_does_not_depend_on_imports(self):
         import tempfile
 
-        from ai_ops import pinning
+        from switchgear import pinning
 
-        pkg = Path(tempfile.mkdtemp(prefix="pin2-")) / "ai_ops"
+        pkg = Path(tempfile.mkdtemp(prefix="pin2-")) / "switchgear"
         (pkg / "__pycache__").mkdir(parents=True)
         (pkg / "a.py").write_text("x = 1\n")
         before = pinning.launcher_digest("/nonexistent-launcher", str(pkg))

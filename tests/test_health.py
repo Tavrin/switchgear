@@ -18,11 +18,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "python" / "ai_ops" / "__main__.py"
+MAIN = ROOT / "python" / "switchgear" / "__main__.py"
 PYTHON = "/usr/bin/python3"
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import health, quota  # noqa: E402
+from switchgear import health, quota  # noqa: E402
 
 
 def run_cli(args, timeout=60):
@@ -105,7 +105,7 @@ class Health(Base):
         an agent testing a fix for it would otherwise be locked out."""
         import inspect
 
-        from ai_ops import job as jobmod
+        from switchgear import job as jobmod
 
         src = inspect.getsource(jobmod)
         self.assertNotIn("health", src,

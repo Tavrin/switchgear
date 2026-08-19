@@ -1,4 +1,4 @@
-# Running agent-ops somewhere other than Linux
+# Running switchgear somewhere other than Linux
 
 Short answer: **run it inside a Linux VM or container.** Everything works, with
 every containment property intact, and there is no code to write.
@@ -105,8 +105,8 @@ mount-based model than Seatbelt is. WSL2 is Linux and therefore Option 1.
 Different repo, different answer, and it is not settled here. atelier is the
 orchestration layer above this one; its portability depends on its own
 dependencies, not on bwrap. But note the coupling: if atelier runs natively on
-macOS while agent-ops runs inside a Linux VM, then **paths and process identity
+macOS while switchgear runs inside a Linux VM, then **paths and process identity
 cross a boundary** — atelier's worktree paths, its process fence
-(`linux-proc-start:<bootId>:<startTime>`, which agent-ops publishes from the
+(`linux-proc-start:<bootId>:<startTime>`, which switchgear publishes from the
 launch record) and the state root all have to be meaningful on both sides. The
 simplest arrangement by a distance is to run both inside the same Linux VM.

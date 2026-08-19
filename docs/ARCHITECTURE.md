@@ -6,7 +6,7 @@ Generic provider/worker substrate. Not a manager.
 manager (out of scope)
     │ profile + envelope + leased cwd
     ▼
-agent-ops (contracts, integrity, process, leases, review predicates)
+switchgear (contracts, integrity, process, leases, review predicates)
     │ adapter
     ▼
 OpenCode (first provider)
@@ -19,11 +19,11 @@ the envelope `project` object.
 ## Language disposition
 
 The 2026-08-16 remediation **moved the security-sensitive control plane
-to Python** (`python/ai_ops/`). The independent review of
+to Python** (`python/switchgear/`). The independent review of
 `47e21bdd` showed Bash could not own config isolation, leases, process
 trees, schema authority, or sandbox construction safely.
 
-Bash remaining: `bin/ai-opencode` is a tiny launcher that `exec`s
+Bash remaining: `bin/switchgear` is a tiny launcher that `exec`s
 `/usr/bin/python3` on the committed `__main__.py`. No security decision
 is encoded in the shell wrapper.
 

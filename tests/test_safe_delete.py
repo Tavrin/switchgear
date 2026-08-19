@@ -23,8 +23,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops.errors import Refuse  # noqa: E402
-from ai_ops.paths import safe_rmtree  # noqa: E402
+from switchgear.errors import Refuse  # noqa: E402
+from switchgear.paths import safe_rmtree  # noqa: E402
 
 
 class Refuses(unittest.TestCase):
@@ -129,7 +129,7 @@ class WiredIn(unittest.TestCase):
     def test_no_module_calls_rmtree_directly(self):
         allowed = {"paths.py"}  # the guard itself
         offenders = []
-        for path in (ROOT / "python" / "ai_ops").glob("*.py"):
+        for path in (ROOT / "python" / "switchgear").glob("*.py"):
             if path.name in allowed:
                 continue
             text = path.read_text()

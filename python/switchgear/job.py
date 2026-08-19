@@ -36,7 +36,7 @@ def _timeout(policy: CompiledPolicy) -> int:
     return val
 
 
-MIN_FREE_BYTES = int(os.environ.get("AI_OPS_MIN_FREE_BYTES") or 2 * 1024 * 1024 * 1024)
+MIN_FREE_BYTES = int(os.environ.get("SWITCHGEAR_MIN_FREE_BYTES") or 2 * 1024 * 1024 * 1024)
 
 
 def _require_disk_headroom(path: str) -> None:
@@ -54,7 +54,7 @@ def _require_disk_headroom(path: str) -> None:
         raise Refuse(
             f"only {free // (1024*1024)}MB free on the worktree filesystem; "
             f"bounded-write needs {MIN_FREE_BYTES // (1024*1024)}MB headroom "
-            "(set AI_OPS_MIN_FREE_BYTES to override)"
+            "(set SWITCHGEAR_MIN_FREE_BYTES to override)"
         )
 
 
@@ -130,7 +130,7 @@ def _reclaim_sandbox_home(home: str, state_root: str) -> None:
     job; it is never reused and nothing else ever reads it, so retaining it grew
     the state store without bound. Evidence and result.json are kept.
     """
-    if os.environ.get("AI_OPS_KEEP_SANDBOX_HOME") == "1":
+    if os.environ.get("SWITCHGEAR_KEEP_SANDBOX_HOME") == "1":
         return
     from .paths import safe_rmtree
 
@@ -198,8 +198,8 @@ def run_job(
 
     ident = identity.inspect_worktree(worktree)
     if mode == "bounded-write":
-        if os.environ.get("AI_OPS_WRITE") != "1":
-            raise Refuse("write is disabled (AI_OPS_WRITE is not 1)")
+        if os.environ.get("SWITCHGEAR_WRITE") != "1":
+            raise Refuse("write is disabled (SWITCHGEAR_WRITE is not 1)")
         if policy.require_linked_for_write:
             identity.require_linked(ident)
     elif not policy.allow_primary_for_readonly and not ident.linked_worktree:
@@ -250,7 +250,7 @@ def run_job(
 
     queued_s = concurrency.acquire(
         root.path, job_id,
-        wait=os.environ.get("AI_OPS_BACKGROUND_CHILD") == "1",
+        wait=os.environ.get("SWITCHGEAR_BACKGROUND_CHILD") == "1",
     )
     dirs = state.create_job_dirs(root, job_id)
     # Liveness record for EVERY job, not just backgrounded ones. Without it a
@@ -302,7 +302,7 @@ def run_job(
         cred = None
         prec: dict[str, Any] = {}
         provider_id = model.get("provider") or "opencode-go"
-        if os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1":
+        if os.environ.get("SWITCHGEAR_ALLOW_LIVE_PROVIDER") == "1":
             from . import credentials as credmod
 
             prec = registry_provider(provider_id)
@@ -322,7 +322,7 @@ def run_job(
                     provider_id, prec, list(prov_argv_for_refresh), adapter
                 ),
             )
-            upstream = os.environ.get("AI_OPS_PROVIDER_UPSTREAM") or prec["upstream"]
+            upstream = os.environ.get("SWITCHGEAR_PROVIDER_UPSTREAM") or prec["upstream"]
             if not cred:
                 # Fail closed. Falling through to the no-broker path here would
                 # silently drop --unshare-net (the namespace is requested only
@@ -364,11 +364,11 @@ def run_job(
             # OpenCode takes it in its config, Grok takes it in the environment.
             # Both go through the adapter so neither leaks into the lifecycle.
             runtime = adapter.broker_runtime(runtime, broker_url, model["id"])
-        mock_beh = os.environ.get("AI_OPS_MOCK_BEHAVIOR")
+        mock_beh = os.environ.get("SWITCHGEAR_MOCK_BEHAVIOR")
         if mock_beh:
             with open(os.path.join(dirs["home"], ".mock-behavior"), "w", encoding="utf-8") as fh:
                 fh.write(mock_beh + "\n")
-            extra = os.environ.get("AI_OPS_MOCK_EXTRA", "")
+            extra = os.environ.get("SWITCHGEAR_MOCK_EXTRA", "")
             if extra:
                 with open(os.path.join(dirs["home"], ".mock-extra"), "w", encoding="utf-8") as fh:
                     fh.write(extra)
@@ -385,7 +385,7 @@ def run_job(
         # the tree under review would mutate the very thing being frozen.
         attach_dir = None
         if attachments:
-            attach_dir = os.path.join(dirs["home"], "ai-ops")
+            attach_dir = os.path.join(dirs["home"], "switchgear")
             os.makedirs(attach_dir, mode=0o700, exist_ok=True)
             for name, content in attachments.items():
                 # Flat basenames only: an attachment name is controller-supplied
@@ -422,7 +422,7 @@ def run_job(
                 f"{adapter.name!r} but --provider is the {_pinned[0]!r} binary "
                 f"({prov_argv[-1]}). Use that provider's own profile, or point "
                 f"--provider at the {adapter.name!r} binary "
-                "(`ai-opencode providers` prints the path)."
+                "(`switchgear providers` prints the path)."
             )
         # Providers without an agent-file mechanism get the SAME role
         # instructions in their prompt. One source (policy.role_instructions),
@@ -773,7 +773,7 @@ def run_job(
             # money limit, invisibly. Flag it on the record and say so.
             record["spend_unrecorded"] = f"{type(exc).__name__}: {exc}"[:200]
             print(
-                f"ai-opencode: WARNING — this job's cost was NOT recorded to the "
+                f"switchgear: WARNING — this job's cost was NOT recorded to the "
                 f"ledger ({type(exc).__name__}). The daily budget is now "
                 "under-counting; check the state root is writable.",
                 file=sys.stderr,
@@ -796,7 +796,7 @@ def run_job(
             })
             if found:
                 record["secrets_suspected"] = found
-                print(f"ai-opencode: WARNING — {secretscan.summarize(found)}",
+                print(f"switchgear: WARNING — {secretscan.summarize(found)}",
                       file=sys.stderr)
 
             from . import injection as injectionmod
@@ -810,7 +810,7 @@ def run_job(
             )
             if addressed:
                 record["agent_directed_content"] = addressed
-                print(f"ai-opencode: WARNING — {injectionmod.summarize(addressed)}",
+                print(f"switchgear: WARNING — {injectionmod.summarize(addressed)}",
                       file=sys.stderr)
         except Exception:
             # Advisory only. A scanner that could fail the job would turn a

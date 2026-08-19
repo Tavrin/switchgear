@@ -5,8 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "python"))
-from ai_ops.errors import Refuse  # noqa: E402
-from ai_ops.schema import validate  # noqa: E402
+from switchgear.errors import Refuse  # noqa: E402
+from switchgear.schema import validate  # noqa: E402
 
 SCHEMAS = ROOT / "schemas"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

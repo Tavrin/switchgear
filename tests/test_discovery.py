@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "python"))
 class Discovery(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="aiops-disc-"))
-        self._env = {k: os.environ.get(k) for k in ("HOME", "AI_OPS_PROVIDERS_FILE")}
+        self._env = {k: os.environ.get(k) for k in ("HOME", "SWITCHGEAR_PROVIDERS_FILE")}
 
     def tearDown(self):
         for k, v in self._env.items():
@@ -42,9 +42,9 @@ class Discovery(unittest.TestCase):
         import importlib
 
         os.environ["HOME"] = str(home or self.tmp / "home")
-        os.environ["AI_OPS_PROVIDERS_FILE"] = str(
+        os.environ["SWITCHGEAR_PROVIDERS_FILE"] = str(
             providers_file or self.tmp / "no-such-providers.json")
-        from ai_ops import compat
+        from switchgear import compat
 
         return importlib.reload(compat)
 

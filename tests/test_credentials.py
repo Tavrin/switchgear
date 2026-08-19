@@ -19,8 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import credentials as creds  # noqa: E402
-from ai_ops.errors import Refuse  # noqa: E402
+from switchgear import credentials as creds  # noqa: E402
+from switchgear.errors import Refuse  # noqa: E402
 
 # A recognisable stand-in. If this string ever appears in anything the module
 # hands back, a refresh token has leaked into a place it must never reach.
@@ -185,16 +185,16 @@ class Refusals(unittest.TestCase):
 
     def test_api_key_class_is_still_the_default(self):
         """Existing providers must not change behaviour because OAuth arrived."""
-        os.environ["AI_OPS_PROVIDER_CREDENTIAL_FILE"] = str(self.tmp / "absent")
+        os.environ["SWITCHGEAR_PROVIDER_CREDENTIAL_FILE"] = str(self.tmp / "absent")
         try:
             self.assertIsNone(creds.load_credential("opencode-go", {}))
         finally:
-            os.environ.pop("AI_OPS_PROVIDER_CREDENTIAL_FILE", None)
+            os.environ.pop("SWITCHGEAR_PROVIDER_CREDENTIAL_FILE", None)
 
 
 class BrokerUsesTheCredential(unittest.TestCase):
     def test_broker_accepts_a_credential_object_and_a_bare_string(self):
-        from ai_ops.broker import CredentialBroker
+        from switchgear.broker import CredentialBroker
 
         with CredentialBroker("PLAIN", upstream="http://127.0.0.1:9/v1") as bk:
             self.assertEqual(bk.auth_value(), "Bearer PLAIN")
@@ -236,7 +236,7 @@ class BrokerUsesTheCredential(unittest.TestCase):
         threading.Thread(target=up.serve_forever, daemon=True).start()
         upstream = f"http://127.0.0.1:{up.server_address[1]}/v1"
 
-        from ai_ops.broker import CredentialBroker
+        from switchgear.broker import CredentialBroker
 
         with CredentialBroker(
             "REAL-ANTHROPIC-TOKEN", upstream=upstream,
@@ -267,7 +267,7 @@ class BrokerUsesTheCredential(unittest.TestCase):
         denied -- fail-closed for a reason nobody could see. The matcher compares
         the path component only.
         """
-        from ai_ops.broker import _path_allowed
+        from switchgear.broker import _path_allowed
 
         self.assertTrue(_path_allowed("/v1/messages?beta=true", ("/v1/messages",)))
         self.assertTrue(_path_allowed("/v1/messages", ("/v1/messages",)))
@@ -282,7 +282,7 @@ class BrokerUsesTheCredential(unittest.TestCase):
         import urllib.error
         import urllib.request
 
-        from ai_ops.broker import CredentialBroker
+        from switchgear.broker import CredentialBroker
 
         def get(bk, path):
             try:
@@ -314,7 +314,7 @@ class ProviderProfileConsistency(unittest.TestCase):
         """
         import subprocess
 
-        from ai_ops.compat import PINNED_PROVIDERS
+        from switchgear.compat import PINNED_PROVIDERS
 
         claude = (PINNED_PROVIDERS.get("claude") or {}).get("path")
         codex = (PINNED_PROVIDERS.get("codex") or {}).get("path")
@@ -336,10 +336,10 @@ class ProviderProfileConsistency(unittest.TestCase):
         (repo / "a.txt").write_text("x\n")
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
         subprocess.run(["git", "commit", "-qm", "i"], cwd=repo, check=True, capture_output=True)
-        main = ROOT / "python" / "ai_ops" / "__main__.py"
+        main = ROOT / "python" / "switchgear" / "__main__.py"
         subprocess.run([sys.executable, str(main), "--state", str(state),
                         "state", "provision", str(state)], check=True, capture_output=True)
-        env = dict(os.environ, AI_OPS_ALLOW_LIVE_PROVIDER="1")
+        env = dict(os.environ, SWITCHGEAR_ALLOW_LIVE_PROVIDER="1")
         p = subprocess.run(
             [sys.executable, str(main), "--profile", str(tmp / "p.json"),
              "--state", str(state), "--provider", codex, "scout", str(repo), "hi"],
@@ -389,7 +389,7 @@ class FallbackTierSandboxCredential(unittest.TestCase):
             creds.load_sandbox_session("grok", {"auth_file": path, "auth_format": "grok-oidc"})
 
     def test_grok_adapter_writes_a_private_refresh_free_session(self):
-        from ai_ops.adapters import get_adapter
+        from switchgear.adapters import get_adapter
 
         src = _write(self.tmp / "grok.json", {
             "https://auth.x.ai::abc": {
@@ -406,7 +406,7 @@ class FallbackTierSandboxCredential(unittest.TestCase):
         self.assertIn("ACCESS", written)
 
     def test_grok_is_fallback_tier_and_opencode_is_not(self):
-        from ai_ops.adapters import get_adapter
+        from switchgear.adapters import get_adapter
 
         self.assertTrue(getattr(get_adapter("grok"), "credential_in_sandbox", False))
         self.assertFalse(getattr(get_adapter("opencode"), "credential_in_sandbox", False))
@@ -414,7 +414,7 @@ class FallbackTierSandboxCredential(unittest.TestCase):
     def test_grok_env_does_not_set_a_placeholder_token(self):
         """The session file provides auth; a placeholder token env would override
         it and fail Grok's local validation (measured)."""
-        from ai_ops.adapters import get_adapter
+        from switchgear.adapters import get_adapter
 
         env = get_adapter("grok").isolation_env(
             str(self.tmp / "h2"), {}, "http://127.0.0.1:8099")
@@ -426,7 +426,7 @@ class ProviderPinning(unittest.TestCase):
     """A second real binary must not be mistaken for a committed mock."""
 
     def test_every_pinned_binary_is_recognised_as_live(self):
-        from ai_ops.compat import PINNED_PROVIDERS, pinned_for_path
+        from switchgear.compat import PINNED_PROVIDERS, pinned_for_path
 
         checked = 0
         for name, rec in PINNED_PROVIDERS.items():
@@ -449,7 +449,7 @@ class ProviderPinning(unittest.TestCase):
     def test_a_symlinked_launcher_resolves_to_the_same_identity(self):
         """~/.grok/bin/grok is a symlink into ~/.grok/downloads. Comparing raw
         paths would classify the launcher as an unpinned binary, i.e. a mock."""
-        from ai_ops.compat import pinned_for_path
+        from switchgear.compat import pinned_for_path
 
         link = os.path.expanduser("~/.grok/bin/grok")
         if not os.path.exists(link):
@@ -465,29 +465,29 @@ class ProviderPinning(unittest.TestCase):
         """The wart this replaced: resolve_provider compared against the ONE
         OpenCode pin, so any other real agent CLI classified as a mock and ran
         with neither the live gate nor a broker."""
-        from ai_ops.errors import Refuse
-        from ai_ops.provider import resolve_provider
+        from switchgear.errors import Refuse
+        from switchgear.provider import resolve_provider
 
-        from ai_ops.compat import PINNED_PROVIDERS
+        from switchgear.compat import PINNED_PROVIDERS
 
         path = (PINNED_PROVIDERS.get("grok") or {}).get("path")
         if not path or not os.path.exists(path):
             self.skipTest("no discovered grok install on this machine")
-        old = os.environ.pop("AI_OPS_ALLOW_LIVE_PROVIDER", None)
+        old = os.environ.pop("SWITCHGEAR_ALLOW_LIVE_PROVIDER", None)
         try:
             with self.assertRaises(Refuse) as cm:
                 resolve_provider(path)
             self.assertIn("grok", str(cm.exception))
         finally:
             if old is not None:
-                os.environ["AI_OPS_ALLOW_LIVE_PROVIDER"] = old
+                os.environ["SWITCHGEAR_ALLOW_LIVE_PROVIDER"] = old
 
     def test_version_tokens_survive_formatting_differences(self):
         """Measured: Grok prints `grok 1.0.5 (5115b46bc9) [stable]` on the host
         and `grok 1.0.5 (5115b46bc9)` inside the sandbox. Whole-line matching
         fails a build verified minutes earlier, which reads as a broken pin
         rather than a formatting difference."""
-        from ai_ops.compat import version_token
+        from switchgear.compat import version_token
 
         self.assertEqual(version_token("grok 1.0.5 (5115b46bc9) [stable]"), "1.0.5")
         self.assertEqual(version_token("grok 1.0.5 (5115b46bc9)"), "1.0.5")
@@ -502,8 +502,8 @@ class ProviderPinning(unittest.TestCase):
         in an operator-owned file and are accepted alongside the built-in one."""
         import tempfile
 
-        from ai_ops import compat
-        from ai_ops.provider import assert_pinned_version
+        from switchgear import compat
+        from switchgear.provider import assert_pinned_version
 
         old_file = compat.VERIFIED_FILE
         compat.VERIFIED_FILE = os.path.join(tempfile.mkdtemp(prefix="ver-"), "v.json")
@@ -518,7 +518,7 @@ class ProviderPinning(unittest.TestCase):
             compat.VERIFIED_FILE = old_file
 
     def test_the_refusal_names_the_command_that_clears_it(self):
-        from ai_ops.provider import assert_pinned_version
+        from switchgear.provider import assert_pinned_version
 
         with self.assertRaises(Refuse) as cm:
             assert_pinned_version(0, b"grok 42.0.0", False, "grok")
@@ -527,8 +527,8 @@ class ProviderPinning(unittest.TestCase):
     def test_version_pins_are_per_provider_and_substring_matched(self):
         """OpenCode prints a bare `1.18.18`; Grok prints
         `grok 1.0.4 (d846eb93d9) [stable]`. Equality would reject Grok outright."""
-        from ai_ops.errors import Refuse
-        from ai_ops.provider import assert_pinned_version
+        from switchgear.errors import Refuse
+        from switchgear.provider import assert_pinned_version
 
         self.assertTrue(assert_pinned_version(0, b"1.18.18", False, "opencode"))
         self.assertTrue(
@@ -539,8 +539,8 @@ class ProviderPinning(unittest.TestCase):
 
     def test_an_unpinned_provider_refuses_rather_than_passing(self):
         """An absent pin must not read as 'no constraint'."""
-        from ai_ops.errors import Refuse
-        from ai_ops.provider import assert_pinned_version
+        from switchgear.errors import Refuse
+        from switchgear.provider import assert_pinned_version
 
         # A provider name that is deliberately NOT in PINNED_PROVIDERS. (This
         # used to use "codex", which then got pinned -- the assertion is about

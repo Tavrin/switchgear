@@ -25,7 +25,7 @@ from typing import Any
 # The refusal contract, stated once here because a caller needs it BEFORE it
 # hits one. Kept beside the exit table it refers to.
 REFUSAL_CONTRACT = {
-    "stderr_prefix": "ai-opencode: REFUSING — ",
+    "stderr_prefix": "switchgear: REFUSING — ",
     "guarantee": (
         "Every refusal is a single line on stderr with this prefix and names a "
         "remedy. Treat any refusal as fail-closed: no work was promoted."
@@ -136,7 +136,7 @@ def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
 
     budget = quotamod.load_budget()
     out: dict[str, Any] = {
-        "tool": "ai-opencode",
+        "tool": "switchgear",
         "commands": _walk_parser(parser),
         "providers": _providers(),
         "refusals": REFUSAL_CONTRACT,

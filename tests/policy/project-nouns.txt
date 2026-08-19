@@ -1,0 +1,13 @@
+# Nouns belonging to a CONSUMING project that must never appear in this
+# generic substrate. One extended-regex alternative per line; blank lines and
+# lines starting with # are ignored.
+#
+# This file ships empty on purpose. Switchgear is provider- and
+# project-agnostic, so it has no nouns of its own to forbid — the point of the
+# check is that YOUR project's names do not leak into a tool meant to be
+# reusable. Add them here, or point SWITCHGEAR_PROJECT_NOUNS at your own list.
+#
+# Example:
+#   AcmeCorp
+#   acme-deploy
+#   /mnt/acme-data

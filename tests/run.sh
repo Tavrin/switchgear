@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname -- "$0")/.." && pwd)
 export PYTHONPATH="$ROOT/python"
-unset AI_OPS_ALLOW_LIVE_PROVIDER || true
+unset SWITCHGEAR_ALLOW_LIVE_PROVIDER || true
 unset OPENCODE_PERMISSION || true
 
 echo "== schema =="

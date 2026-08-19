@@ -1,26 +1,26 @@
-# Handoff — agent-ops as the universal agent invocator
+# Handoff — switchgear as the universal agent invocator
 
 Written 2026-08-18 by the session that built the current rail, handing lead to
-`agent-ops-opus-2`. Everything below is measured unless marked as opinion.
+`switchgear-opus-2`. Everything below is measured unless marked as opinion.
 
 ---
 
 ## 1. The mission
 
-Turn agent-ops into **one tool that invokes any coding agent, on any model the
+Turn switchgear into **one tool that invokes any coding agent, on any model the
 caller chooses, inside a real security boundary, producing evidence** — and
 retire the fragmented per-agent wrappers into it.
 
 It replaces `the old Codex wrapper`, `the old OpenCode wrapper`, `the old read-only wrapper` and friends. It does **not**
 replace atelier. Atelier is the orchestration layer above (board, queue, verify
-from the real test suite, event log, human merge gate); agent-ops is the
+from the real test suite, event log, human merge gate); switchgear is the
 execution rail below it. The hard rule:
 
-> **The moment agent-ops grows a queue or a board, it has become a second
+> **The moment switchgear grows a queue or a board, it has become a second
 > atelier. Don't.**
 
 What makes it better than what it replaces: `the old Codex wrapper` is another project-specific and
-Codex-specific, `the old OpenCode wrapper` is another project-specific and OpenCode-specific. agent-ops
+Codex-specific, `the old OpenCode wrapper` is another project-specific and OpenCode-specific. switchgear
 is neither — **the calling agent picks the provider and the model**, per job,
 from a controller-owned registry.
 
@@ -33,7 +33,7 @@ synthetic clean HOME with no providers installed. CI runs it on every push.
 
 20 commands, 38 modules, ~10k lines.
 
-Installed here as `~/.local/bin/ai-opencode` → symlink to the working tree, so
+Installed here as `~/.local/bin/switchgear` → symlink to the working tree, so
 edits are live immediately.
 
 **All four providers live on both lanes.** OpenCode, Claude Code and Codex at the
@@ -112,17 +112,17 @@ Survey of what exists on this machine (`~/.local/bin`):
 
 | Tool | Worth taking | Worth dropping |
 |---|---|---|
-| `the old OpenCode wrapper` | fail-closed dirty snapshot; role→model table; **bash denied entirely** in the agent posture; model allowlist refusal | its integrity model is weaker than agent-ops' freeze; credential sits in the agent env |
+| `the old OpenCode wrapper` | fail-closed dirty snapshot; role→model table; **bash denied entirely** in the agent posture; model allowlist refusal | its integrity model is weaker than switchgear' freeze; credential sits in the agent env |
 | `the old Codex wrapper` | **background job lifecycle** (launch → poll → fetch → board); spec-file discipline; worktree creation | Codex-specific and another project-specific coupling |
 | `the old read-only wrapper` | nothing — already superseded and deleted from this repo | — |
-| `the old merge-policy script`/`ship`/`push`/`lane-*` | nothing — that is **merge policy**, which is atelier's job | do not absorb |
-| `codex-quota.mjs`, `claude-quota` | **quota brokering** — agent-ops has none and will burn credit until something 402s | — |
+| `the old merge-policy scripts` | nothing — that is **merge policy**, which is atelier's job | do not absorb |
+| `codex-quota.mjs`, `claude-quota` | **quota brokering** — switchgear has none and will burn credit until something 402s | — |
 | atelier | nothing to take; it is the layer above | — |
 | `~/.claude/skills/*-delegation` | doctrine stays as skills, not code | — |
 
 ### The two real gaps
 
-1. **Background jobs.** agent-ops blocks for the whole job. Every long run today
+1. **Background jobs.** switchgear blocks for the whole job. Every long run today
    had to be hand-backgrounded. Needs launch/poll/result/cancel with job ids —
    `the old Codex wrapper` is the model to copy.
 2. **Quota awareness.** No concept of it. Read
@@ -255,7 +255,7 @@ this and "a small team can rely on it", hardest last.
 6. **Grok is fallback tier.** Its access token is inside the sandbox because its
    CLI validates the session locally. Egress is still broker-locked and the
    refresh token is stripped, but it is a weaker claim than the other three.
-7. **The atelier adapter lane.** agent-ops's side is built
+7. **The atelier adapter lane.** switchgear's side is built
    (`docs/INTEGRATION.md`, "atelier lane contract"); the adapter is atelier's to
    write and they own the scheduling. Do NOT rename our `execution-profile` fields
    preemptively to match their `executable`/`digestPaths` shape — they will ask
@@ -266,9 +266,9 @@ this and "a small team can rely on it", hardest last.
 ## 8. Orientation
 
 ```
-agent-ops/
-  bin/ai-opencode              4-line launcher, resolves symlinks, no decisions
-  python/ai_ops/
+switchgear/
+  bin/switchgear              4-line launcher, resolves symlinks, no decisions
+  python/switchgear/
     cli.py         subcommands, --json contract, reviewer diff injection
     job.py         run_job(): the whole worker lifecycle
     sandbox.py     build_bwrap_argv() — the authority boundary
@@ -284,11 +284,11 @@ agent-ops/
   docs/PORTABILITY.md      what is Linux-bound and what to do elsewhere
   docs/REVIEW-6d217a6.md   the independent review that started the remediation
   tests/run.sh             hermetic, must stay free of live calls
-  tests/live.sh            opt-in live smoke (AI_OPS_LIVE=1), uncommitted
+  tests/live.sh            opt-in live smoke (SWITCHGEAR_LIVE=1), uncommitted
   .github/workflows/tests.yml  CI: the suite on a machine that is not the author's
 ```
 
-Fixtures: `~/Documents/agent-ops-dogfood` and `~/Documents/agent-ops-trial` are
+Fixtures: `~/Documents/switchgear-dogfood` and `~/Documents/switchgear-trial` are
 disposable and safe to delete or reuse.
 
 **Standing constraint:** disposable and lab repositories only. The write lane now

@@ -54,7 +54,7 @@ from typing import Any
 PAYLOAD_UID = 1
 PAYLOAD_GID = 1
 
-_ENV_DISABLE = "AI_OPS_NO_UID_BOUNDARY"
+_ENV_DISABLE = "SWITCHGEAR_NO_UID_BOUNDARY"
 
 
 def _subid_range(path: str, name: str, numeric: int) -> tuple[int, int] | None:

@@ -107,7 +107,7 @@ def acquire(
             # number, and the second close would shut its file.
             raise Refuse(
                 "another job holds the lease lock on this worktree; it is in use "
-                "right now. Wait for it to finish (`ai-opencode jobs "
+                "right now. Wait for it to finish (`switchgear jobs "
                 "--state-filter running`), or work in a different worktree — two "
                 "jobs in one tree interleave into a state neither of them "
                 "believes in."
@@ -163,7 +163,7 @@ def release(root: StateRoot, ident: WorktreeIdentity, token_uuid: str, owner: st
             # replaced this Refuse with a traceback.
             raise Refuse(
                 "cannot release: a worker still holds this worktree. Wait for the "
-                "job to finish, or cancel it (`ai-opencode cancel <job>`)."
+                "job to finish, or cancel it (`switchgear cancel <job>`)."
             ) from exc
         existing = read_json(token_path)
         if existing.get("lease_uuid") != token_uuid:

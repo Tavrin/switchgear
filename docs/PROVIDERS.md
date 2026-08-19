@@ -4,7 +4,7 @@ What is actually true of each candidate provider on this machine, established by
 running the binaries rather than by reading their documentation. Two claims in
 `HANDOFF.md` turned out to be wrong; both are corrected below.
 
-The adapter seam is `python/ai_ops/adapters.py`: `argv()`, `version_argv()`,
+The adapter seam is `python/switchgear/adapters.py`: `argv()`, `version_argv()`,
 `agent_name()`, `session_id()`, `normalize()`. `get_adapter()` keys off the
 profile's `provider` field — the **binary**, not the model pool. `opencode-go`
 and `openrouter` are both reached through one `opencode` binary, so selecting an
@@ -257,7 +257,7 @@ fail-closed, and exactly what the measurements predict.
   `allowed_paths` and the model-pin extractor therefore move into the provider
   record — chatgpt.com, api.x.ai and api.anthropic.com do not share
   `/chat/completions`.
-- Invoking Claude Code from agent-ops spends the same subscription that runs
+- Invoking Claude Code from switchgear spends the same subscription that runs
   the operator's own interactive session. Not a security issue — a quota-
   contention one; the measured-spend ledger applies unchanged.
 
@@ -278,7 +278,7 @@ this section expected:
    Three of four providers are full tier; only Grok is not.
 3. **Controller-side refresh: implemented.** An expired session no longer refuses
    with "re-login"; the provider's own CLI is invoked, inside the sandbox, on a
-   COPY of its auth directory, and agent-ops still never reads the refresh token
+   COPY of its auth directory, and switchgear still never reads the refresh token
    itself. The claim that "the refresh token stays unread" survives; the claim
    that an expired session refuses does not, and this section said so long after
    it stopped being true.
@@ -317,11 +317,11 @@ the token itself — never the refresh token). My earlier probe pointed a
 `/v1/responses`; that is the API-KEY shape, and the subscription shape is
 different. Worth a real capture before the adapter.
 
-**The security thesis is validated, and agent-ops goes further.** Every one of
+**The security thesis is validated, and switchgear goes further.** Every one of
 these proxies carries the same warning — bind to localhost, because anyone who
 reaches the endpoint bills your subscription — and LiteLLM shipped
 credential-stealing malware in two PyPI releases (1.82.7/1.82.8). That is exactly
-the threat agent-ops answers by construction: the credential never enters the
+the threat switchgear answers by construction: the credential never enters the
 sandbox, the broker listens on a per-job unix socket (not a shared localhost
 port), the path is allowlisted, the model is pinned, and the refresh token is
 never even read. A compromised provider or a co-tenant process cannot spend the

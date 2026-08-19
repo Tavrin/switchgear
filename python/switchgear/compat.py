@@ -71,8 +71,8 @@ DISCOVERY: dict[str, dict[str, object]] = {
 #
 # Kept out of source for the same reason verified versions are: a pin whose only
 # remedy is editing the package is a pin someone eventually turns off.
-PROVIDERS_FILE = os.environ.get("AI_OPS_PROVIDERS_FILE") or os.path.expanduser(
-    "~/.config/ai-ops/providers.json"
+PROVIDERS_FILE = os.environ.get("SWITCHGEAR_PROVIDERS_FILE") or os.path.expanduser(
+    "~/.config/switchgear/providers.json"
 )
 
 
@@ -151,11 +151,11 @@ PINNED_PROVIDERS: dict[str, dict[str, object]] = discover_providers()
 # Codex, Claude Code and Grok all self-update, often weekly. A pin that refuses
 # every new build and can only be changed by editing source is a pin someone
 # eventually turns off -- so the record of "what has been checked" lives in an
-# operator-owned file, and `ai-opencode providers verify` writes it after
+# operator-owned file, and `switchgear providers verify` writes it after
 # actually running the checks. The built-in versions stay as the last values
 # verified in-repo; the file only ever ADDS.
-VERIFIED_FILE = os.environ.get("AI_OPS_VERIFIED_FILE") or os.path.expanduser(
-    "~/.config/ai-ops/verified-providers.json"
+VERIFIED_FILE = os.environ.get("SWITCHGEAR_VERIFIED_FILE") or os.path.expanduser(
+    "~/.config/switchgear/verified-providers.json"
 )
 
 
@@ -226,7 +226,7 @@ def pinned_for_path(path: str) -> tuple[str, dict[str, object]] | None:
     """Which pinned provider, if any, this executable IS.
 
     Compared by realpath so a symlinked launcher resolves to the same identity as
-    the file it points at -- both Grok and the installed agent-ops launcher are
+    the file it points at -- both Grok and the installed switchgear launcher are
     symlinks, and treating those as different binaries would silently downgrade a
     live provider to mock.
 

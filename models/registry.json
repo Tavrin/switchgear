@@ -245,7 +245,7 @@
     "the provider records (upstream, credential class, allowed paths) which are",
     "genuinely per-provider configuration and not derivable.",
     "",
-    "`ai-opencode models --live` asks each installed CLI what it can actually",
+    "`switchgear models --live` asks each installed CLI what it can actually",
     "serve today; that is availability, which this file deliberately does not claim.",
     "",
     "Measured availability on opencode-go (2026-08-18): deepseek-v4-flash ok,",

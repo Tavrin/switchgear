@@ -16,11 +16,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "python" / "ai_ops" / "__main__.py"
+MAIN = ROOT / "python" / "switchgear" / "__main__.py"
 PYTHON = "/usr/bin/python3"
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import doctor  # noqa: E402
+from switchgear import doctor  # noqa: E402
 
 
 def run_cli(args, env=None, timeout=120):
@@ -108,8 +108,8 @@ class DoctorUnit(unittest.TestCase):
         for cred in doctor.check_credentials():
             self.assertNotIn("token", cred["detail"].lower())
         # Any real installed secret on this machine must not appear in output.
-        from ai_ops.credentials import load_credential
-        from ai_ops.registry import load_models, provider_record
+        from switchgear.credentials import load_credential
+        from switchgear.registry import load_models, provider_record
 
         for pool in (load_models().get("providers") or {}):
             try:
@@ -138,7 +138,7 @@ class DoctorUnit(unittest.TestCase):
 
     def test_missing_sandbox_backend_is_fatal(self):
         """There is no unsandboxed fallback, so this is the one unambiguous FAIL."""
-        from ai_ops import sandbox
+        from switchgear import sandbox
 
         original = sandbox.TRUSTED_BWRAP
         sandbox.TRUSTED_BWRAP = str(self.tmp / "no-bwrap-here")

@@ -49,7 +49,7 @@ def check_sandbox() -> list[dict[str, Any]]:
             # their OS, and hides that this is a platform limit rather than a
             # missing dependency.
             remedy = (
-                f"agent-ops runs its containment on bubblewrap, which is "
+                f"switchgear runs its containment on bubblewrap, which is "
                 f"Linux-only — there is no {system} build to install, and the "
                 "rail refuses to run without a boundary rather than degrading to "
                 "an unsandboxed one. Run it inside a Linux VM or container "
@@ -131,7 +131,7 @@ def check_providers() -> list[dict[str, Any]]:
             out.append(_check(
                 f"provider.{name}", WARN,
                 f"installed {installed}, accepted {accepted}",
-                f"run `ai-opencode providers verify --provider {name}` — it checks "
+                f"run `switchgear providers verify --provider {name}` — it checks "
                 "the CLI surface the adapter depends on and records the result.",
             ))
     return out
@@ -180,7 +180,7 @@ def check_credentials() -> list[dict[str, Any]]:
             # single-file fallback cannot hold a second provider, so naming it
             # would send the operator to the one path that will not work. Same
             # reasoning as _reachability in the CLI.
-            want = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE") or os.path.join(
+            want = os.environ.get("SWITCHGEAR_PROVIDER_CREDENTIAL_FILE") or os.path.join(
                 provmod.CREDENTIAL_DIR, prec.get("credential") or pool
             )
             out.append(_check(
@@ -217,7 +217,7 @@ def check_state(state_path: str | None) -> list[dict[str, Any]]:
     if not state_path:
         return [_check(
             "state.root", WARN, "no state root given",
-            "pass --state <abs path> or set AI_OPS_STATE to check it.",
+            "pass --state <abs path> or set SWITCHGEAR_STATE to check it.",
         )]
 
     out: list[dict[str, Any]] = []
@@ -226,7 +226,7 @@ def check_state(state_path: str | None) -> list[dict[str, Any]]:
     except Refuse as exc:
         return [_check(
             "state.root", FAIL, str(exc),
-            f"run `ai-opencode --state {state_path} state provision {state_path}`. "
+            f"run `switchgear --state {state_path} state provision {state_path}`. "
             "A state root must be an absolute path outside every worktree it "
             "records jobs for, on a filesystem you own.",
         )]
@@ -249,7 +249,7 @@ def check_state(state_path: str | None) -> list[dict[str, Any]]:
     if free < MIN_FREE_BYTES:
         out.append(_check(
             "state.disk", WARN, f"{mb}MB free, bounded-write needs {need_mb}MB",
-            "free space on this filesystem, or raise AI_OPS_MIN_FREE_BYTES if you "
+            "free space on this filesystem, or raise SWITCHGEAR_MIN_FREE_BYTES if you "
             "accept the risk — a worker can fill a disk faster than any poll "
             "interval catches.",
         ))

@@ -31,7 +31,7 @@ that derivation and after the exploit work, so its framing could not shape the f
 Findings below are **empirical unless explicitly marked "(source)"**. Exploits were reconstructed
 and run against disposable fixtures in a session scratchpad — a synthetic primary checkout, a
 linked worktree, a sibling worktree, a provisioned `$STATE` root, and purpose-written probe
-providers. **No model was invoked and no quota was spent**; `AI_OPS_ALLOW_LIVE_PROVIDER` remained
+providers. **No model was invoked and no quota was spent**; `SWITCHGEAR_ALLOW_LIVE_PROVIDER` remained
 unset for every job. Live-binary interaction was limited to no-model operations (`--version`,
 `run --help`, embedded-string inspection).
 
@@ -53,8 +53,8 @@ touches no reviewed file and no commit.)*
 ## 1. Architecture as independently derived
 
 ```
-bin/ai-opencode  (4 lines, /bin/sh — no security decision)
-  └─ exec /usr/bin/python3 -s python/ai_ops/__main__.py
+bin/switchgear  (4 lines, /bin/sh — no security decision)
+  └─ exec /usr/bin/python3 -s python/switchgear/__main__.py
        └─ cli.py        state | models | scout | review | write | run | lease | status | promote
             ├─ profile.py   load + jsonschema-validate the project profile
             ├─ policy.py    compile_policy() → frozen CompiledPolicy + sha256 digest
@@ -70,7 +70,7 @@ bin/ai-opencode  (4 lines, /bin/sh — no security decision)
 ```
 
 The claim that the security-sensitive control plane moved from Bash to Python, with Bash reduced
-to a launcher, is **accurate**. `bin/ai-opencode` is 4 lines and makes no decision.
+to a launcher, is **accurate**. `bin/switchgear` is 4 lines and makes no decision.
 
 Effective bwrap policy (`sandbox.py:29-91`), dumped from the real code path rather than read from
 comments:
@@ -108,7 +108,7 @@ These are genuine properties, verified by execution rather than by reading tests
 **READONLY containment (F01/F18).** From inside the real sandbox, write attempts against the
 worktree, its `.git`, the common git dir, the per-worktree gitdir, the primary checkout and the
 primary's ignored files all failed with `EROFS`. The sibling worktree, host `$HOME`,
-`~/.bashrc`, `~/.claude`, the agent-ops repo itself and the fake host-home canary did not exist in
+`~/.bashrc`, `~/.claude`, the switchgear repo itself and the fake host-home canary did not exist in
 the namespace at all (`ENOENT`). Root listing was `[bin, dev, etc, lib, lib64, proc, tmp, usr]` —
 no `/home`. Host verification afterwards showed **zero** files created and `git status` clean on
 both primary and sibling.
@@ -131,9 +131,9 @@ The flock genuinely spans the worker lifetime.
 
 **Provider selection and test credibility (F17).** With a hostile `opencode` planted first on
 `PATH` and no provider configured, the rail refused —
-`provider path required (--provider or AI_OPS_PROVIDER); no PATH lookup` — and the hostile binary
+`provider path required (--provider or SWITCHGEAR_PROVIDER); no PATH lookup` — and the hostile binary
 never ran. A missing/broken mock hard-fails rather than silently falling through. Live OpenCode is
-refused unless both `AI_OPS_ALLOW_LIVE_PROVIDER=1` and the path equals the pinned binary.
+refused unless both `SWITCHGEAR_ALLOW_LIVE_PROVIDER=1` and the path equals the pinned binary.
 
 **Provider output discipline (F12).** Exit-0-with-malformed output produced
 `provider_error: malformed provider JSON at offset 0`. Truncated, plain-text, duplicate-terminal,
@@ -164,8 +164,8 @@ corrected it. Recorded here so the correction is durable.)*
 
 *Exploitable defect. Blocks Gate B and Gate C.*
 
-**Where:** `job.attach_review` (`python/ai_ops/job.py:239-278`), `review.promote`
-(`python/ai_ops/review.py:29-61`), `cli.cmd_promote` (`python/ai_ops/cli.py:188-203`).
+**Where:** `job.attach_review` (`python/switchgear/job.py:239-278`), `review.promote`
+(`python/switchgear/review.py:29-61`), `cli.cmd_promote` (`python/switchgear/cli.py:188-203`).
 
 **Mechanism.** `attach_review` constructs the review artifact's provenance fields by copying them
 out of the **subject's own freeze block**:
@@ -199,7 +199,7 @@ matches its own freeze.
    freeze recorded.
 2. Run a reviewer job against **`sibling-b`** — a different worktree, containing none of the
    subject's changes — emitting `{"type":"complete","review":{"verdict":"promote","findings":[]}}`.
-3. `ai-opencode promote --subject <S> --review <R>` → exit 0, subject status flips to `ok`.
+3. `switchgear promote --subject <S> --review <R>` → exit 0, subject status flips to `ok`.
 
 The reviewer never saw the change it approved. Observed reviewer `dir` was `…/rig/sibling-b` while
 the subject `dir` was `…/rig/wt-a`.
@@ -255,7 +255,7 @@ and still install-mapped.
 *Architectural fragility. Blocks Gate B/C; near-zero for READONLY.*
 
 **Where:** `identity.tree_digest` and `identity.git_identity_digest`
-(`python/ai_ops/identity.py:119-149`), called from `job.run_job` at `job.py:110-111`, `118-119`
+(`python/switchgear/identity.py:119-149`), called from `job.run_job` at `job.py:110-111`, `118-119`
 and `169-170` — all **outside** bwrap, on the host.
 
 **Mechanism.** In bounded-write the worktree is bound read-write, and for a linked worktree the
@@ -300,7 +300,7 @@ scans the tree. Make the ordering an explicit documented invariant with a test, 
 
 *Correctness defect. Blocks Gate B.*
 
-**Where:** `job.run_job`, `python/ai_ops/job.py:145`:
+**Where:** `job.run_job`, `python/switchgear/job.py:145`:
 
 ```python
 if status == "ok" and result.returncode not in (0, None) and mode == "readonly":
@@ -322,8 +322,8 @@ presence of a well-formed handoff object is a claim by the provider, not evidenc
 
 *Architectural weakness. Blocks Gate B/C.*
 
-**Where:** `review.independence` (`python/ai_ops/review.py:10-18`) with
-`registry.model_record` (`python/ai_ops/registry.py:22-36`).
+**Where:** `review.independence` (`python/switchgear/review.py:10-18`) with
+`registry.model_record` (`python/switchgear/registry.py:22-36`).
 
 **Mechanism (source).** Moving `model_family` out of the mutable profile into a controller-owned
 `models/registry.json` (F14) is a genuine improvement, and the subject correctly freezes its own
@@ -346,8 +346,8 @@ into the subject at implement time and compare against that.
 
 *Defense-in-depth gap.*
 
-**Where:** `job.run_job` (`python/ai_ops/job.py:67-70`) and `lease.WorkerLock.__enter__`
-(`python/ai_ops/lease.py:200-208`).
+**Where:** `job.run_job` (`python/switchgear/job.py:67-70`) and `lease.WorkerLock.__enter__`
+(`python/switchgear/lease.py:200-208`).
 
 ```python
 tok = lease.load_token(root, ident)
@@ -358,7 +358,7 @@ When no `--token` is presented, the controller reads the on-disk token and hands
 `WorkerLock`, which then checks it against the same on-disk value — a self-comparison. `cmd_run`
 has no `--token` flag at all, so the `run --envelope` path always self-authorizes.
 
-**Verified.** `ai-opencode run --envelope …` in bounded-write succeeded with **no token
+**Verified.** `switchgear run --envelope …` in bounded-write succeeded with **no token
 presented** (exit 0). Passing a deliberately wrong token *does* refuse
 (`REFUSING — forged lease token`), so the check works only when a caller volunteers a wrong value.
 
@@ -424,7 +424,7 @@ level (F13). No finding REGRESSED in code. No finding was INVALID. New findings 
 
 ## 5. Test harness assessment
 
-`agent-ops/tests/run.sh` runs clean: **29 adversarial tests + 3 config probes, all passing**
+`switchgear/tests/run.sh` runs clean: **29 adversarial tests + 3 config probes, all passing**
 (`ALL HERMETIC/ADVERSARIAL TESTS PASSED`). The author's count is accurate.
 
 What it genuinely proves: the mock is selected explicitly by absolute path; removing or breaking it

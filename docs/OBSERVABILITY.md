@@ -22,9 +22,9 @@ stream on disk; several projections over it; the cheap one is the default.
 |---|---|---|
 | `codex-companion` | yes — a `.log` grows during the run | no `logs`/`tail` subcommand; you must find the path in the launch JSON |
 | `the old OpenCode wrapper` | yes — `opencode run --format json > "$out"` appends as it goes | nothing surfaces it |
-| **agent-ops** | **no** — stdout is buffered to a `tempfile.TemporaryFile()` and `evidence/events.jsonl` is only written after the process exits | nothing to reach |
+| **switchgear** | **no** — stdout is buffered to a `tempfile.TemporaryFile()` and `evidence/events.jsonl` is only written after the process exits | nothing to reach |
 
-So for Codex the data exists and the ergonomics don't. For agent-ops the data
+So for Codex the data exists and the ergonomics don't. For switchgear the data
 does not exist yet. That is the first thing to fix, because everything else
 depends on it.
 
@@ -63,7 +63,7 @@ never reach a parent agent's context by accident.
 > no path access whatsoever. Moving the sink from a controller-private temp file
 > into the job directory would have quietly re-opened precisely what
 > "persist evidence before the integrity asserts" exists to prevent.
-> Caught by `agent-ops-opus-2` while implementing it.
+> Caught by `switchgear-opus-2` while implementing it.
 
 The safe shape, as implemented: the child gets **pipes**; controller threads
 drain them and stream to disk. The worker can append and nothing else — it never
@@ -140,7 +140,7 @@ references so it can be re-verified. This section is **fact**, not inference.
 ### Write to the codex adapter shape
 
 Atelier supports both models, per adapter. The claude lane is stdout-as-pipe
-(`server/lib/agents/claude.mjs:99-127`). The codex lane is exactly what agent-ops
+(`server/lib/agents/claude.mjs:99-127`). The codex lane is exactly what switchgear
 already does: a detached background job whose stdout yields only a job id, after
 which the adapter polls job-state JSON/log files and can reattach after a daemon
 restart (`codex.mjs:908+`, `capabilities.canResume=true`, `liveInput=false`).
@@ -155,17 +155,17 @@ the resolved executable path — at first spawn, enforced on resume. A stable
 absolute launcher path makes this trivial; a "latest version wins" resolver is
 what they had to pin away for codex.
 
-> **Watch out:** `~/.local/bin/ai-opencode` is currently a symlink into the
+> **Watch out:** `~/.local/bin/switchgear` is currently a symlink into the
 > working tree. The *path* is stable but its *content* changes with every edit.
 >
-> Atelier's ruling on this (their words): profile pinning for the agent-ops
+> Atelier's ruling on this (their words): profile pinning for the switchgear
 > adapter needs **a content digest of the launcher, not just a resolved path** —
 > "same class as the codex 'latest wins' drift we pinned away, one level
 > deeper." Pinning a path that always resolves is worthless when what it
 > resolves *to* changes underneath you.
 >
 > Two consequences. The adapter must digest the launcher (and arguably the
-> `python/ai_ops/` tree it execs). And for anything beyond lab use, install a
+> `python/switchgear/` tree it execs). And for anything beyond lab use, install a
 > **released copy** rather than a symlink into a working tree — the convenience
 > that made today's iteration fast is precisely what breaks reproducibility.
 
@@ -194,7 +194,7 @@ finalization (ATT-002) and validates the landed tree against it at merge
 Step 2 could not be written from this document. No real provider stream existed
 anywhere in the repo — the mock was the only evidence of the vocabulary, and the
 mock is exactly what invented a fiction that 64 tests then validated. So
-`agent-ops-opus-2` captured a live run and committed it as
+`switchgear-opus-2` captured a live run and committed it as
 `tests/fixtures/opencode-real-scout.jsonl`. Verified against that fixture:
 
 | I wrote | Reality |
@@ -225,7 +225,7 @@ a running codex dispatch is refused with 409 and works instead as a **cold
 resume** — new process, prior context via the provider's own resume mechanism,
 keyed on the captured `sessionId`.
 
-So agent-ops needs **no stdin path into the sandbox**. What it does need is a
+So switchgear needs **no stdin path into the sandbox**. What it does need is a
 durable session/thread identifier surfaced in events, or resume cannot exist.
 
 ### The verify collision is shared, and unresolved on both sides
@@ -242,7 +242,7 @@ projects" as untested.
 currently demand side-effect-free verify commands (`PYTHONDONTWRITEBYTECODE`,
 `CARGO_TARGET_DIR`, npm cache redirection). A shared out-of-tree-cache convention
 is an open design item, and atelier has said it would likely adopt whatever
-agent-ops settles on.
+switchgear settles on.
 
 Their suggested shape was "digest over tracked content only + an explicit
 side-effect allowlist". **The first half was withdrawn after pushback** — see the
@@ -281,7 +281,7 @@ full stream, clearly marked as a self-report.
    it. Keep the size cap and truncation reporting intact.
 2. **Normalize the event vocabulary** behind an adapter `parse()`. Do this before
    adding providers, or you will write the digest three times.
-3. **`ai-opencode logs <job> [--follow] [--format digest|full]`**, digest capped.
+3. **`switchgear logs <job> [--follow] [--format digest|full]`**, digest capped.
 4. **Make `status` cheap and informative** — the polling answer for a parent
    agent.
 5. **Background jobs** (`--background` returning a job id and log path). Then a

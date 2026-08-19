@@ -4,12 +4,12 @@ Two different things, and conflating them would produce a number that looks
 authoritative and is not:
 
 1. **External quota readings** for subscription pools that publish one --
-   `~/.cache/ai-quota/{claude,codex}.json`. agent-ops does not spend these; it
+   `~/.cache/ai-quota/{claude,codex}.json`. switchgear does not spend these; it
    reports them so a CALLER routing across providers can decide. Every reading
    carries `captured_at`, and a stale reading is worse than no reading because it
    invites a confident wrong decision, so staleness is always reported alongside.
 
-2. **The budget agent-ops actually owns.** The pool it really spends
+2. **The budget switchgear actually owns.** The pool it really spends
    (`opencode-go`) publishes no quota at all, so there is nothing to read. What
    the rail *can* do is measure: every job's real cost now comes back from the
    provider stream. So the enforceable control is a spend ceiling over measured
@@ -32,7 +32,7 @@ from typing import Any
 from .errors import Refuse
 
 QUOTA_DIR = os.path.expanduser("~/.cache/ai-quota")
-DEFAULT_BUDGET_FILE = os.path.expanduser("~/.config/ai-ops/budget.json")
+DEFAULT_BUDGET_FILE = os.path.expanduser("~/.config/switchgear/budget.json")
 
 # A reading older than this is reported as stale. The routing policy is explicit
 # that quota is measured, not guessed, and a six-hour-old percentage is a guess
@@ -41,7 +41,7 @@ STALE_AFTER_S = 3600
 
 
 def budget_path() -> str:
-    return os.environ.get("AI_OPS_BUDGET_FILE") or DEFAULT_BUDGET_FILE
+    return os.environ.get("SWITCHGEAR_BUDGET_FILE") or DEFAULT_BUDGET_FILE
 
 
 def load_budget() -> dict[str, Any]:
@@ -124,7 +124,7 @@ def external_all() -> list[dict[str, Any]]:
     return out
 
 
-# --- the ledger agent-ops keeps for itself ------------------------------------
+# --- the ledger switchgear keeps for itself ------------------------------------
 
 
 def ledger_path(state_path: str) -> str:

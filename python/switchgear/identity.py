@@ -314,7 +314,7 @@ def _nontracked_paths(ident: WorktreeIdentity, status: bytes) -> list[str]:
 
 
 # Hashing is streamed (O(1) memory); this bounds WORK, not memory.
-MAX_UNTRACKED_BYTES = int(os.environ.get("AI_OPS_MAX_UNTRACKED_BYTES") or 2 * 1024 * 1024 * 1024)
+MAX_UNTRACKED_BYTES = int(os.environ.get("SWITCHGEAR_MAX_UNTRACKED_BYTES") or 2 * 1024 * 1024 * 1024)
 
 
 def _content_fingerprint(abs_path: str, budget: list[int] | None = None) -> bytes:
@@ -342,7 +342,7 @@ def _content_fingerprint(abs_path: str, budget: list[int] | None = None) -> byte
             raise Refuse(
                 "non-tracked content exceeds the digest bound "
                 f"({MAX_UNTRACKED_BYTES} bytes); largest offender so far: {abs_path}. "
-                "Remove it or raise AI_OPS_MAX_UNTRACKED_BYTES."
+                "Remove it or raise SWITCHGEAR_MAX_UNTRACKED_BYTES."
             )
     elif st.st_size > MAX_UNTRACKED_BYTES:
         raise Refuse(f"untracked file exceeds the digest bound: {abs_path}")
@@ -356,7 +356,7 @@ def _content_fingerprint(abs_path: str, budget: list[int] | None = None) -> byte
                 h.update(chunk)
     except OSError as exc:
         # A file the CONTROLLER cannot read (root-owned data dirs, mode 000 --
-        # measured on a large private repository's meilisearch store) must not crash the whole
+        # measured on a large private repository's search-index store) must not crash the whole
         # audit and make the platform unauditable. It also must not vanish
         # silently. Fingerprint it from the metadata we CAN see (size, mode,
         # mtime) under an UNREADABLE marker: the digest still moves if the file
@@ -428,7 +428,7 @@ def changed_files(ident: WorktreeIdentity) -> list[str]:
 # limit, managed to both crash large reviews AND truncate them. A live reviewer
 # on a 229KB diff reported the truncation as its principal finding, which is the
 # correct behaviour and also a waste of a review.
-MAX_DIFF_BYTES = int(os.environ.get("AI_OPS_MAX_DIFF_BYTES") or 5_000_000)
+MAX_DIFF_BYTES = int(os.environ.get("SWITCHGEAR_MAX_DIFF_BYTES") or 5_000_000)
 
 
 def review_manifest(ident: WorktreeIdentity) -> tuple[list[str], list[str]]:
@@ -444,7 +444,7 @@ def review_manifest(ident: WorktreeIdentity) -> tuple[list[str], list[str]]:
     shapes what the reviewer is ASKED to read. Without it, a repo with a
     populated .venv put 42,205 filenames (3.7MB) in the review attachment and a
     reviewer burned its whole timeout paging through ambient noise (measured on
-    a large private repository, kimi-k3, $1.05). Review is a quality signal, not the boundary,
+    a large private repository, a mid-tier model, $1.05). Review is a quality signal, not the boundary,
     so trimming what it reads costs no security.
     """
     raw = _status_entries_raw(ident)

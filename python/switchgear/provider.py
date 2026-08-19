@@ -17,10 +17,10 @@ def resolve_provider(explicit: str | None) -> tuple[list[str], bool]:
     agent CLI as a committed mock -- fail-closed for credentials, but it would
     have run a real agent without the live gate and without a broker.
     """
-    allow_live = os.environ.get("AI_OPS_ALLOW_LIVE_PROVIDER") == "1"
-    path = explicit or os.environ.get("AI_OPS_PROVIDER")
+    allow_live = os.environ.get("SWITCHGEAR_ALLOW_LIVE_PROVIDER") == "1"
+    path = explicit or os.environ.get("SWITCHGEAR_PROVIDER")
     if not path:
-        raise Refuse("provider path required (--provider or AI_OPS_PROVIDER); no PATH lookup")
+        raise Refuse("provider path required (--provider or SWITCHGEAR_PROVIDER); no PATH lookup")
     if not os.path.isabs(path):
         raise Refuse("provider path must be absolute")
     path = reject_symlinks(path, "provider") if os.path.exists(path) else path
@@ -34,7 +34,7 @@ def resolve_provider(explicit: str | None) -> tuple[list[str], bool]:
         name, _rec = match
         if not allow_live:
             raise Refuse(
-                f"refusing live provider {name} without AI_OPS_ALLOW_LIVE_PROVIDER=1"
+                f"refusing live provider {name} without SWITCHGEAR_ALLOW_LIVE_PROVIDER=1"
             )
         # The version check deliberately does NOT run here: executing the
         # provider on the host to ask its version hands a hostile binary
@@ -77,7 +77,7 @@ def assert_pinned_version(
         raise Refuse(
             f"{provider} version {ver!r} has not been verified on this machine "
             f"(verified: {', '.join(accepted)}). Run "
-            f"`ai-opencode providers verify --provider {provider}` to check this "
+            f"`switchgear providers verify --provider {provider}` to check this "
             "build against the adapter's contract and record it."
         )
     return ver
@@ -147,19 +147,19 @@ def installed_version(binary: str | None) -> str | None:
     return lines[-1] if lines else None
 
 
-CREDENTIAL_DIR = os.path.expanduser("~/.config/ai-ops/credentials")
-DEFAULT_CREDENTIAL_FILE = os.path.expanduser("~/.config/ai-ops/provider-credential")
+CREDENTIAL_DIR = os.path.expanduser("~/.config/switchgear/credentials")
+DEFAULT_CREDENTIAL_FILE = os.path.expanduser("~/.config/switchgear/provider-credential")
 
 
 def credential_path(name: str | None = None) -> str:
     """Where a provider's credential lives.
 
-    Per-provider files under ~/.config/ai-ops/credentials/<name> so each pool
+    Per-provider files under ~/.config/switchgear/credentials/<name> so each pool
     (opencode-go, openrouter, ...) is separately installable and separately
-    revocable. AI_OPS_PROVIDER_CREDENTIAL_FILE overrides for a single-provider
+    revocable. SWITCHGEAR_PROVIDER_CREDENTIAL_FILE overrides for a single-provider
     setup; the legacy single-file path stays supported.
     """
-    override = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE")
+    override = os.environ.get("SWITCHGEAR_PROVIDER_CREDENTIAL_FILE")
     if override:
         return override
     if name:

@@ -11,7 +11,7 @@ from .errors import Refuse
 from .paths import mkdir_exclusive, open_nofollow, reject_symlinks, require_absolute, require_job_id
 from .schema import validate
 
-MARKER = ".ai-ops-state"
+MARKER = ".switchgear-state"
 
 
 class StateRoot:
@@ -65,7 +65,7 @@ def provision(path: str) -> str:
     if not os.path.isfile(marker):
         fd = open_nofollow(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         try:
-            os.write(fd, b"ai-ops-state-v1\n")
+            os.write(fd, b"switchgear-state-v1\n")
         finally:
             os.close(fd)
     os.makedirs(os.path.join(abs_path, "jobs"), exist_ok=True)

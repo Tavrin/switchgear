@@ -95,7 +95,7 @@ The wire id matters: Grok's CLI reports `grok-4.6-build` but sends `grok-4.6`.
 Pinning the reported name would make the broker's model-pin deny every request.
 Get it from the free redirect probe (below), not from the CLI's own output.
 
-### 2. `python/ai_ops/adapters.py` — the behaviour
+### 2. `python/switchgear/adapters.py` — the behaviour
 
 Subclass `ProviderAdapter` and register it in `_ADAPTERS`. **Seven** methods have
 no possible default and must be written:
@@ -131,7 +131,7 @@ completed".
 A complete minimal adapter is about 25 lines; there is a working one in
 `tests/test_adapters.py::AddingAProvider`, which exists to keep that claim true.
 
-### 3. `python/ai_ops/compat.py` — the pin
+### 3. `python/switchgear/compat.py` — the pin
 
 A `DISCOVERY[name]` entry: `path_globs` (where the interpreter-free binary lives,
 as globs expanded against the user's home), optional `launcher_globs`, and the
@@ -153,7 +153,7 @@ real agent without the live gate. Two installed versions is the normal state of 
 self-updating CLI.
 
 An operator whose install is somewhere else names it in
-`~/.config/ai-ops/providers.json` (`AI_OPS_PROVIDERS_FILE` overrides), which wins
+`~/.config/switchgear/providers.json` (`SWITCHGEAR_PROVIDERS_FILE` overrides), which wins
 over discovery:
 
 ```json
@@ -196,11 +196,11 @@ design:
   with neither the live gate nor a broker. Recognise first, then judge.
 - **The version record is operator-owned, not source.** A refusal whose only
   remedy is editing source is a refusal that gets switched off. Verified builds
-  live in `~/.config/ai-ops/verified-providers.json`.
+  live in `~/.config/switchgear/verified-providers.json`.
 
 ```
-ai-opencode providers                          # what is installed vs verified
-ai-opencode providers --provider grok --verify # check a new build, record it
+switchgear providers                          # what is installed vs verified
+switchgear providers --provider grok --verify # check a new build, record it
 ```
 
 `--verify` is a real check, not a rubber stamp: it asserts the new build still
@@ -219,7 +219,7 @@ earlier.
 
 Note `--provider` needs the RESOLVED binary path, not the launcher: symlink
 components are rejected because a symlink can be repointed underneath you.
-`ai-opencode providers` prints the path to pass.
+`switchgear providers` prints the path to pass.
 
 ## Fail-closed guarantees (why half-adding is safe)
 

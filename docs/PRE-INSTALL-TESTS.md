@@ -1,6 +1,6 @@
 # Tests required before any future install
 
-Gate: `agent-ops/tests/run.sh` exits 0.
+Gate: `switchgear/tests/run.sh` exits 0.
 
 The suite is hermetic. `tests/helpers/mock-opencode` is first on `PATH`.
 It never calls a live model and never touches live config.

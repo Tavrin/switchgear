@@ -1,17 +1,17 @@
 ---
 name: opencode-delegation
-description: Use before delegating a read-only scout or independent review to OpenCode. Covers ai-opencode invocation, model routing via project profile, fail-closed git checks, and the no-write default. Triggers: OpenCode, opencode, ai-opencode, independent review pool.
+description: Use before delegating a read-only scout or independent review to OpenCode. Covers switchgear invocation, model routing via project profile, fail-closed git checks, and the no-write default. Triggers: OpenCode, opencode, switchgear, independent review pool.
 ---
 
 # OpenCode delegation — generic rail
 
 OpenCode is **not** a manager and has **no program-state authority**.
 It is a provider/worker pool. Do not launch write/implementation lanes
-until a project profile enables write **and** `AI_OPS_WRITE=1` is set
+until a project profile enables write **and** `SWITCHGEAR_WRITE=1` is set
 for an authorized test. Production write also requires an OS-level
 containment backend (see `docs/CONTAINMENT.md`).
 
-**Require** the wrapper: `ai-opencode`. Do not invoke `opencode run`
+**Require** the wrapper: `switchgear`. Do not invoke `opencode run`
 directly — the wrapper is the integrity boundary.
 
 This skill is the **single canonical** definition. Do not maintain a
@@ -23,19 +23,19 @@ second copy per harness.
 opencode --help
 opencode run --help
 opencode models
-ai-opencode --profile <profile.json> models
+switchgear --profile <profile.json> models
 ```
 
 `opencode models` is authoritative for IDs. The profile allowlist is the
-rail. Re-run `ai-opencode models` after OpenCode upgrades.
+rail. Re-run `switchgear models` after OpenCode upgrades.
 
 ## Wrapper
 
 ```bash
-ai-opencode [--profile PATH] models
-ai-opencode [--profile PATH] scout  <dir> "<prompt>"
-ai-opencode [--profile PATH] review <dir> <role> "<prompt>"
-ai-opencode [--profile PATH] run    --envelope FILE
+switchgear [--profile PATH] models
+switchgear [--profile PATH] scout  <dir> "<prompt>"
+switchgear [--profile PATH] review <dir> <role> "<prompt>"
+switchgear [--profile PATH] run    --envelope FILE
 ```
 
 Roles and models come from the **project profile**, not this skill.
@@ -48,15 +48,15 @@ The wrapper:
 2. Refuses a non-default `OPENCODE_CONFIG_DIR`.
 3. Snapshots HEAD + porcelain + dirty-file hashes + `git diff HEAD` hash
    (`git --no-optional-locks`) before the job.
-4. Runs `opencode run --pure --dir … --model <id> --agent ai-ops-readonly
+4. Runs `opencode run --pure --dir … --model <id> --agent switchgear-readonly
    --format json` with **no** `--auto`, inside a new session/process group.
-5. Agent `ai-ops-readonly` denies `edit` and **denies bash entirely**.
+5. Agent `switchgear-readonly` denies `edit` and **denies bash entirely**.
    The wrapper sets `OPENCODE_DISABLE_PROJECT_CONFIG=1` and
    `OPENCODE_CONFIG_CONTENT` from the adapter runtime JSON.
 6. Snapshots the same integrity tuple after. Exit 2 if anything changed,
    including edits to already-dirty files.
 7. Writes uniquely named results under `$STATE/jobs/<job-id>/`
-   (default state: `$HOME/.local/state/ai-opencode`, never `XDG_STATE_HOME`).
+   (default state: `$HOME/.local/state/switchgear`, never `XDG_STATE_HOME`).
 8. Refuses any model not allowed by the profile.
 9. Rejects timeout outside 1..1800 (0 is not a disable).
 10. Owns the process group: TERM, grace, KILL, orphan check.

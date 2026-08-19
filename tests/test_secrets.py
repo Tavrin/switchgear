@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import secrets  # noqa: E402
+from switchgear import secrets  # noqa: E402
 
 
 class Detects(unittest.TestCase):

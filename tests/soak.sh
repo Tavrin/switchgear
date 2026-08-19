@@ -21,7 +21,7 @@ WORKTREES=${2:-4}
 CAP=${3:-3}
 
 PYTHON=/usr/bin/python3
-MAIN="$ROOT/python/ai_ops/__main__.py"
+MAIN="$ROOT/python/switchgear/__main__.py"
 MOCK="$ROOT/tests/helpers/mock_provider.py"
 
 WORK=$(mktemp -d -t aiops-soak-XXXXXX)
@@ -36,7 +36,7 @@ cleanup() {
   else
     echo >&2
     echo "kept for diagnosis: $WORK" >&2
-    echo "  ai-opencode --state $WORK/state jobs --all" >&2
+    echo "  switchgear --state $WORK/state jobs --all" >&2
   fi
   exit "$rc"
 }
@@ -46,10 +46,10 @@ echo "== soak: $JOBS jobs across $WORKTREES worktrees, concurrency cap $CAP =="
 echo "   work dir: $WORK"
 
 printf '{"max_concurrent_jobs": %d}\n' "$CAP" > "$BUDGET"
-export AI_OPS_BUDGET_FILE="$BUDGET"
-export AI_OPS_PROVIDER="$MOCK"
+export SWITCHGEAR_BUDGET_FILE="$BUDGET"
+export SWITCHGEAR_PROVIDER="$MOCK"
 # Keep the cool-down out of the way; this run is minutes long, not hours.
-export AI_OPS_CONCURRENCY_WAIT_S=120
+export SWITCHGEAR_CONCURRENCY_WAIT_S=120
 
 "$PYTHON" "$MAIN" --state "$STATE" state provision "$STATE" >/dev/null
 
@@ -123,7 +123,7 @@ echo "-- checking invariants --"
 SOAK_ROOT="$ROOT" "$PYTHON" - "$STATE" "$JOBS" "$CAP" <<'PY'
 import json, os, subprocess, sys
 state, expected, cap = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-main = os.path.join(os.environ["SOAK_ROOT"], "python", "ai_ops", "__main__.py")
+main = os.path.join(os.environ["SOAK_ROOT"], "python", "switchgear", "__main__.py")
 def cli(*args):
     return json.loads(subprocess.run(
         ["/usr/bin/python3", main, "--state", state, "--json", *args],

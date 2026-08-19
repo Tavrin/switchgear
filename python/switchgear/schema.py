@@ -9,7 +9,7 @@ from .errors import Refuse
 try:
     import jsonschema
 except ImportError as exc:  # pragma: no cover - fail closed
-    raise SystemExit("ai-opencode: REFUSING — jsonschema is required (no shallow fallback)") from exc
+    raise SystemExit("switchgear: REFUSING — jsonschema is required (no shallow fallback)") from exc
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCHEMA_DIR = _ROOT / "schemas"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live smoke test: exercises the paths tests/run.sh deliberately cannot.
 #
-# run.sh is hermetic and unsets AI_OPS_ALLOW_LIVE_PROVIDER on purpose -- a CI
+# run.sh is hermetic and unsets SWITCHGEAR_ALLOW_LIVE_PROVIDER on purpose -- a CI
 # suite must not spend money or depend on a network. But every significant defect
 # found on 2026-08-18 lived in the live path and passed the hermetic suite: the
 # mock's invented event vocabulary, header stripping that tripped the upstream
@@ -10,21 +10,21 @@
 # the repeatable version of the walk that found them.
 #
 # OPT-IN and it costs real money (a few cents). Requires:
-#   ~/.config/ai-ops/credentials/opencode-go   (mode 600)
-#   AI_OPS_LIVE=1
+#   ~/.config/switchgear/credentials/opencode-go   (mode 600)
+#   SWITCHGEAR_LIVE=1
 set -uo pipefail
 
-if [ "${AI_OPS_LIVE:-}" != "1" ]; then
-  echo "live smoke test skipped (set AI_OPS_LIVE=1 to run; it spends real credit)"
+if [ "${SWITCHGEAR_LIVE:-}" != "1" ]; then
+  echo "live smoke test skipped (set SWITCHGEAR_LIVE=1 to run; it spends real credit)"
   exit 0
 fi
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-CLI="$ROOT/bin/ai-opencode"
-PROVIDER="${AI_OPS_LIVE_PROVIDER:-$HOME/.opencode/bin/opencode}"
-SCOUT_MODEL="${AI_OPS_LIVE_SCOUT_MODEL:-opencode-go/deepseek-v4-flash}"
-REVIEW_MODEL="${AI_OPS_LIVE_REVIEW_MODEL:-opencode-go/kimi-k3}"
-TIMEOUT="${AI_OPS_LIVE_TIMEOUT:-300}"
+CLI="$ROOT/bin/switchgear"
+PROVIDER="${SWITCHGEAR_LIVE_PROVIDER:-$HOME/.opencode/bin/opencode}"
+SCOUT_MODEL="${SWITCHGEAR_LIVE_SCOUT_MODEL:-opencode-go/deepseek-v4-flash}"
+REVIEW_MODEL="${SWITCHGEAR_LIVE_REVIEW_MODEL:-opencode-go/kimi-k3}"
+TIMEOUT="${SWITCHGEAR_LIVE_TIMEOUT:-300}"
 
 [ -x "$PROVIDER" ] || { echo "FAIL: no provider at $PROVIDER"; exit 1; }
 
@@ -95,7 +95,7 @@ cat > envelope.json <<JSON
 JSON
 "$CLI" --state "$WORK/state" state provision "$WORK/state" >/dev/null || { echo "FAIL: provision"; exit 1; }
 
-export AI_OPS_ALLOW_LIVE_PROVIDER=1 AI_OPENCODE_TIMEOUT="$TIMEOUT"
+export SWITCHGEAR_ALLOW_LIVE_PROVIDER=1 AI_OPENCODE_TIMEOUT="$TIMEOUT"
 BASE=(--json --profile "$WORK/profile.json" --state "$WORK/state" --provider "$PROVIDER")
 
 echo "live smoke test  (scout/impl=$SCOUT_MODEL  review=$REVIEW_MODEL)"
@@ -114,7 +114,7 @@ TOK=$("$CLI" --profile "$WORK/profile.json" --state "$WORK/state" lease acquire 
         --dir "$WORK/wt" --mode bounded-write --owner live | grep '^lease=' | cut -d= -f2)
 [ -n "$TOK" ] && ok "lease acquired" || bad "lease" "no token"
 
-AI_OPS_WRITE=1 live_job "$WORK/write.json" write "$WORK/wt" implement \
+SWITCHGEAR_WRITE=1 live_job "$WORK/write.json" write "$WORK/wt" implement \
   --envelope "$WORK/envelope.json" --token "$TOK"
 [ "$(jq_ "$WORK/write.json" "['status']")" = "awaiting_review" ] \
   && ok "write lands in awaiting_review (never ok on its own)" \

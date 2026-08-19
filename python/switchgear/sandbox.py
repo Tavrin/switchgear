@@ -11,7 +11,7 @@ from .policy import CompiledPolicy
 TRUSTED_BWRAP = BWRAP
 
 # Fixed in-sandbox path for the brokered upstream socket.
-BROKER_SOCKET_PATH = "/run/ai-ops-broker.sock"
+BROKER_SOCKET_PATH = "/run/switchgear-broker.sock"
 BROKER_RELAY_PORT = 8_099
 
 
@@ -92,7 +92,7 @@ def build_credential_refresh_argv(
     So the controller triggers that refresh itself. Two properties keep it
     honest:
 
-    - agent-ops still NEVER reads the refresh token. The CLI that owns the
+    - switchgear still NEVER reads the refresh token. The CLI that owns the
       credential performs its own refresh; we only invoke it. That is why this
       generalises across providers instead of needing one hand-written OAuth
       flow per vendor, each of which would have to be guessed at.

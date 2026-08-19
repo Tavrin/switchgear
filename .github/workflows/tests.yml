@@ -32,8 +32,8 @@ jobs:
         env:
           # Point the operator-owned files at paths that cannot exist, so a
           # runner's own state can never influence a result.
-          AI_OPS_PROVIDERS_FILE: /nonexistent/providers.json
-          AI_OPS_VERIFIED_FILE: /nonexistent/verified.json
+          SWITCHGEAR_PROVIDERS_FILE: /nonexistent/providers.json
+          SWITCHGEAR_VERIFIED_FILE: /nonexistent/verified.json
         run: bash tests/run.sh
 
   portability:

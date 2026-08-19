@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quota readings and the budget agent-ops can actually enforce.
+"""Quota readings and the budget switchgear can actually enforce.
 
 Two separate things on purpose. The subscription pools that publish a reading
 (claude, codex) are NOT what this rail spends -- opencode-go publishes nothing --
@@ -20,8 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 
-from ai_ops import quota  # noqa: E402
-from ai_ops.errors import Refuse  # noqa: E402
+from switchgear import quota  # noqa: E402
+from switchgear.errors import Refuse  # noqa: E402
 
 
 class ExternalReadings(unittest.TestCase):
@@ -99,10 +99,10 @@ class Budget(unittest.TestCase):
         self.state = str(self.tmp / "state")
         os.makedirs(self.state)
         self.budget = self.tmp / "budget.json"
-        os.environ["AI_OPS_BUDGET_FILE"] = str(self.budget)
+        os.environ["SWITCHGEAR_BUDGET_FILE"] = str(self.budget)
 
     def tearDown(self):
-        os.environ.pop("AI_OPS_BUDGET_FILE", None)
+        os.environ.pop("SWITCHGEAR_BUDGET_FILE", None)
 
     def test_no_budget_file_means_unlimited_and_never_refuses(self):
         quota.assert_within_budget(self.state)  # must not raise
@@ -162,7 +162,7 @@ class CallCeiling(unittest.TestCase):
         import urllib.error
         import urllib.request
 
-        from ai_ops.broker import CredentialBroker
+        from switchgear.broker import CredentialBroker
 
         with CredentialBroker(
             "SECRET", upstream="http://127.0.0.1:9/v1",
@@ -189,7 +189,7 @@ class CallCeiling(unittest.TestCase):
             self.assertTrue(any("ceiling" in d for d in bk.denials))
 
     def test_no_ceiling_configured_means_no_limit(self):
-        from ai_ops.broker import CredentialBroker
+        from switchgear.broker import CredentialBroker
 
         with CredentialBroker("S", upstream="http://127.0.0.1:9/v1") as bk:
             self.assertIsNone(bk.max_calls)

@@ -36,7 +36,7 @@ common git dir is never writable in either mode.
 ## Network
 
 With a credential broker in play the sandbox also gets `--unshare-net` and the
-broker's unix socket bind-mounted at `/run/ai-ops-broker.sock`. A unix socket is
+broker's unix socket bind-mounted at `/run/switchgear-broker.sock`. A unix socket is
 a filesystem object and keeps working across a network namespace, so the job has
 **no outbound reachability whatsoever** except the one brokered upstream.
 Measured: `direct_internet: BLOCKED`, `via_broker: OK 200`.

@@ -19,21 +19,21 @@ from .state import StateRoot, atomic_write_json, read_json
 
 
 def _die(msg: str, code: int = 1) -> None:
-    print(f"ai-opencode: REFUSING — {msg}", file=sys.stderr)
+    print(f"switchgear: REFUSING — {msg}", file=sys.stderr)
     raise SystemExit(code)
 
 
 def _state_path(ns: argparse.Namespace) -> str:
-    p = ns.state or os.environ.get("AI_OPS_STATE")
+    p = ns.state or os.environ.get("SWITCHGEAR_STATE")
     if not p:
-        _die("state root required (--state or AI_OPS_STATE); provision it first")
+        _die("state root required (--state or SWITCHGEAR_STATE); provision it first")
     return os.path.abspath(p)
 
 
 def _profile_path(ns: argparse.Namespace) -> str:
     if ns.profile:
         return os.path.abspath(ns.profile)
-    envp = os.environ.get("AI_OPS_PROFILE")
+    envp = os.environ.get("SWITCHGEAR_PROFILE")
     if envp:
         return os.path.abspath(envp)
     here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "project-profiles", "example.json"))
@@ -50,6 +50,14 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             "mode": record["mode"],
             "role": record["role"],
             "model": record["model"]["id"],
+            # Additive. The adapter that ran the job, its real start, the effort
+            # actually sent and any time spent queued — all on the record, none
+            # of them reachable through the published projection until now.
+            "provider": record.get("provider"),
+            "started": record.get("started"),
+            "finished": record.get("finished"),
+            "effort": record.get("effort"),
+            "queued_s": record.get("queued_s"),
             "dir": record["dir"],
             "exit": record.get("exit"),
             "error": record.get("error"),
@@ -159,7 +167,7 @@ def _reachability(provider_id: str, _cache: dict[str, str] = {}) -> str:
             # the per-provider file is absent, which is exactly the case here,
             # so reporting it would tell the operator to install the key in the
             # one place that cannot hold a second provider.
-            want = os.environ.get("AI_OPS_PROVIDER_CREDENTIAL_FILE") or os.path.join(
+            want = os.environ.get("SWITCHGEAR_PROVIDER_CREDENTIAL_FILE") or os.path.join(
                 provmod.CREDENTIAL_DIR, name
             )
             verdict = f"UNREACHABLE (install a credential at {want}, mode 600)"
@@ -350,7 +358,7 @@ def cmd_lease(ns: argparse.Namespace) -> int:
 
 # --- background jobs ----------------------------------------------------------
 #
-# agent-ops blocked for the whole job, so every long run had to be hand-
+# switchgear blocked for the whole job, so every long run had to be hand-
 # backgrounded by its caller. A launch returns a job id immediately; the caller
 # then polls `status` and reads `logs --format digest` only if something looks
 # wrong. That is the same detached-job shape atelier's codex lane already
@@ -376,12 +384,12 @@ def launch_background(ns: argparse.Namespace) -> int:
     # Drop --background from the child's argv or it would launch forever.
     argv = [a for a in sys.argv[1:] if a != "--background"]
     child_env = dict(os.environ)
-    child_env["AI_OPS_JOB_ID"] = job_id
+    child_env["SWITCHGEAR_JOB_ID"] = job_id
     # The child re-execs this CLI without --background, so it cannot otherwise
     # tell it was launched detached. That distinction decides whether a full
     # concurrency queue refuses immediately (foreground: a caller at a terminal
     # wants to be told, not stalled) or waits for a slot.
-    child_env["AI_OPS_BACKGROUND_CHILD"] = "1"
+    child_env["SWITCHGEAR_BACKGROUND_CHILD"] = "1"
 
     with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
         proc = subprocess.Popen(
@@ -474,9 +482,9 @@ def cmd_resume(ns: argparse.Namespace) -> int:
         role=prior["role"],
         worktree=prior["dir"],
         prompt=ns.message,
-        provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
+        provider_path=ns.provider or os.environ.get("SWITCHGEAR_PROVIDER") or "",
         lease_token=getattr(ns, "token", None),
-        job_id=os.environ.get("AI_OPS_JOB_ID") or None,
+        job_id=os.environ.get("SWITCHGEAR_JOB_ID") or None,
         resume_session=session,
         resumed_from=ns.job,
     )
@@ -527,7 +535,7 @@ def cmd_wait(ns: argparse.Namespace) -> int:
             # to report and no exit code of its own. Say which, and fail.
             _emit({"job": ns.job, "state": state,
                    "detail": ("the process is gone and no result was written; "
-                              "`ai-opencode logs " + ns.job + "` has whatever "
+                              "`switchgear logs " + ns.job + "` has whatever "
                               "evidence it produced")}, ns,
                   text=lambda d: f"state={d['state']}")
             return 1
@@ -537,7 +545,7 @@ def cmd_wait(ns: argparse.Namespace) -> int:
                 f"job {ns.job} has no liveness record, so whether it is running "
                 "cannot be established — waiting would be waiting on nothing. "
                 "This is normal only for jobs written before liveness records "
-                "existed; check `ai-opencode logs` for what it produced."
+                "existed; check `switchgear logs` for what it produced."
             )
 
         if time.time() >= deadline:
@@ -548,9 +556,9 @@ def cmd_wait(ns: argparse.Namespace) -> int:
                    "timeout_s": int(ns.timeout)}, ns,
                   text=lambda d: f"state={d['state']} waited_out=true")
             print(
-                f"ai-opencode: REFUSING — stopped waiting after {int(ns.timeout)}s; "
+                f"switchgear: REFUSING — stopped waiting after {int(ns.timeout)}s; "
                 f"job {ns.job} is still {state}. Raise --timeout, or poll "
-                f"`ai-opencode status {ns.job}` instead. The job was NOT cancelled.",
+                f"`switchgear status {ns.job}` instead. The job was NOT cancelled.",
                 file=sys.stderr,
             )
             return 1
@@ -602,10 +610,10 @@ def cmd_run_like(ns: argparse.Namespace, mode: str, role: str, directory: str, p
         role=role,
         worktree=os.path.abspath(directory),
         prompt=prompt,
-        provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
+        provider_path=ns.provider or os.environ.get("SWITCHGEAR_PROVIDER") or "",
         envelope=envelope,
         lease_token=getattr(ns, "token", None),
-        job_id=os.environ.get("AI_OPS_JOB_ID") or None,
+        job_id=os.environ.get("SWITCHGEAR_JOB_ID") or None,
     )
     _print_job(rec, getattr(ns, "json", False))
     return jobstate.exit_code_for(rec["status"])
@@ -723,9 +731,9 @@ def cmd_review(ns: argparse.Namespace) -> int:
         role=ns.role,
         worktree=review_dir,
         prompt=prompt or "review",
-        provider_path=ns.provider or os.environ.get("AI_OPS_PROVIDER") or "",
+        provider_path=ns.provider or os.environ.get("SWITCHGEAR_PROVIDER") or "",
         envelope=env,
-        job_id=os.environ.get("AI_OPS_JOB_ID") or None,
+        job_id=os.environ.get("SWITCHGEAR_JOB_ID") or None,
         attachments=attachments,
     )
     parent = (env or {}).get("parent_job")
@@ -734,7 +742,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
         # only when a parent is being promoted. Bug #3: a standalone review left
         # review:null on disk, so the report existed only inside events.jsonl and
         # the human-readable outcome was lost once the sandbox home was reclaimed
-        # (the workaround was AI_OPS_KEEP_SANDBOX_HOME). The verdict belongs on
+        # (the workaround was SWITCHGEAR_KEEP_SANDBOX_HOME). The verdict belongs on
         # the record so `status <job> --full` shows it.
         from .adapters import get_adapter
 
@@ -752,7 +760,7 @@ def cmd_review(ns: argparse.Namespace) -> int:
             # the record must SAY so rather than silently reading null.
             report = {"verdict": None, "error": str(exc)}
             _persist_review_report(_state_path(ns), rec["job_id"], report, parent)
-            print(f"ai-opencode: reviewer produced no verdict: {exc}", file=sys.stderr)
+            print(f"switchgear: reviewer produced no verdict: {exc}", file=sys.stderr)
             return 1
         report = {"verdict": verdict, "findings": findings, "reviewed_files": reviewed_files}
         _persist_review_report(_state_path(ns), rec["job_id"], report, parent)
@@ -919,7 +927,7 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     # confident falsehood.
     if raw.strip() and not [n for n in normalized if n["event"] != "finished"]:
         print(
-            f"ai-opencode: WARNING — the {provider!r} adapter recognised nothing in "
+            f"switchgear: WARNING — the {provider!r} adapter recognised nothing in "
             f"{len(raw)} bytes of evidence. That usually means the stream was "
             "produced by a different provider; check --profile.",
             file=sys.stderr,
@@ -1230,7 +1238,7 @@ def cmd_quota(ns: argparse.Namespace) -> int:
     Deliberately reports two DIFFERENT things without blending them into one
     reassuring number: subscription pools that publish a reading (which this rail
     does not spend), and the measured spend of this state root (which it does).
-    The pool agent-ops actually bills -- opencode-go -- publishes no quota at all,
+    The pool switchgear actually bills -- opencode-go -- publishes no quota at all,
     so an "overall remaining" figure would be an invention.
     """
     from . import quota as quotamod
@@ -1334,7 +1342,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
         if not os.path.isfile(res_path):
             _die(
                 f"job {ns.job} has not finished, so it has no full record yet "
-                f"(state: {_live_state(ns)}). Use `ai-opencode status {ns.job}` "
+                f"(state: {_live_state(ns)}). Use `switchgear status {ns.job}` "
                 "for the live view, or `wait` for the finished one."
             )
         print(json.dumps(read_json(res_path), indent=2))
@@ -1454,7 +1462,7 @@ def cmd_promote(ns: argparse.Namespace) -> int:
     for which, job_id in (("review", ns.review), ("subject", ns.subject)):
         jd = root.job_dir(job_id)
         if not os.path.isdir(jd):
-            _die(f"no such {which} job: {job_id} (`ai-opencode jobs` lists them)")
+            _die(f"no such {which} job: {job_id} (`switchgear jobs` lists them)")
         if not os.path.isfile(os.path.join(jd, "result.json")):
             _die(
                 f"the {which} job {job_id} has no result record, so it has not "
@@ -1486,16 +1494,16 @@ def cmd_promote(ns: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="ai-opencode",
+        prog="switchgear",
         description=(
             "Run a coding agent inside a sandbox and keep evidence of what it did. "
             "Every command takes --json for a stable machine-readable contract. "
             "Exit codes: 0 ok, 1 refusal or error, 2 dirty worktree, 124 timeout. "
-            "Refusals print `ai-opencode: REFUSING — ...` on stderr and name a remedy."
+            "Refusals print `switchgear: REFUSING — ...` on stderr and name a remedy."
         ),
     )
-    p.add_argument("--profile", help="project profile JSON (default: AI_OPS_PROFILE, then the bundled example)")
-    p.add_argument("--state", help="state root holding jobs, leases and evidence (default: AI_OPS_STATE)")
+    p.add_argument("--profile", help="project profile JSON (default: SWITCHGEAR_PROFILE, then the bundled example)")
+    p.add_argument("--state", help="state root holding jobs, leases and evidence (default: SWITCHGEAR_STATE)")
     p.add_argument("--provider", help="absolute path to the provider binary; never a PATH lookup or a symlink")
     p.add_argument("--json", action="store_true", help="machine-readable output for programmatic callers")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1532,7 +1540,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rv.set_defaults(func=cmd_review)
 
-    wr = sub.add_parser("write", help="bounded write in a leased worktree (needs AI_OPS_WRITE=1)")
+    wr = sub.add_parser("write", help="bounded write in a leased worktree (needs SWITCHGEAR_WRITE=1)")
     wr.add_argument("dir", help="leased worktree to write in")
     wr.add_argument("role", help="role name from the profile (must be a bounded-write role)")
     wr.add_argument("--envelope", required=True)
@@ -1672,8 +1680,8 @@ def main(argv: list[str] | None = None) -> int:
         # exc.code, not a hardcoded 1: a Refuse carries the exit code the
         # contract promises for its case (DirtyWorktree is 2). Refuse itself
         # still defaults to 1.
-        print(f"ai-opencode: REFUSING — {exc}", file=sys.stderr)
+        print(f"switchgear: REFUSING — {exc}", file=sys.stderr)
         return exc.code
     except RailError as exc:
-        print(f"ai-opencode: {exc}", file=sys.stderr)
+        print(f"switchgear: {exc}", file=sys.stderr)
         return exc.code

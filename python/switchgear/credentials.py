@@ -25,7 +25,7 @@ instruction to re-login. It no longer does. Rather than write three refresh
 flows from documentation -- exactly the mistake this project keeps paying for --
 the provider's OWN CLI performs the refresh, invoked inside the sandbox on a
 COPY of its auth directory. So the invariant above still holds unchanged:
-agent-ops never reads the refresh token, it only invokes the program that owns
+switchgear never reads the refresh token, it only invokes the program that owns
 it. See refresh_via_own_cli below.
 
 THE ONE EXCEPTION, and it is scoped and named: a provider whose CLI validates
@@ -258,7 +258,7 @@ def refresh_via_own_cli(
     backup alongside). If it wipes the copy, errors, or produces something no
     better, the real store is never touched.
 
-    agent-ops still never reads the refresh token: the CLI that owns the
+    switchgear still never reads the refresh token: the CLI that owns the
     credential performs its own refresh. That is what makes one mechanism serve
     every provider instead of a hand-written OAuth flow per vendor.
     """
@@ -353,7 +353,7 @@ def refresh_via_own_cli(
                 json.load(fh)
         except Exception:
             print(
-                f"ai-opencode: WARNING — the refreshed session could not be "
+                f"switchgear: WARNING — the refreshed session could not be "
                 f"verified; the previous one is kept at {backup}. Remove it once "
                 "you have confirmed the login works.",
                 file=sys.stderr,
@@ -443,7 +443,7 @@ def load_oauth_credential(
         )
         raise Refuse(
             f"provider '{provider_id}' access token expired {-int(remaining)}s ago "
-            f"({path}): {fix}. agent-ops does not refresh it itself -- it never "
+            f"({path}): {fix}. switchgear does not refresh it itself -- it never "
             "reads the refresh token, which is the whole subscription"
         )
     return cred

@@ -26,7 +26,7 @@ def require_job_id(value: str) -> str:
     if not SAFE_JOB.match(value or ""):
         raise Refuse(
             f"unsafe job id: {value!r} — a job id is the uuid printed by the "
-            "command that created it (`ai-opencode jobs` lists them)"
+            "command that created it (`switchgear jobs` lists them)"
         )
     return value
 
@@ -110,7 +110,7 @@ def require_disjoint(a: str, b: str, label_a: str, label_b: str) -> None:
         raise Refuse(
             f"{label_a} and {label_b} must not overlap ({a} vs {b}). Put the state "
             "root somewhere outside every worktree it records jobs for — "
-            "/var/tmp/ai-ops-state or ~/.local/state/ai-ops are reasonable "
+            "/var/tmp/switchgear-state or ~/.local/state/switchgear are reasonable "
             "choices. The synthetic HOME is a writable bind under the state root, "
             "so nesting it inside a worktree punches a hole straight through "
             "readonly containment."
