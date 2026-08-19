@@ -129,7 +129,14 @@ class Usable(unittest.TestCase):
     def test_it_reports_containment_honestly(self):
         out = capmod.describe(build_parser(), None, None)
         self.assertEqual(out["containment"]["platform"], "linux-only")
-        self.assertIn("NOT a uid boundary", out["containment"]["note"])
+        note = out["containment"]["note"]
+        # This note used to say flatly "NOT a uid boundary", seven lines above a
+        # uid_boundary field reporting one. Machine-readable output contradicting
+        # itself is worse than a stale doc: it is what a caller decides on. The
+        # asymmetry is the fact, so assert the asymmetry rather than a phrase.
+        self.assertIn("readonly", note.lower())
+        self.assertIn("bounded-write", note.lower())
+        self.assertIn("uid_boundary", out["containment"])
         # A platform limit must come with what to do about it, like every other
         # bad news this tool reports.
         self.assertIn("VM", out["containment"]["elsewhere"])

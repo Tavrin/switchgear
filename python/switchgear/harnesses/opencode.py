@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .base import EFFORT_SUPPORTED, ProviderAdapter
+from .base import EFFORT_SUPPORTED, HarnessAdapter
 from .normalization import (
     _clip,
     _error_message,
@@ -18,7 +18,7 @@ from .normalization import (
 from ..errors import ProviderError
 
 
-class OpenCodeAdapter(ProviderAdapter):
+class OpenCodeAdapter(HarnessAdapter):
     """OpenCode 1.18.x.
 
     Every field below was read off a real captured stream

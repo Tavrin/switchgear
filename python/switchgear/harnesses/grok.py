@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .base import EFFORT_SUPPORTED, ProviderAdapter, TERMINAL_FAILED
+from .base import EFFORT_SUPPORTED, HarnessAdapter, TERMINAL_FAILED
 from .normalization import (
     _clip,
     _error_message,
@@ -19,7 +19,7 @@ from .normalization import (
 )
 
 
-class GrokAdapter(ProviderAdapter):
+class GrokAdapter(HarnessAdapter):
     """Grok CLI 1.0.x, headless (`-p --output-format streaming-json`).
 
     Every shape below was read off a real captured stream

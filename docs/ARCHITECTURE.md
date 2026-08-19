@@ -18,6 +18,29 @@ caller's own vocabulary at all: the envelope's `correlation` object is persisted
 onto the result and handed back verbatim, and is never read for policy, routing
 or permissions.
 
+## The nouns
+
+`provider` used to mean two different things, in the same record: the agent CLI
+that ran the job, and the service that served the model. The result schema had to
+carry a description explaining which was which.
+
+| noun | is | on a record |
+|---|---|---|
+| **harness** | the agent CLI that runs a job — Claude Code, Codex, Grok, OpenCode | `harness` |
+| **pool** | the service serving a model, named by the model id's prefix (`opencode-go/…`, `openrouter/…`) | `model.provider` |
+| **model** | the exact, pool-qualified model id | `model.id` |
+| **role** | a profile-level purpose (scout, implement, review) fixing model, mode and effort | `role` |
+| **job** | one execution: one agent, one process, one sandbox, one record | `job_id` |
+
+`provider` survives as an alias of `harness` and always carries the same value.
+
+Deliberately **not** called *upstream*: the registry already uses `upstream` for a
+pool's base URL (`providers.<id>.upstream`), so reusing it for the pool's name
+would replace one ambiguity with another.
+
+`switchgear capabilities` reports this table and the current alias list, so a
+caller never has to trust this file.
+
 ## Language disposition
 
 The 2026-08-16 remediation **moved the security-sensitive control plane

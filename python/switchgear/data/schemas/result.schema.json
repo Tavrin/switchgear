@@ -292,9 +292,13 @@
       "type": "number",
       "description": "seconds spent waiting for a concurrency slot (0 when unlimited)"
     },
+    "harness": {
+      "type": "string",
+      "description": "the agent CLI that ran this job -- claude, codex, grok, opencode. Distinct from model.provider, which names the POOL that served the model. Prefer this over the `provider` alias below."
+    },
     "provider": {
       "type": "string",
-      "description": "adapter that ran this job (the provider BINARY, not the model pool)"
+      "description": "alias of `harness`, kept for callers written before the noun was settled. Same value, always."
     },
     "agent_directed_content": {
       "type": "array",

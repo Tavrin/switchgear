@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .base import EFFORT_SUPPORTED, ProviderAdapter, TERMINAL_FAILED
+from .base import EFFORT_SUPPORTED, HarnessAdapter, TERMINAL_FAILED
 from .normalization import (
     _clip,
     _error_message,
@@ -19,7 +19,7 @@ from .normalization import (
 )
 
 
-class CodexAdapter(ProviderAdapter):
+class CodexAdapter(HarnessAdapter):
     """Codex CLI 0.147.x, headless (`exec --json`).
 
     Read off a real captured stream (tests/fixtures/codex-real-scout.jsonl).

@@ -153,8 +153,12 @@ def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
             "backend": "bwrap",
             "platform": "linux-only",
             "note": ("The worktree is the only writable mount for bounded-write; "
-                     "the git dir is read-only. This is a mount/network boundary, "
-                     "NOT a uid boundary."),
+                     "the git dir is read-only. Readonly jobs additionally run "
+                     "under a subuid boundary where the machine can establish "
+                     "one — see uid_boundary below, and `security` on each "
+                     "record for what a given job actually got. Bounded-write "
+                     "runs as the invoking user by design: the controller has to "
+                     "read back and commit what the worker produced."),
             "elsewhere": ("Run inside a Linux VM or container — every containment "
                           "property holds unchanged. There is no unsandboxed "
                           "fallback. See docs/PORTABILITY.md."),
@@ -162,6 +166,27 @@ def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
             # helper binaries that a given machine may not have.
             "uid_boundary": _uid_boundary_state(),
         },
+    }
+    # The nouns, from the executable contract rather than a document -- a reader
+    # here is usually an agent that will never open docs/.
+    out["vocabulary"] = {
+        "harness": "the agent CLI that runs a job: claude, codex, grok, opencode",
+        "pool": ("the service that serves a model, named by the prefix of a model "
+                 "id (opencode-go/..., openrouter/...). This is `model.provider` "
+                 "on a record. Its base URL is the registry's `upstream`"),
+        "model": "the exact model id, pool-qualified",
+        "role": "a profile-level purpose (scout, implement, review) that fixes model, mode and effort",
+        "job": "one execution: one agent, one process, one sandbox, one record",
+        "note": ("`provider` historically meant BOTH the harness and the pool, in "
+                 "the same record. Prefer `harness` for the binary and "
+                 "`model.provider` for the pool."),
+    }
+    out["deprecated"] = {
+        # Kept working, named here so a caller can migrate deliberately instead
+        # of discovering it from a doc that may be stale.
+        "result.provider": "alias of result.harness; same value, retained indefinitely",
+        "adapters.ProviderAdapter": "alias of harnesses.HarnessAdapter; same class object",
+        "switchgear.adapters": "re-export shim for switchgear.harnesses",
     }
     if profile:
         out["profile"] = {

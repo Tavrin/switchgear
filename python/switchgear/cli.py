@@ -84,6 +84,10 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             # Additive. The adapter that ran the job, its real start, the effort
             # actually sent and any time spent queued — all on the record, none
             # of them reachable through the published projection until now.
+            # `harness` is the settled noun for the agent CLI that ran the job;
+            # `provider` is the same value under the older name, which meant both
+            # this and the model pool. Both stay.
+            "harness": record.get("harness") or record.get("provider"),
             "provider": record.get("provider"),
             "started": record.get("started"),
             "finished": record.get("finished"),

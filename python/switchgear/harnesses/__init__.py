@@ -56,6 +56,7 @@ from .base import (  # noqa: F401  (re-exported: this is the package's surface)
     TERMINAL_FAILED,
     TERMINAL_NEEDS_INPUT,
     TEXT_LIMIT,
+    HarnessAdapter,
     ProviderAdapter,
     validate_adapter,
 )

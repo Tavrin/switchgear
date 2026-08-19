@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .base import EFFORT_SUPPORTED, ProviderAdapter, TERMINAL_FAILED
+from .base import EFFORT_SUPPORTED, HarnessAdapter, TERMINAL_FAILED
 from .normalization import (
     _clip,
     _error_message,
@@ -19,7 +19,7 @@ from .normalization import (
 )
 
 
-class ClaudeCodeAdapter(ProviderAdapter):
+class ClaudeCodeAdapter(HarnessAdapter):
     """Claude Code 2.1.x, headless (`-p --output-format stream-json --verbose`).
 
     Read off a real captured stream (tests/fixtures/claude-real-scout.jsonl),

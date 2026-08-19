@@ -30,7 +30,7 @@ EFFORT_UNSUPPORTED = "unsupported"
 
 
 
-class ProviderAdapter:
+class HarnessAdapter:
     """The interface a provider must implement, in one place.
 
     Adding a provider (a Mistral CLI, a new harness) used to mean knowing that
@@ -190,6 +190,18 @@ class ProviderAdapter:
 
 #: Methods with no possible default. Checked at registration so a half-written
 #: adapter fails at import, not partway through a job that already cost money.
+#: The old name, bound to the same class. `provider` was doing two jobs at once
+#: in this codebase -- the executable agent runtime (Claude Code, Codex, Grok,
+#: OpenCode) and the API/credential/model service behind it (Anthropic, OpenAI,
+#: xAI, OpenRouter, opencode-go). A result record literally carries both senses:
+#: a top-level `provider` naming the binary and a `model.provider` naming the
+#: pool, which is why the schema had to explain the difference in a description.
+#:
+#: The settled vocabulary is harness / upstream / model / target. This alias
+#: exists so the rename costs no caller anything; it is not deprecated in the
+#: sense of "will break", and there is no second class to drift.
+ProviderAdapter = HarnessAdapter
+
 REQUIRED_METHODS = (
     "argv",
     "normalize",
@@ -211,9 +223,9 @@ def validate_adapter(name: str, adapter: Any) -> None:
     """
     from ..errors import Refuse
 
-    if not isinstance(adapter, ProviderAdapter):
+    if not isinstance(adapter, HarnessAdapter):
         raise Refuse(
-            f"adapter for {name!r} must subclass ProviderAdapter so it inherits "
+            f"adapter for {name!r} must subclass HarnessAdapter so it inherits "
             "the documented defaults and the completeness check"
         )
     if getattr(adapter, "name", "") != name:
@@ -224,7 +236,7 @@ def validate_adapter(name: str, adapter: Any) -> None:
         )
     missing = [
         m for m in REQUIRED_METHODS
-        if getattr(type(adapter), m, None) is getattr(ProviderAdapter, m, None)
+        if getattr(type(adapter), m, None) is getattr(HarnessAdapter, m, None)
     ]
     if missing:
         raise Refuse(

@@ -841,6 +841,13 @@ def run_job(
             # the stream back. Without it every projection fell back to the
             # ambient profile and, failing that, silently to "opencode".
             "provider": adapter.name,
+            # Same value, settled noun. `provider` meant two different things in
+            # one record -- this key (the executable that ran the job) and
+            # model.provider (the pool that served the model) -- so a reader had to
+            # know which sense applied from context. `harness` names the runtime,
+            # `upstream` names the service. `provider` stays as an alias: nothing
+            # that reads it has to change, and there is one source for both.
+            "harness": adapter.name,
             "model": model,
             # What the provider was actually TOLD to use, not what the profile
             # asked for -- null means no effort was sent, which is the honest
