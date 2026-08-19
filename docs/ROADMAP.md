@@ -60,20 +60,31 @@ looks like orchestration.
 ## 6. A read-only job's answer is only available truncated or raw
 
 The result record carries the worker's answer as `exitSummary`, clipped at 400
-characters. The only unclipped path is `logs --format full`, which is the raw
-provider stream and is explicitly not for an agent's context. Fan out ten scouts
-and you get ten truncated paragraphs.
+characters. Fan out ten scouts and you get ten truncated paragraphs.
 
 The answer *is* the product of a read-only job, so this is the gap most likely to
 turn a job that already succeeded into wasted spend.
 
-## 7. Nothing correlates a job with the caller's own identifiers
+**Narrowed, not closed.** The unclipped path used to be `logs --format full`
+alone — the raw provider stream, explicitly not for an agent's context.
+`logs --format normalized` now gives the complete run in the provider-neutral
+vocabulary, so the full text is reachable without parsing a harness's own format.
 
-The task envelope is closed to extra keys and nothing caller-supplied is
-persisted, so a supervisor driving a dozen jobs holds the id-to-intent map only
-in its own context. Lose that context and the state root is a dozen anonymous
-uuids. Several other gaps — deduplication, recovery after a supervisor dies,
-cancelling a whole wave — are downstream of this one.
+What is still missing is a *bounded* answer: `normalized` is uncapped and
+`digest` is capped by bytes rather than by relevance, so neither is "the answer,
+in full, and nothing else". A caller fanning out scouts still has to choose
+between a clipped summary and more than it wants.
+
+## 7. ~~Nothing correlates a job with the caller's own identifiers~~ — closed
+
+The envelope now carries a bounded `correlation` object, persisted onto the
+record and handed back verbatim, plus a repeatable `--correlation key=value` flag
+for the commands that take no envelope. It is deliberately inert: never read for
+policy, routing or permissions, and a test walks `job.py` to keep it that way.
+
+What this unblocked but did not itself deliver: deduplication, recovery after a
+supervisor dies, and cancelling a whole wave. Those are still the caller's to
+build; they were simply impossible before.
 
 ## 8. A crashed job cannot be attributed
 

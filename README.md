@@ -126,6 +126,7 @@ It runs someone else's agent and records what happened.
 | | |
 |---|---|
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | the caller contract — read this first |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | scope, authority, data flow, public contracts |
 | [docs/ADDING-A-PROVIDER.md](docs/ADDING-A-PROVIDER.md) | adding an agent CLI (7 methods, ~25 lines) |
 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | what is defended, and what is not |
 | [docs/CONTAINMENT.md](docs/CONTAINMENT.md) | how the sandbox is built |

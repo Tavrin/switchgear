@@ -1,26 +1,80 @@
 # Architecture
 
-Generic provider/worker substrate. Not a manager.
+Four sections, in the order they matter: what this is for, who decides what, how
+a job actually flows, and what is promised to callers.
+
+> **When this file and the running code disagree, the code is right and this file
+> is a bug.** `switchgear capabilities` is generated from the parser, the harness
+> registry and the runtime rather than maintained by hand, and the JSON schemas
+> are validated on every write. Those are the executable contract. This document
+> explains it; it does not define it. That rule exists because stale
+> documentation here has already caused real drift, including a security property
+> stated backwards in three places at once.
+
+## 1. Scope
+
+Switchgear runs **one** agent job inside an OS boundary and produces a record of
+what happened. One invocation is one agent, one process, one sandbox, one
+outcome.
 
 ```
-caller (out of scope: orchestrator, CI, shell, human, another agent)
+caller (out of scope: orchestrator, CI, shell script, human, another agent)
     │ profile + envelope + leased cwd
     ▼
-switchgear (contracts, integrity, process, leases, review predicates)
-    │ adapter, one per provider binary
+switchgear (contracts, containment, process, leases, evidence, review predicates)
+    │ harness adapter, one per agent CLI
     ▼
 OpenCode · Claude Code · Codex · Grok
+    │
+    ▼
+model pools (opencode-go, openrouter, anthropic, openai, xai …)
 ```
 
-Project policy (tracker, tiers, product gates, locks, deploy, model taste)
-stays in the **profile** and the **caller**. Switchgear does not interpret a
-caller's own vocabulary at all: the envelope's `correlation` object is persisted
-onto the result and handed back verbatim, and is never read for policy, routing
-or permissions.
+It is deliberately **not** an orchestrator: no queue, no board, no scheduling, no
+fan-out, no retry policy. The concurrency cap is admission control, not
+scheduling — it decides whether a job may start, never which job should exist or
+in what order. That line is the reason the tool is small enough to trust, and a
+change that crosses it will be refused however well written.
 
-## The nouns
+Callers are peers. An orchestrator, a shell script, CI, a human at a terminal and
+an agent delegating to another agent all get the same contract, and Switchgear
+imports nothing from any of them.
 
-`provider` used to mean two different things, in the same record: the agent CLI
+## 2. Authority
+
+The distinction that governs almost every design decision here. Three domains,
+one sentence each:
+
+| domain | question | owner |
+|---|---|---|
+| **worker execution** | did this agent do what the record says, inside the boundary? | **Switchgear** |
+| **project verification** | do the project's own gates pass on the result? | the **caller** |
+| **workflow and merge** | should this land? | never Switchgear |
+
+Two consequences that are easy to get wrong.
+
+**Project verification needs its own containment, and Switchgear cannot provide
+it.** Verification commands are as fallible and as hostile as the coding agent
+that produced the change, and by the time they run Switchgear is finished and out
+of the loop. A caller that sandboxes the worker and then runs the project's test
+suite unconfined has secured the wrong half.
+
+**`promote` is not permission to merge.** It attests that the worker did what the
+record claims. Switchgear's gate is an **interlock review** — an uncommitted
+worker delta, before any project verification. A caller's is a **project
+review** — the exact head that passed its tests. Different times, different
+material, so stacking them is defence in depth rather than duplication; but which
+layer holds semantic acceptance is an operator's call, set in the operator-owned
+budget file as `acceptance: interlock | external`.
+
+Policies express **requirements**; evidence records **realized properties**. Each
+record carries a `security` block read back off the sandbox argv that was really
+constructed, so a caller states what it needs and tests the outcome rather than
+knowing how namespaces are built here.
+
+## 3. The nouns
+
+`provider` used to mean two different things in the same record: the agent CLI
 that ran the job, and the service that served the model. The result schema had to
 carry a description explaining which was which.
 
@@ -38,39 +92,65 @@ Deliberately **not** called *upstream*: the registry already uses `upstream` for
 pool's base URL (`providers.<id>.upstream`), so reusing it for the pool's name
 would replace one ambiguity with another.
 
-`switchgear capabilities` reports this table and the current alias list, so a
-caller never has to trust this file.
+The adapter is keyed by **harness**, never by pool. One binary serves several
+pools, so conflating them picks the wrong adapter the moment a second pool
+appears — and then reads a stream with a parser that cannot recognise it, which
+has produced a confident false failure report before.
+
+## 4. Data flow
+
+1. Load and schema-validate the project profile; compile policy.
+2. Resolve role → model id → registry metadata (`model_family`, `vendor_family`,
+   effort values, cost/trust slots). Effort is validated per **model**, not per
+   harness.
+3. Validate cwd as a git worktree; require `$STATE` disjoint from it.
+4. Admission: budget, disk headroom, concurrency slot, exclusive lease.
+5. Snapshot tree + git identity (+ sibling worktrees, canaries if provided).
+6. Start the credential broker; build the bwrap argv; spawn the harness in its
+   own session and process group.
+7. **Evidence streams as it arrives** — the harness's stdout lands in
+   `evidence/events.jsonl` through a controller-drained pipe, so a running job is
+   observable and a crash cannot cost the record.
+8. Snapshot again. Readonly: byte-identical tree. Bounded-write: git identity
+   unchanged, in-tree edits expected, escapes fail the job.
+9. Normalize the stream into `evidence/events.v1.jsonl`, compute the four outcome
+   facts, freeze the delta, write and validate `result.json`.
+10. Bounded writes finish `awaiting_review`. A later readonly review with
+    `parent_job` attaches an independence record; `promote` binds the change to
+    reviewer-attested evidence under the worktree lock.
+
+## 5. Public contracts
+
+Four, and only these:
+
+| contract | where | stability |
+|---|---|---|
+| the CLI's argv and exit codes | `switchgear capabilities` | 0 ok · 1 refusal/error · 2 dirty · 124 timeout |
+| `result.json` | `data/schemas/result.schema.json` | additive keys; `schema_version` moves only on a breaking change |
+| the normalized event stream | `evidence/events.v1.jsonl`, `logs --format normalized` | versioned in the filename and on every line |
+| the task envelope | `data/schemas/task-envelope.schema.json` | closed; `correlation` is the caller's own space |
+
+`evidence/events.jsonl` is **not** a contract. It is the harness's own stdout,
+byte for byte — forensic evidence whose shape is whichever CLI ran. Consume the
+normalized stream instead.
 
 ## Language disposition
 
-The 2026-08-16 remediation **moved the security-sensitive control plane
-to Python** (`python/switchgear/`). The independent review of
-`47e21bdd` showed Bash could not own config isolation, leases, process
-trees, schema authority, or sandbox construction safely.
+The 2026-08-16 remediation **moved the security-sensitive control plane to
+Python** (`python/switchgear/`). An independent review showed Bash could not own
+config isolation, leases, process trees, schema authority or sandbox construction
+safely.
 
 Bash remaining: `bin/switchgear` is a tiny launcher that `exec`s
-`/usr/bin/python3` on the committed `__main__.py`. No security decision
-is encoded in the shell wrapper. The shell files that remain are tests
-and policy gates under `tests/`; nothing under `python/` sources shell.
-
-## Data flow
-
-1. Load and schema-validate the project profile.
-2. Resolve role → model id → catalog metadata (`model_family`, `vendor_family`,
-   reserved capability/trust/cost slots).
-3. Validate cwd as a git worktree; isolate `$STATE` from the target.
-4. Snapshot tree + git identity (+ other worktrees, canaries if provided).
-5. Spawn the provider in a new session/process group.
-6. Snapshot again. Readonly: byte-identical tree. Write: git identity
-   unchanged; in-tree edits expected; escapes fail the rail.
-7. Capture events under `$STATE/jobs/<job-id>/`. Write jobs parse a handoff
-   **there**, never in the source tree.
-8. Write jobs finish `awaiting_review`. A later readonly review with
-   `parent_job` attaches an independence record. Required predicates are
-   profile policy.
+`/usr/bin/python3` on the committed `__main__.py`. No security decision is
+encoded in the shell wrapper. The other shell files are tests and policy gates
+under `tests/`; nothing under `python/` sources shell.
 
 ## OS containment
 
-Provider permissions + canaries are defense in depth. Production write
-requires an OS-level write boundary (`bwrap` on Linux). See
-`CONTAINMENT.md`. No silent fallback.
+Harness permissions and canaries are defence in depth. The boundary itself is the
+kernel's: `bwrap` on Linux, with no silent fallback — if the backend is missing
+or unusable, the job is refused. Readonly jobs additionally run under a subuid
+boundary where the machine can establish one. See
+[CONTAINMENT.md](CONTAINMENT.md) for what is actually constructed and
+[THREAT-MODEL.md](THREAT-MODEL.md) for what is and is not defended.
