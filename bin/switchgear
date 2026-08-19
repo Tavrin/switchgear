@@ -7,4 +7,14 @@ if command -v readlink >/dev/null 2>&1; then
   RESOLVED=$(readlink -f -- "$0" 2>/dev/null) && [ -n "$RESOLVED" ] && SELF=$RESOLVED
 fi
 ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
-exec /usr/bin/python3 -s "$ROOT/python/switchgear/__main__.py" "$@"
+# Prefer the interpreter that is actually active. Hardcoding /usr/bin/python3
+# meant the repo launcher silently ignored a virtualenv, so a contributor could
+# `pip install -e .` into a venv and still be running the system Python.
+#
+# -s stays: the control plane must not pick up the user site-packages directory.
+PY_BIN=${SWITCHGEAR_PYTHON:-}
+if [ -z "$PY_BIN" ] && [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python3" ]; then
+  PY_BIN=$VIRTUAL_ENV/bin/python3
+fi
+[ -n "$PY_BIN" ] || PY_BIN=$(command -v python3 2>/dev/null) || PY_BIN=/usr/bin/python3
+exec "$PY_BIN" -s "$ROOT/python/switchgear/__main__.py" "$@"

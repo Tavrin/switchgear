@@ -61,23 +61,46 @@ class Detects(unittest.TestCase):
 
 
 class DoesNotCryWolf(unittest.TestCase):
+    # Files that legitimately contain the very patterns this detector looks for:
+    # the detector and its tests, and the module that emits the handoff/review
+    # block templates into a worker's instructions. A commit touching one of
+    # these is not "ordinary code" with respect to this check.
+    SELF_REFERENTIAL = (
+        "python/switchgear/injection.py",
+        "tests/test_injection.py",
+        "python/switchgear/policy.py",
+        "docs/THREAT-MODEL.md",
+    )
+
     def test_real_commit_diffs_are_almost_all_clean(self):
         """Measured on what the gate actually reads — diffs, not whole files.
 
-        The one commit that fires is a test fixture legitimately containing the
-        handoff format: a true positive with a benign cause, whose consequence is
-        'a human decides', not 'rejected'."""
+        Commits touching the detector itself, or the module that emits the
+        handoff/review templates, are excluded: they contain these patterns
+        BECAUSE that is their job, and counting them would make the test measure
+        this repo's subject matter rather than its false-positive rate. That
+        exclusion is why the threshold can stay low enough to mean something.
+        """
         shas = subprocess.run(["git", "log", "--format=%h", "-40"], cwd=ROOT,
                               capture_output=True, text=True).stdout.split()
         if len(shas) < 10:
             self.skipTest("not enough history")
-        fired = 0
+        fired, considered = [], 0
         for sha in shas:
+            touched = subprocess.run(
+                ["git", "show", "--format=", "--name-only", sha],
+                cwd=ROOT, capture_output=True, text=True).stdout
+            if any(f in touched for f in self.SELF_REFERENTIAL):
+                continue
+            considered += 1
             diff = subprocess.run(["git", "show", "--format=", "--no-color", sha],
                                   cwd=ROOT, capture_output=True, text=True).stdout
             if scan(diff, sha):
-                fired += 1
-        self.assertLessEqual(fired, 3, f"{fired}/{len(shas)} real diffs fired")
+                fired.append(sha)
+        self.assertGreater(considered, 5, "excluded too much to mean anything")
+        self.assertLessEqual(
+            len(fired), 3,
+            f"{len(fired)}/{considered} ordinary diffs fired: {fired}")
 
     def test_captured_provider_streams_are_clean(self):
         for path in glob.glob(str(ROOT / "tests" / "fixtures" / "*-real-scout.jsonl")):

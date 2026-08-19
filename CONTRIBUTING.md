@@ -28,6 +28,17 @@ $ switchgear doctor
 The suite is hermetic: it runs against a committed mock provider, never a real
 one, so it costs nothing and needs no credentials. It must stay that way.
 
+To run one suite while iterating, call it directly — each is a standalone
+unittest file:
+
+```console
+$ python3 tests/test_adversarial.py                     # the whole file
+$ python3 tests/test_adversarial.py RailTests.test_wait_blocks_and_answers_like_a_foreground_run
+$ python3 tests/test_injection.py -v
+```
+
+`bash tests/run.sh` is what CI runs, and it is the one that must be green.
+
 `tests/soak.sh` is opt-in and takes minutes. Run it if you touch concurrency,
 leases, the state root, or anything that only fails under load — it has already
 found two races that nothing else did.
@@ -77,6 +88,20 @@ in several places.
 
 Please run the full suite before opening a PR. If it is flaky, that is a bug —
 say so rather than re-running until green.
+
+**What CI does** (`.github/workflows/tests.yml`), on every push and PR:
+
+1. **hermetic** — installs bubblewrap and runs `bash tests/run.sh` on a runner
+   with no agent CLIs and no credentials, with the operator config files pointed
+   at paths that cannot exist. If a test needs something from the machine it is
+   running on, it fails here.
+2. **packaging** — builds the wheel, installs it into a clean virtualenv, and
+   runs the tool from *outside* the source tree. This exists because a packaging
+   break once shipped that every in-tree check passed.
+3. **portability** — fails on any absolute `/home` or `/Users` path in the
+   package or its tests.
+
+CI does not run the soak or anything live; neither should it.
 
 ## Commits and PRs
 
