@@ -64,7 +64,12 @@ _FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
 def extract_object(text: str, key: str) -> dict[str, Any] | None:
     """Find a JSON object carrying `key`, from a fenced block or raw braces."""
-    candidates: list[str] = [m.group(1) for m in _FENCE.finditer(text)]
+    # Fenced blocks, LAST first — same rule the bare-span scan below already
+    # applies, and for the same reason: models restate. Taking the first meant a
+    # reviewer that wrote a draft verdict early and its real one later had the
+    # draft adopted, including a verdict block echoed out of the diff it was
+    # shown. Its final word is the one it stands behind.
+    candidates: list[str] = [m.group(1) for m in _FENCE.finditer(text)][::-1]
     # Also scan bare brace-balanced spans, last first: models often restate.
     depth, start = 0, None
     spans: list[str] = []

@@ -530,6 +530,13 @@ Each job writes `<state>/jobs/<job-id>/`:
 `sandbox-home/` is reclaimed after the record is written; set
 `AI_OPS_KEEP_SANDBOX_HOME=1` to retain it for forensics.
 
+**Retaining it keeps whatever the sandbox held, including credentials.** For a
+fallback-tier provider (Grok today) that home contains a live access token at
+`.grok/auth.json`, written there because its CLI validates its session locally.
+The output secret scanner does not cover it — it reads the evidence stream and
+stderr, not the home. Treat a retained home as sensitive, and delete it when the
+investigation is done.
+
 ## Writing an adapter
 
 An adapter needs four things, all already available:

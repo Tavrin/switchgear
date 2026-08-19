@@ -66,6 +66,12 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             "resumed": record.get("resumed"),
         }, indent=2))
         return
+    # status first, and error when there is one. Text mode used to print
+    # model/dir/exit/result/meta/job and nothing else, so a human running a
+    # failed scout saw `exit=1` and no reason.
+    print(f"status={record['status']}")
+    if record.get("error"):
+        print(f"error={str(record['error'])[:400]}")
     print(f"model={record['model']['id']}")
     print(f"dir={record['dir']}")
     print(f"exit={record.get('exit')}")
@@ -208,9 +214,19 @@ def cmd_models(ns: argparse.Namespace) -> int:
                     stdin=subprocess.DEVNULL,
                 ).stdout or ""
             except Exception as exc:
+                # The message, not just the class: "an unusable provider is
+                # undiagnosable" is not an acceptable answer from a listing.
                 rows.append({"provider": pname, "listable": True,
-                             "error": type(exc).__name__})
+                             "error": f"{type(exc).__name__}: {exc}"[:200]})
                 continue
+            finally:
+                from .paths import safe_rmtree
+
+                try:
+                    safe_rmtree(home, must_be_under=tempfile.gettempdir(),
+                                label="models probe workspace")
+                except Exception:
+                    pass
             found = []
             for line in out.splitlines():
                 tok = line.strip().lstrip("*-").strip().split()[0] if line.strip() else ""

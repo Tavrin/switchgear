@@ -298,17 +298,25 @@ class WorkerLock:
         # Validate only AFTER holding the lock. Reading the token first and
         # writing it back afterwards let a concurrent re-acquire be clobbered by
         # a stale token, resurrecting a revoked lease (luna-4).
-        token = load_token(self.root, self.ident)
-        if token["lease_uuid"] != self.token_uuid:
-            raise Refuse("forged lease token")
-        if token["realpath"] != self.ident.realpath:
-            raise Refuse("lease worktree mismatch")
-        if token["st_dev"] != self.ident.st_dev or token["st_ino"] != self.ident.st_ino:
-            raise Refuse("lease worktree identity mismatch")
-        if token.get("mode") and token["mode"] != self.mode:
-            raise Refuse("lease mode mismatch")
-        token["job_id"] = self.job_id
-        atomic_write_json(os.path.join(d, "token.json"), token)
+        # Every refusal below happens while the flock is HELD, and __exit__ does
+        # not run for an exception raised in __enter__ -- so releasing has to be
+        # explicit here. It leaked both the lock and the fd; harmless for a CLI
+        # that then exits, a hang for any in-process caller or retry.
+        try:
+            token = load_token(self.root, self.ident)
+            if token["lease_uuid"] != self.token_uuid:
+                raise Refuse("forged lease token")
+            if token["realpath"] != self.ident.realpath:
+                raise Refuse("lease worktree mismatch")
+            if token["st_dev"] != self.ident.st_dev or token["st_ino"] != self.ident.st_ino:
+                raise Refuse("lease worktree identity mismatch")
+            if token.get("mode") and token["mode"] != self.mode:
+                raise Refuse("lease mode mismatch")
+            token["job_id"] = self.job_id
+            atomic_write_json(os.path.join(d, "token.json"), token)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
         return token
 
     def __exit__(self, *exc: Any) -> None:

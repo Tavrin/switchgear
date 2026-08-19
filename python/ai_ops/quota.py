@@ -241,6 +241,9 @@ def rollup(state_path: str, since_ts: float = 0.0) -> dict[str, Any]:
             # invite a caller to route everything there believing it is free, so
             # the two cases are labelled rather than blended.
             row["metered"] = row["cost_usd"] > 0
+            # True when some of this row's spend came from compacted history,
+            # whose per-day totals carry no per-model job count.
+            row.setdefault("jobs_partial", False)
         return sorted(rows, key=lambda r: -r["cost_usd"])
 
     # Fold in compacted history, or a `quota --rollup` after a compaction would
@@ -267,6 +270,12 @@ def rollup(state_path: str, since_ts: float = 0.0) -> dict[str, Any]:
             for bucket, key in ((by_provider, provider), (by_model, model)):
                 slot = bucket.setdefault(key, {"cost_usd": 0.0, "jobs": 0})
                 slot["cost_usd"] += float(mcost or 0.0)
+                # The rollup keeps a per-DAY job count, not a per-model one, so
+                # the exact split cannot be recovered. Mark the row rather than
+                # leave its count silently short of the total, which is what it
+                # did: after a compaction the per-row counts and the headline
+                # figure disagreed with nothing to say why.
+                slot["jobs_partial"] = True
 
     unmetered = sorted(k for k, v in by_provider.items() if v["cost_usd"] <= 0)
     return {
