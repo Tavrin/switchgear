@@ -1,0 +1,44 @@
+{
+  "name": "example-claude",
+  "provider": "claude",
+  "timeout_s": 600,
+  "timeout_min": 1,
+  "timeout_max": 1800,
+  "models": {
+    "allow": [
+      "claude/claude-haiku-4-5-20251001",
+      "claude/claude-sonnet-5"
+    ],
+    "deny": []
+  },
+  "roles": {
+    "scout": {
+      "model": "claude/claude-haiku-4-5-20251001",
+      "mode": "readonly"
+    },
+    "review": {
+      "model": "claude/claude-sonnet-5",
+      "mode": "readonly"
+    },
+    "implement": {
+      "model": "claude/claude-sonnet-5",
+      "mode": "bounded-write"
+    }
+  },
+  "review": {
+    "required_after_write": true,
+    "independence": {
+      "different_job": "required",
+      "different_model": "required",
+      "different_family": "preferred",
+      "different_provider": "optional"
+    }
+  },
+  "worktree": {
+    "require_linked_worktree_for_write": true,
+    "require_lease_for_write": true,
+    "allow_primary_for_readonly": true
+  },
+  "write_enabled": false,
+  "commands": {}
+}

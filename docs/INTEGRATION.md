@@ -39,8 +39,8 @@ change meaning. Without `--json` the output is `key=value` lines for humans.
 
 ### The atelier lane contract
 
-Spec: `atelier:specs/wave-3/switchgear-adapter.md` (owner-confirmed, atelier main
-`04a3f07`). switchgear's side of it:
+Switchgear's side of the contract an orchestrator adapter needs. It was written
+against one real consumer, but nothing in it is specific to that consumer:
 
 - **Capabilities** the lane declares: `canResume: true` (sessionId-based),
   `commitsOwnWork: false` (the git dir is a read-only mount, so atelier's
@@ -95,7 +95,7 @@ delta — which is exactly what atelier refuses at merge.
 
 This depends on atelier writing the token **before** invoking switchgear.
 Confirmed in their code, not assumed: the token is written at worktree
-preparation (`dispatch.mjs:6205`) strictly before `agent.launch` (`:6279`), on
+preparation (`its worktree-preparation step`) strictly before `agent.launch` (`:6279`), on
 every path — verify, post-merge and merge-scratch checkouts all write it at
 creation. Recorded as a contract on their side, with the undertaking that
 switchgear is told first if that ordering ever changes. If it ever lands

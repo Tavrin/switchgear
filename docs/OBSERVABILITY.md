@@ -134,7 +134,7 @@ gives the quota work its input.
 
 ## Consumption by atelier
 
-Confirmed by `atelier-fable-agent` against atelier main `7479671`, with file:line
+Confirmed against the consuming orchestrator's source, with file:line
 references so it can be re-verified. This section is **fact**, not inference.
 
 ### Write to the codex adapter shape
@@ -149,7 +149,7 @@ So "append-only JSONL + job id on stdout" does **not** fight the dispatcher — 
 is the better-behaved pattern, because it survives daemon restarts and the pipe
 model cannot. Build the adapter to the codex shape.
 
-**New constraint (ATT-006):** adapters implement `executionEnv(base)` and the
+**New constraint (a tracked change in the consuming orchestrator):** adapters implement `executionEnv(base)` and the
 dispatcher records an *execution profile* — a digest of the exact spawn env plus
 the resolved executable path — at first spawn, enforced on resume. A stable
 absolute launcher path makes this trivial; a "latest version wins" resolver is
@@ -180,12 +180,12 @@ The straw man was missing fields atelier actually consumes
 | `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
 | terminal `status` ∈ `completed` / `completed_empty` / `needs_input` | `needs_input` is load-bearing: it parks the ticket back to the operator |
 | `exitSummary` text | shown on the record |
-| `text{content}` | mid-run display; atelier truncates to 400 chars per line (`dispatch.mjs:4711`) |
+| `text{content}` | mid-run display; atelier truncates to 400 chars per line (measured in the consuming orchestrator) |
 
 **Drop `changed_files` from the atelier-facing contract.** Atelier never trusts
 agent-reported file lists: it derives the result manifest itself from git at
-finalization (ATT-002) and validates the landed tree against it at merge
-(ATT-004). Keep it for our own viewer if useful; atelier will ignore it.
+finalization (a tracked change in the consuming orchestrator) and validates the landed tree against it at merge
+(a tracked change in the consuming orchestrator). Keep it for our own viewer if useful; atelier will ignore it.
 
 `tool{name,target}` is rendered only as text there — keep it minimal.
 
@@ -230,7 +230,7 @@ durable session/thread identifier surfaced in events, or resume cannot exist.
 
 ### The verify collision is shared, and unresolved on both sides
 
-Atelier has the *same* problem. Since ATT-003 verification runs in a fresh
+Atelier has the *same* problem. Since a tracked change in the consuming orchestrator verification runs in a fresh
 detached checkout with pre/post probes, and the post status uses
 `--untracked-files=all --ignored=matching` — so a Python suite creating
 `__pycache__` there would raise `EATELIER_VERIFICATION_MUTATED_WORKTREE`. Their
@@ -260,7 +260,7 @@ verify survivable.
 Bounded **at write time, not summarised after**: the full stream goes only to an
 append-only per-dispatch JSONL on disk; emitted lines truncate to 400 chars;
 verify output keeps head 1KB + tail 1KB with a parsed failure collector
-(`dispatch.mjs:4689-4690`); the record carries only summary fields. The UI tails
+(measured in the consuming orchestrator); the record carries only summary fields. The UI tails
 the file, a delegating agent reads the record.
 
 **Their one correction to the tiering above, and it is important:** make the

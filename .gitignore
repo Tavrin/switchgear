@@ -30,5 +30,6 @@ providers.json
 verified-providers.json
 credentials/
 
-# The opt-in live smoke test is uncommitted on purpose: it spends real money.
-tests/live.sh
+# tests/live.sh IS committed. It is the opt-in live smoke test — it spends real
+# money and is never run by CI, but it is the repeatable version of the walk
+# that found the defects the hermetic suite structurally cannot.

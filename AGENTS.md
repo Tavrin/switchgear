@@ -17,8 +17,8 @@ Orientation, in reading order:
 | file | what it tells you |
 |---|---|
 | `docs/INTEGRATION.md` | the caller contract |
-| `docs/HANDOFF.md` §6 | invariants that must not regress, each with the bug that earned it |
-| `docs/HANDOFF.md` §7 | what is unfinished, hardest last |
+| `docs/INVARIANTS.md` | invariants that must not regress, each with the bug that earned it |
+| `docs/ROADMAP.md` | what is unfinished, and why each gap is still open |
 | `docs/ADDING-A-PROVIDER.md` | the adapter seam |
 | `docs/THREAT-MODEL.md` | what is defended and what is not |
 | `docs/FRICTION-AUDIT.md` | failure modes from a real multi-agent deployment, checked against this code |
@@ -95,10 +95,12 @@ off the stream rather than hardcoding it.
 - **Never commit a state root, a captured home, or a credential.** A retained
   sandbox home can hold a live access token. `.gitignore` covers the usual
   shapes; check `git status` before committing anyway.
-- **Do not weaken a guard to make a test pass.** If `test_no_project_nouns.sh`,
-  `test_no_machine_paths.sh`, the bare-`rmtree` check or the
-  no-provider-execution-outside-bwrap check fails, it has found something. One of
-  those caught a regression by the author within minutes of it landing.
+- **Do not weaken a guard to make a test pass.** If `test_no_machine_paths.sh`,
+  the bare-`rmtree` check or the no-provider-execution-outside-bwrap check fails,
+  it has found something. Two of those caught regressions by the author within
+  minutes of landing. (`test_no_project_nouns.sh` ships with an empty noun list
+  and so cannot fail by default — it is there for consumers who want to keep
+  their own project's names out of a reusable substrate.)
 - **Scope discipline.** Fix what was asked. If you find something else that looks
   serious, report it with evidence and stop; do not expand into it.
 

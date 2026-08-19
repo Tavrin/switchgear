@@ -20,7 +20,12 @@ class StateRoot:
         self.path = reject_symlinks(os.path.abspath(path), "state")
         marker = os.path.join(self.path, MARKER)
         if not os.path.isdir(self.path):
-            raise Refuse(f"state root does not exist (provision it first): {self.path}")
+            raise Refuse(
+                f"state root does not exist: {self.path}. Create it with "
+                f"`switchgear state provision {self.path}`. A state root holds "
+                "job records and evidence; put it outside every worktree it "
+                "records jobs for."
+            )
         if os.path.islink(self.path):
             raise Refuse("state root is a symlink")
         if not os.path.isfile(marker) or os.path.islink(marker):

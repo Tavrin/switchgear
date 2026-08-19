@@ -10,9 +10,28 @@ as it arrives, translates that stream into a single normalised vocabulary, and
 writes a structured result record.
 
 ```console
-$ switchgear --state ~/.local/state/switchgear scout . "Where is auth checked?"
-$ switchgear --state ~/.local/state/switchgear jobs
-1f6d5bdf  ok  scout  claude/claude-haiku-4-5  4s  $0.0486  my-repo
+$ switchgear state provision ~/.local/state/switchgear
+$ SWITCHGEAR_STATE=~/.local/state/switchgear
+
+$ switchgear --profile example-claude.json \
+    --provider "$(switchgear providers --provider claude | sed -n 2p | awk '{print $2}')" \
+    scout . "Where is auth checked?"
+```
+
+Four things are required and none of them is optional, by design: a **state
+root** (where evidence lives), a **profile** (which model each role uses), an
+explicit **`--provider`** path (there is no `PATH` lookup — the binary that runs
+is the one you named), and `SWITCHGEAR_ALLOW_LIVE_PROVIDER=1` the first time you
+point it at a real agent rather than a test double. Each is a separate refusal
+naming exactly what to do next; `switchgear doctor` walks you through the rest.
+
+Example profiles for each provider are in `project-profiles/`.
+
+Once a job has run:
+
+```console
+$ switchgear jobs
+1f6d5bdf  ok  scout  claude/claude-haiku-4-5-20251001  4s  $0.0486  my-repo
 ```
 
 ## One interface, four agents
@@ -57,10 +76,13 @@ Almost all of that gate is digests and identity rather than a model's opinion.
 Linux only. Requires Python 3.11+, `bubblewrap`, and `git`.
 
 ```console
-$ sudo apt install bubblewrap          # or your distro's equivalent
-$ pip install switchgear
-$ switchgear doctor                    # tells you what is missing and how to fix it
+$ sudo apt install bubblewrap        # or your distro's equivalent
+$ git clone https://github.com/Tavrin/switchgear && cd switchgear
+$ pip install .
+$ switchgear doctor                  # tells you what is missing and how to fix it
 ```
+
+Not on PyPI yet, so install from source for now.
 
 `doctor` is the intended starting point. Every check that reports a problem also
 says what to do about it.
@@ -95,8 +117,9 @@ It runs someone else's agent and records what happened.
 - **Provider CLIs update often.** Their flags are checked automatically; their
   event vocabulary is only checked against a captured fixture, so `doctor` tells
   you when a fixture has aged out.
-- **It has not run under sustained real-world load.** A synthetic soak at 40
-  concurrent jobs passes; that is not the same thing.
+- **It has not run under sustained real-world load.** A synthetic soak of 60
+  jobs against a concurrency cap of 3 passes, with the cap holding exactly; that
+  is not the same as real use.
 
 ## Documentation
 
@@ -107,6 +130,8 @@ It runs someone else's agent and records what happened.
 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | what is defended, and what is not |
 | [docs/CONTAINMENT.md](docs/CONTAINMENT.md) | how the sandbox is built |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | what is Linux-bound and what to do elsewhere |
+| [docs/INVARIANTS.md](docs/INVARIANTS.md) | properties that must not regress, each with the bug that earned it |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | what is unfinished, and why each gap is still open |
 | [CONTRIBUTING.md](CONTRIBUTING.md) · [AGENTS.md](AGENTS.md) | for humans · for AI agents |
 
 ## Status

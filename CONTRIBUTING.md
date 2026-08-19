@@ -18,7 +18,7 @@ measured. "I ran it and this happened" beats "this should work".
 ## Getting set up
 
 ```console
-$ git clone https://github.com/etiennedoux/switchgear && cd switchgear
+$ git clone https://github.com/Tavrin/switchgear && cd switchgear
 $ sudo apt install bubblewrap        # or your distro's equivalent
 $ pip install -e .
 $ bash tests/run.sh                  # ~2 minutes, no network, no spend

@@ -35,9 +35,9 @@ classifiers = [
 dependencies = ["jsonschema>=4.0"]
 
 [project.urls]
-Homepage = "https://github.com/etiennedoux/switchgear"
-Source = "https://github.com/etiennedoux/switchgear"
-Issues = "https://github.com/etiennedoux/switchgear/issues"
+Homepage = "https://github.com/Tavrin/switchgear"
+Source = "https://github.com/Tavrin/switchgear"
+Issues = "https://github.com/Tavrin/switchgear/issues"
 
 [project.scripts]
 switchgear = "switchgear.__main__:main"
@@ -50,4 +50,9 @@ where = ["python"]
 include = ["switchgear*"]
 
 [tool.setuptools.package-data]
-switchgear = ["../../python/switchgear/data/schemas/*.json", "../../models/*.json", "../../commands/*.json"]
+# Globs are relative to the PACKAGE directory. These were
+# "../../models/*.json" and "../../commands/*.json", which resolve to
+# repo-root directories that no longer exist, so an installed copy shipped its
+# schemas and nothing else: doctor failed on registry.models and `models`
+# refused. Found by installing into a clean virtualenv, not by reading.
+switchgear = ["data/schemas/*.json", "data/models/*.json", "data/commands/*.json", "data/profiles/*.json"]

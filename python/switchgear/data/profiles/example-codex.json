@@ -1,0 +1,43 @@
+{
+  "name": "example-codex",
+  "provider": "codex",
+  "timeout_s": 600,
+  "timeout_min": 1,
+  "timeout_max": 1800,
+  "models": {
+    "allow": [
+      "codex/gpt-5.6-sol"
+    ],
+    "deny": []
+  },
+  "roles": {
+    "scout": {
+      "model": "codex/gpt-5.6-sol",
+      "mode": "readonly"
+    },
+    "review": {
+      "model": "codex/gpt-5.6-sol",
+      "mode": "readonly"
+    },
+    "implement": {
+      "model": "codex/gpt-5.6-sol",
+      "mode": "bounded-write"
+    }
+  },
+  "review": {
+    "required_after_write": true,
+    "independence": {
+      "different_job": "required",
+      "different_model": "required",
+      "different_family": "preferred",
+      "different_provider": "optional"
+    }
+  },
+  "worktree": {
+    "require_linked_worktree_for_write": true,
+    "require_lease_for_write": true,
+    "allow_primary_for_readonly": true
+  },
+  "write_enabled": false,
+  "commands": {}
+}

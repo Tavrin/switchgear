@@ -7,7 +7,7 @@ serious kind of bug this project can have.
 ## Reporting a vulnerability
 
 Please report privately, not as a public issue: open a
-[GitHub security advisory](https://github.com/etiennedoux/switchgear/security/advisories/new).
+[GitHub security advisory](https://github.com/Tavrin/switchgear/security/advisories/new).
 
 Useful to include: what you did, what happened, and — if you have one — a
 reproduction against a disposable worktree. A `switchgear doctor --json` output

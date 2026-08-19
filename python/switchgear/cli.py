@@ -26,7 +26,12 @@ def _die(msg: str, code: int = 1) -> None:
 def _state_path(ns: argparse.Namespace) -> str:
     p = ns.state or os.environ.get("SWITCHGEAR_STATE")
     if not p:
-        _die("state root required (--state or SWITCHGEAR_STATE); provision it first")
+        _die(
+            "state root required: pass --state <dir> or set SWITCHGEAR_STATE. "
+            "Create one with `switchgear state provision <dir>` — it holds job "
+            "records and evidence, and belongs outside every worktree it "
+            "records jobs for."
+        )
     return os.path.abspath(p)
 
 
@@ -50,8 +55,17 @@ def _profile_path(ns: argparse.Namespace) -> str:
     envp = os.environ.get("SWITCHGEAR_PROFILE")
     if envp:
         return os.path.abspath(envp)
-    here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "project-profiles", "example.json"))
-    return here
+    # Package-relative. This resolved two directories ABOVE the package, which
+    # is only ever right in a source checkout: an installed copy landed on
+    # `site-packages/project-profiles/example.json`, which does not exist, and
+    # `models` refused with "missing profile" on a perfectly good install.
+    bundled = os.path.join(os.path.dirname(__file__), "data", "profiles", "example.json")
+    if os.path.isfile(bundled):
+        return bundled
+    # Source checkout: the editable copy at the repo root stays authoritative,
+    # so editing it during development still takes effect.
+    return os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "project-profiles", "example.json"))
 
 
 def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
@@ -295,13 +309,18 @@ def cmd_models(ns: argparse.Namespace) -> int:
     # orchestrator is most likely to call programmatically.
     from . import health as healthmod
 
-    try:
-        seen = healthmod.observe(_state_path(ns))
-        by_model = {m["model"]: m for m in seen["models"]}
-    except Exception:
-        # Health is an observation over past jobs. A state root that does not
-        # exist yet is not a reason to refuse to list models.
-        by_model = {}
+    # Health is an observation over PAST jobs, so no state root simply means no
+    # observations. `_state_path` raises SystemExit, which `except Exception`
+    # does not catch — so adding health quietly turned `models` into a command
+    # that refuses without a state root, on an install where none exists yet.
+    by_model: dict[str, Any] = {}
+    state_path = _optional_state_path(ns)
+    if state_path:
+        try:
+            seen = healthmod.observe(state_path)
+            by_model = {m["model"]: m for m in seen["models"]}
+        except Exception:
+            by_model = {}
 
     entries = []
     for m in allow:

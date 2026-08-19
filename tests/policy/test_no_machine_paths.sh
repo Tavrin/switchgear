@@ -11,9 +11,19 @@ set -euo pipefail
 ROOT=$(cd "$(dirname -- "$0")/../.." && pwd)
 cd "$ROOT"
 
+# Only directories that actually exist, and the set is asserted non-empty below.
+# This used to name `models commands schemas` — which have since moved inside the
+# package — and swallow the resulting errors with 2>/dev/null, so it printed a
+# scan set it had not scanned.
+SCAN=()
+for d in python bin tests project-profiles; do
+  [ -d "$d" ] && SCAN+=("$d")
+done
+[ ${#SCAN[@]} -gt 0 ] || { echo "FAIL: no directories to scan" >&2; exit 1; }
+
 hits=$(grep -rn -E '(^|[^A-Za-z0-9_])/(home|Users)/[a-z]' \
         --include='*.py' --include='*.sh' --include='*.json' --include='*.toml' \
-        python bin tests project-profiles models commands schemas 2>/dev/null \
+        "${SCAN[@]}" 2>/dev/null \
       | grep -v '^tests/fixtures/' \
       | grep -v 'test_no_machine_paths.sh' || true)
 
@@ -26,4 +36,4 @@ if [ -n "$hits" ]; then
   echo "path and skip when nothing is installed." >&2
   exit 1
 fi
-echo "ok - no machine-specific paths (scanned: python bin tests project-profiles models commands schemas)"
+echo "ok - no machine-specific paths (scanned: ${SCAN[*]})"

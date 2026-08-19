@@ -36,6 +36,39 @@ jobs:
           SWITCHGEAR_VERIFIED_FILE: /nonexistent/verified.json
         run: bash tests/run.sh
 
+  packaging:
+    # The hermetic suite runs in-tree, so it cannot see a packaging break. One
+    # shipped: package-data globs pointed at directories that no longer existed,
+    # and an installed copy had its schemas and nothing else — doctor failed on
+    # registry.models and `models` refused. Nothing in CI installed the wheel, so
+    # nothing noticed. This job is that missing check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Build and install the wheel into a clean venv
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install --quiet build
+          /tmp/venv/bin/python -m build --wheel --outdir /tmp/dist .
+          /tmp/venv/bin/pip install --quiet /tmp/dist/*.whl
+      - name: Run it from OUTSIDE the source tree
+        # cd away from the repo: resolving data relative to a repo root is
+        # exactly the bug this job exists to catch.
+        working-directory: /tmp
+        run: |
+          set -euo pipefail
+          /tmp/venv/bin/switchgear --help > /dev/null
+          /tmp/venv/bin/switchgear capabilities > /dev/null
+          /tmp/venv/bin/switchgear models > /dev/null
+          /tmp/venv/bin/switchgear providers > /dev/null
+          /tmp/venv/bin/switchgear state provision /tmp/ci-state > /dev/null
+          # doctor exits 1 only on a FAIL; warnings are expected on a bare runner
+          # with no agent CLIs installed.
+          /tmp/venv/bin/switchgear --state /tmp/ci-state doctor
+
   portability:
     # The suite passing on the author's machine says nothing about the package
     # working anywhere else -- absolute paths under one home directory are

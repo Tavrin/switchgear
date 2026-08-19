@@ -2,7 +2,7 @@
 
 What is actually true of each candidate provider on this machine, established by
 running the binaries rather than by reading their documentation. Two claims in
-`HANDOFF.md` turned out to be wrong; both are corrected below.
+an earlier internal note turned out to be wrong; both are corrected below.
 
 The adapter seam is `python/switchgear/adapters.py`: `argv()`, `version_argv()`,
 `agent_name()`, `session_id()`, `normalize()`. `get_adapter()` keys off the
@@ -90,7 +90,7 @@ a broker the network namespace applies and that call would not leave the sandbox
 
 ## Grok — isolation proven, vocabulary captured, adapter shipped
 
-`HANDOFF.md` states Grok has "**no** agent/permission model at all, so it would
+An earlier internal note stated Grok has "**no** agent/permission model at all, so it would
 rely purely on the OS boundary." That is not what the binary reports.
 `~/.grok/bin/grok --help` shows:
 
@@ -283,7 +283,7 @@ this section expected:
    that an expired session refuses does not, and this section said so long after
    it stopped being true.
 
-Still open: nothing in this list. See `docs/HANDOFF.md` §7 for what remains
+Still open: nothing in this list. See `docs/ROADMAP.md` for what remains
 across the project.
 
 ## Prior art (researched 2026-08-18) — the pattern is proven, with two corrections
