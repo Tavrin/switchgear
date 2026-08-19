@@ -836,9 +836,17 @@ def run_job(
             if (execution == jobstate.EXECUTION_COMPLETED
                     and integrity_outcome == jobstate.INTEGRITY_CLEAN):
                 # A bounded write that got this far has a delta the controller
-                # will freeze, and nothing has accepted it yet.
+                # will freeze, and nothing has accepted it yet. WHO decides that
+                # is operator-owned: by default this tool's own interlock review,
+                # or the caller when an operator has said so. The freeze and the
+                # evidence are identical either way -- what changes is only who
+                # may declare the change acceptable.
                 change_state = jobstate.CHANGE_FROZEN
-                acceptance = jobstate.ACCEPTANCE_AWAITING_REVIEW
+                acceptance = (
+                    jobstate.ACCEPTANCE_AWAITING_REVIEW
+                    if jobstate.acceptance_authority() == jobstate.ACCEPTANCE_INTERLOCK
+                    else jobstate.ACCEPTANCE_AWAITING_EXTERNAL
+                )
 
         status = jobstate.project_status(
             execution=execution,

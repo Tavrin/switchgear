@@ -2928,6 +2928,100 @@ class NormalizedStream(unittest.TestCase):
         self.assertEqual(out["v"], 1)
 
 
+class AcceptanceAuthority(unittest.TestCase):
+    """Who may declare a frozen change acceptable.
+
+    Two different questions that both got called "the review": switchgear's
+    INTERLOCK on worker output, run on an uncommitted delta before any project
+    verification, and a caller's PROJECT ACCEPTANCE, run on the exact head that
+    passed its tests. Stacked they are defence in depth; conflated they are two
+    overlapping sources of truth.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="aiops-acc-"))
+        self.budget = self.tmp / "budget.json"
+        self._saved = os.environ.get("SWITCHGEAR_BUDGET_FILE")
+        os.environ["SWITCHGEAR_BUDGET_FILE"] = str(self.budget)
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("SWITCHGEAR_BUDGET_FILE", None)
+        else:
+            os.environ["SWITCHGEAR_BUDGET_FILE"] = self._saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_it_defaults_to_the_interlock_when_nothing_is_configured(self):
+        """An operator who has never heard of this setting gets the stricter
+        behaviour. A default that hands acceptance away silently would be a
+        security change disguised as a refactor."""
+        from switchgear import jobstate as js
+
+        self.assertFalse(self.budget.exists())
+        self.assertEqual(js.acceptance_authority(), js.ACCEPTANCE_INTERLOCK)
+
+    def test_an_operator_can_hand_acceptance_to_the_caller(self):
+        from switchgear import jobstate as js
+
+        self.budget.write_text(json.dumps({"acceptance": "external"}))
+        self.assertEqual(js.acceptance_authority(), js.ACCEPTANCE_EXTERNAL)
+
+    def test_a_nonsense_value_refuses_rather_than_defaulting(self):
+        """Falling back to a default here would silently pick a side on the one
+        question the setting exists to answer."""
+        from switchgear import jobstate as js
+        from switchgear.errors import Refuse
+
+        self.budget.write_text(json.dumps({"acceptance": "whatever"}))
+        with self.assertRaises(Refuse) as ctx:
+            js.acceptance_authority()
+        # A refusal must name the remedy, like every other refusal here.
+        self.assertIn("interlock", str(ctx.exception))
+        self.assertIn("external", str(ctx.exception))
+
+    def test_it_is_not_a_profile_field_and_not_a_cli_flag(self):
+        """Operator-owned for the same reason daily_usd is: a project that can
+        vote itself out of review does not have review. A flag would be worse --
+        a worker's own output can reach a caller's argv."""
+        profile_schema = json.loads(
+            (ROOT / "python" / "switchgear" / "data" / "schemas"
+             / "project-profile.schema.json").read_text()
+        )
+        self.assertNotIn("acceptance", profile_schema.get("properties", {}))
+        cli_src = (ROOT / "python" / "switchgear" / "cli.py").read_text()
+        self.assertNotIn('"--acceptance"', cli_src)
+
+    def test_promote_refuses_when_acceptance_is_external(self):
+        """The mode is only worth anything if the gate actually declines."""
+        from switchgear import review as reviewmod
+        from switchgear.errors import Refuse
+
+        subject = self.tmp / "result.json"
+        subject.write_text(json.dumps({
+            "job_id": "j1", "status": "awaiting_external_review", "generation": 0,
+            "acceptance": {"state": "awaiting_external_review"},
+        }))
+        artifact = {
+            "subject_job": "j1", "reviewer_job": "j2",
+            "model": {"id": "p/m", "provider": "p"}, "role": "review",
+            "independence": {"different_job": True, "different_model": True,
+                             "different_family": True, "different_provider": True}, "verdict": "promote",
+            "subject_head": "h", "subject_tree_digest": "x",
+            "subject_policy_digest": "d", "reviewed_dir": str(self.tmp),
+            "reviewed_tree_digest": "x", "models_registry_digest": "r",
+            "reviewed_files": [],
+        }
+        with self.assertRaises(Refuse) as ctx:
+            reviewmod.promote(
+                subject_path=str(subject), review_artifact=artifact,
+                live_head="h", live_tree_digest="x", generation=0,
+            )
+        msg = str(ctx.exception)
+        self.assertIn("owned by the caller", msg)
+        self.assertIn("acceptance=interlock", msg)
+
+
 class StatusProjectionUnit(unittest.TestCase):
     """`status` is derived from four facts, and its meaning has not changed.
 
@@ -2982,7 +3076,8 @@ class StatusProjectionUnit(unittest.TestCase):
             for e, i, a, c in itertools.product(
                 ["completed", "provider_error", "timeout"],
                 ["clean", "dirty"],
-                ["not_required", "awaiting_review", "accepted"],
+                ["not_required", "awaiting_review", "accepted",
+                 "awaiting_external_review"],
                 ["none", "frozen"],
             )
         }
@@ -3006,7 +3101,8 @@ class StatusProjectionUnit(unittest.TestCase):
             js.project_status(execution=e, integrity=i, acceptance=a)
             for e in ("completed", "provider_error", "timeout")
             for i in ("clean", "dirty")
-            for a in ("not_required", "awaiting_review", "accepted")
+            for a in ("not_required", "awaiting_review", "accepted",
+                      "awaiting_external_review")
         }
         self.assertEqual(allowed, reachable,
                          f"enum values the code cannot produce: {allowed - reachable}")

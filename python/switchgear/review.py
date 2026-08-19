@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from . import jobstate
+from . import jobstate, quota
 from .errors import Refuse
 from .schema import validate
 from .state import atomic_write_json, read_json
@@ -72,6 +72,19 @@ def promote(
     subject = read_json(subject_path)
     if subject.get("generation", 0) != generation:
         raise Refuse("concurrent promotion (generation mismatch)")
+    if subject.get("status") == jobstate.ACCEPTANCE_AWAITING_EXTERNAL:
+        # Refusing rather than promoting anyway is the whole point of the mode.
+        # An operator said acceptance belongs to the caller; promoting here would
+        # hand back an `accepted` this tool has no standing to assert, and the
+        # caller's own gate would then be reviewing something already marked good.
+        raise Refuse(
+            "this job's acceptance is owned by the caller, not by switchgear "
+            f"(acceptance=external in {quota.budget_path()}). The change is frozen "
+            "and its evidence is complete -- what switchgear can attest is that "
+            "the worker did what the record says, inside the boundary. Whether it "
+            "should land is the caller's decision to record. Set "
+            "acceptance=interlock if you want this tool's review gate back."
+        )
     if subject.get("status") != "awaiting_review":
         raise Refuse(f"subject is not awaiting_review ({subject.get('status')})")
     freeze = subject.get("freeze") or {}

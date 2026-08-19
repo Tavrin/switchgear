@@ -65,6 +65,53 @@ ACCEPTANCE_AWAITING_REVIEW = "awaiting_review"
 ACCEPTANCE_ACCEPTED = "accepted"
 
 
+#: Who owns semantic acceptance of a bounded write.
+#:
+#: `interlock` (the default, and what this tool has always done): Switchgear's
+#: own review gate decides. A write finishes `awaiting_review` and `promote`
+#: binds it to reviewer-attested evidence.
+#:
+#: `external`: the caller has explicitly assumed acceptance. A write still
+#: freezes and still produces the same evidence -- Switchgear's responsibility,
+#: proving what the worker did inside the boundary, is unchanged -- but nothing
+#: here will mark it accepted, and `promote` refuses rather than pretending to
+#: an authority it was told it does not have.
+#:
+#: The distinction this exists to make legible: Switchgear's review is an
+#: INTERLOCK on worker output, run on an uncommitted delta before any project
+#: verification. A caller's review is PROJECT ACCEPTANCE, run on the exact head
+#: that passed its tests. Stacked, those are defence in depth; conflated, they
+#: are two overlapping sources of truth and it is not obvious which you have.
+ACCEPTANCE_INTERLOCK = "interlock"
+ACCEPTANCE_EXTERNAL = "external"
+ACCEPTANCE_AWAITING_EXTERNAL = "awaiting_external_review"
+
+
+def acceptance_authority() -> str:
+    """Operator-owned, never caller-supplied and never profile-declared.
+
+    In the same file as `daily_usd` and for the same reason: a project that can
+    vote itself out of review does not have review. A CLI flag would be worse
+    still -- the worker's own output can reach a caller's argv.
+
+    Absent means `interlock`, so an operator who has never heard of this setting
+    gets the stricter behaviour.
+    """
+    from .errors import Refuse
+    from .quota import budget_path, load_budget
+
+    value = (load_budget().get("acceptance") or ACCEPTANCE_INTERLOCK)
+    if value not in (ACCEPTANCE_INTERLOCK, ACCEPTANCE_EXTERNAL):
+        raise Refuse(
+            f"acceptance must be {ACCEPTANCE_INTERLOCK!r} or "
+            f"{ACCEPTANCE_EXTERNAL!r} in {budget_path()}, got {value!r}. "
+            f"{ACCEPTANCE_INTERLOCK!r} means this tool's review gate decides; "
+            f"{ACCEPTANCE_EXTERNAL!r} means the caller has assumed that "
+            "responsibility and `promote` will refuse."
+        )
+    return value
+
+
 def project_status(
     *, execution: str, integrity: str, acceptance: str, change: str = CHANGE_NONE
 ) -> str:
@@ -87,6 +134,13 @@ def project_status(
         return "dirty"
     if acceptance == ACCEPTANCE_AWAITING_REVIEW:
         return "awaiting_review"
+    if acceptance == ACCEPTANCE_AWAITING_EXTERNAL:
+        # Deliberately NOT reported as `awaiting_review`. The job is not waiting
+        # on this tool's gate -- there is no gate here to wait for -- and a
+        # caller that polled for `awaiting_review` and promoted would be acting
+        # on a decision nothing made. Only reachable when an operator has set
+        # acceptance=external, so no default behaviour changes.
+        return "awaiting_external_review"
     return "ok"
 
 

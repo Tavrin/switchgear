@@ -147,6 +147,39 @@ not have a ceiling.
 Absent budget file means unlimited, and `quota` says so rather than implying a
 limit exists.
 
+### Who accepts a change
+
+The same operator-owned file decides which layer holds semantic acceptance:
+
+```json
+{"acceptance": "interlock"}
+```
+
+- **`interlock`** (default, and what this tool has always done) — Switchgear's own
+  review gate decides. A bounded write finishes `awaiting_review` and `promote`
+  binds it to reviewer-attested evidence.
+- **`external`** — you have assumed that responsibility. The write still freezes
+  and still produces identical evidence, but it finishes
+  **`awaiting_external_review`** and `promote` refuses.
+
+Two different reviews, and it is worth keeping the names apart:
+
+| | runs on | answers |
+|---|---|---|
+| **interlock review** (here) | the uncommitted worker delta, before any project verification | did this worker produce something acceptable to hand back? |
+| **project review** (yours) | the exact head that passed your tests | should this land? |
+
+They are not redundant — different times, different material — so running both is
+defence in depth. Set `external` when your own gate is the one that matters and
+you do not want to pay for a second model review.
+
+What Switchgear attests does not change either way: that the worker did what the
+record says, inside the boundary. `promote` was never permission to merge.
+
+Not a profile field and not a flag, for the same reason `daily_usd` is not: a
+project that can vote itself out of review does not have review, and a worker's
+own output can reach a caller's argv.
+
 ### Steering a job: resume
 
 `resume <job-id> "<message>"` continues that job's provider session. Every

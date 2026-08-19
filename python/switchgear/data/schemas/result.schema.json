@@ -28,33 +28,69 @@
       "type": "object",
       "description": "the caller's own identifiers, exactly as supplied on the envelope. Never interpreted by Switchgear.",
       "maxProperties": 16,
-      "propertyNames": { "maxLength": 64 },
-      "additionalProperties": { "type": "string", "maxLength": 512 }
+      "propertyNames": {
+        "maxLength": 64
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 512
+      }
     },
     "security": {
       "type": "object",
       "description": "containment ACTUALLY realized for this job, read back off the constructed sandbox argv and the capability probe -- not the requested policy. A caller states a requirement and tests it against this.",
       "additionalProperties": false,
-      "required": ["containment", "identity", "credential", "network"],
+      "required": [
+        "containment",
+        "identity",
+        "credential",
+        "network"
+      ],
       "properties": {
         "containment": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "backend": { "type": ["string", "null"] },
-            "mount_namespace": { "type": "boolean" },
-            "pid_namespace": { "type": "boolean" },
-            "ipc_namespace": { "type": "boolean" },
-            "uts_namespace": { "type": "boolean" },
-            "network_namespace": { "type": "boolean" }
+            "backend": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mount_namespace": {
+              "type": "boolean"
+            },
+            "pid_namespace": {
+              "type": "boolean"
+            },
+            "ipc_namespace": {
+              "type": "boolean"
+            },
+            "uts_namespace": {
+              "type": "boolean"
+            },
+            "network_namespace": {
+              "type": "boolean"
+            }
           }
         },
         "identity": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "uid_boundary": { "type": "string", "enum": ["subuid", "same-user"] },
-            "payload_uid": { "type": ["integer", "null"] }
+            "uid_boundary": {
+              "type": "string",
+              "enum": [
+                "subuid",
+                "same-user"
+              ]
+            },
+            "payload_uid": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
           }
         },
         "credential": {
@@ -63,17 +99,27 @@
           "properties": {
             "posture": {
               "type": "string",
-              "enum": ["brokered", "in-sandbox-access-token", "none"]
+              "enum": [
+                "brokered",
+                "in-sandbox-access-token",
+                "none"
+              ]
             },
-            "enters_worker": { "type": "boolean" }
+            "enters_worker": {
+              "type": "boolean"
+            }
           }
         },
         "network": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "broker_only": { "type": "boolean" },
-            "direct": { "type": "boolean" }
+            "broker_only": {
+              "type": "boolean"
+            },
+            "direct": {
+              "type": "boolean"
+            }
           }
         }
       }
@@ -86,18 +132,25 @@
         "dirty",
         "timeout",
         "provider_error",
-        "awaiting_review"
+        "awaiting_review",
+        "awaiting_external_review"
       ]
     },
     "execution": {
       "type": "object",
       "description": "did the process do its work? Independent of tree integrity and of acceptance.",
       "additionalProperties": false,
-      "required": ["outcome"],
+      "required": [
+        "outcome"
+      ],
       "properties": {
         "outcome": {
           "type": "string",
-          "enum": ["completed", "provider_error", "timeout"]
+          "enum": [
+            "completed",
+            "provider_error",
+            "timeout"
+          ]
         }
       }
     },
@@ -105,20 +158,35 @@
       "type": "object",
       "description": "is there a frozen delta from this job? `none` for a readonly job, which produces an answer rather than a change.",
       "additionalProperties": false,
-      "required": ["state"],
+      "required": [
+        "state"
+      ],
       "properties": {
-        "state": { "type": "string", "enum": ["none", "frozen"] }
+        "state": {
+          "type": "string",
+          "enum": [
+            "none",
+            "frozen"
+          ]
+        }
       }
     },
     "acceptance": {
       "type": "object",
       "description": "has anything accepted this job's change? `not_required` for readonly. Switchgear's own gate only; a caller's project review and merge decision are not this field.",
       "additionalProperties": false,
-      "required": ["state"],
+      "required": [
+        "state"
+      ],
       "properties": {
         "state": {
           "type": "string",
-          "enum": ["not_required", "awaiting_review", "accepted"]
+          "enum": [
+            "not_required",
+            "awaiting_review",
+            "accepted",
+            "awaiting_external_review"
+          ]
         }
       }
     },
@@ -163,7 +231,10 @@
       "properties": {
         "outcome": {
           "type": "string",
-          "enum": ["clean", "dirty"],
+          "enum": [
+            "clean",
+            "dirty"
+          ],
           "description": "the verdict over the digests below, so a caller need not recompute what this job already decided"
         },
         "git_identity_before": {
@@ -193,15 +264,24 @@
       "type": "object",
       "properties": {
         "events": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "the provider's own stdout, byte for byte. Forensic evidence, not a contract: its shape is whichever agent CLI ran."
         },
         "events_normalized": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "the same run in Switchgear's provider-neutral vocabulary, one JSON object per line, each carrying `v`. This is the stream to consume. Null means it could not be written -- recompute with `logs --format normalized`."
         },
         "events_normalized_version": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1,
           "description": "contract version of events_normalized"
         }
