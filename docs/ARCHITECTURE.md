@@ -123,8 +123,9 @@ has produced a confident false failure report before.
    observable and a crash cannot cost the record.
 8. Snapshot again. Readonly: byte-identical tree. Bounded-write: git identity
    unchanged, in-tree edits expected, escapes fail the job.
-9. Normalize the stream into `evidence/events.v1.jsonl`, compute the four outcome
-   facts, freeze the delta, write and validate `result.json`.
+9. Normalize the stream into `evidence/events.v<N>.jsonl` — `v2` at this
+   revision — compute the four outcome facts, freeze the delta, write and
+   validate `result.json`.
 10. Bounded writes finish `awaiting_review`, or `awaiting_external_review` when
     an operator has set `acceptance=external` -- same freeze, same evidence,
     both exit 0; what differs is only who may declare the change acceptable. A
@@ -140,7 +141,7 @@ Four, and only these:
 |---|---|---|
 | the CLI's argv and exit codes | `switchgear capabilities` | 0 ok · 1 refusal/error · 2 dirty **or argparse usage error** · 124 timeout |
 | `result.json` | `data/schemas/result.schema.json` | additive keys; `schema_version` moves only on a breaking change |
-| the normalized event stream | `evidence/events.v1.jsonl`, `logs --format normalized` | versioned in the filename and on every line |
+| the normalized event stream | `evidence/events.v<N>.jsonl` (`v2` now), `logs --format normalized` | versioned in the filename and on every line; a job is read back in the version its own record names, so v1 artifacts stay v1 |
 | the task envelope | `data/schemas/task-envelope.schema.json` | closed; `correlation` is the caller's own space |
 
 `evidence/events.jsonl` is **not** a contract. It is the harness's own stdout,

@@ -1,0 +1,32 @@
+{
+  "cap_bytes": 8192,
+  "digest_v": 1,
+  "dropped_events": 0,
+  "events": [
+    {
+      "digest_v": 1,
+      "event": "status",
+      "sessionId": "ses_mock000000000000000000"
+    },
+    {
+      "content": "Edited tracked.txt as requested.",
+      "digest_v": 1,
+      "event": "text"
+    },
+    {
+      "costUSD": 0.0,
+      "digest_v": 1,
+      "event": "finished",
+      "exitSummary": "Edited tracked.txt as requested.",
+      "final_text_state": "present",
+      "sawTerminal": true,
+      "status": "completed",
+      "tokens": 0,
+      "turns": 1
+    }
+  ],
+  "events_v": 2,
+  "format": "digest",
+  "job_id": "1caefcfe-402b-4849-b0c2-cec7fdc5d25b",
+  "truncated": false
+}

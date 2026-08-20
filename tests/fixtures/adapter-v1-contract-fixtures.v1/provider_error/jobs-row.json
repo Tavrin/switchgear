@@ -1,0 +1,17 @@
+{
+  "awaiting_review": false,
+  "cost_usd": 0.0,
+  "dir": "<ABSOLUTE_PATH>/syn/primary",
+  "elapsed_s": 0.1,
+  "harness": "opencode",
+  "job_id": "96d8f8e2-a3ed-4b92-a05c-2721708881c2",
+  "mode": "readonly",
+  "model": "opencode-go/deepseek-v4-flash",
+  "pool": "opencode-go",
+  "provider": "opencode-go",
+  "resumed_from": null,
+  "review_of": null,
+  "role": "scout",
+  "started_at": 1787245373.109,
+  "state": "provider_error"
+}

@@ -62,12 +62,30 @@ liveness-derived states `running`, `queued`, `died`, `cancelled` and `unknown`.
 if the waiter's own timeout expires, and refuses `unknown` because there is no
 liveness fact to wait on. These derived states never appear in `result.json`.
 
-`--json` prints a stable object: `schema_version, job_id, status, mode, role,
-model, dir, exit, error, artifacts{events, events_normalized,
+`--json` prints a stable object. The complete key set, which is what
+`cli._print_job` actually emits:
+
+```
+schema_version, job_id, status, execution, integrity_outcome, change,
+acceptance, mode, role, model, harness, provider, started, finished, effort,
+queued_s, dir, exit, error, artifacts{events, events_normalized,
 events_normalized_version, stderr, handoff}, freeze, review, provider_calls,
-cost_usd, security, correlation`.
+delegation, cost_usd, resumed, security, correlation
+```
+
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
+
+> **`exit` on the record is the PROVIDER's exit code, not this CLI's.** The two
+> are different numbers with different meanings and the difference is not
+> academic: a `dirty` job carries `exit: 0` on its record — the provider ran
+> fine — while the CLI exits **2** and nothing was promoted. A caller that read
+> the record's `exit` against the exit table below would read that job as a
+> success, which is the silent-and-wrong-direction failure this contract works
+> hardest to avoid. Branch on `status`, and on the four facts it projects
+> (`execution`, `integrity_outcome`, `change`, `acceptance`); use the process
+> exit code of the command you ran for the table below. The captured fixture
+> pack carries the `dirty` case precisely so a decoder meets it.
 
 ### The orchestrator lane contract
 

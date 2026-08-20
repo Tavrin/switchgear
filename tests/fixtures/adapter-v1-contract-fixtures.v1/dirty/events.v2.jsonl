@@ -1,0 +1,4 @@
+{"event":"status","sessionId":"ses_mock000000000000000000","v":2}
+{"event":"tool","name":"read","target":"calc.py","v":2}
+{"event":"text","content":"mock finished","v":2}
+{"event":"finished","status":"completed","final_text_state":"present","turns":1,"costUSD":1.5e-05,"tokens":42,"exitSummary":"mock finished","sawTerminal":true,"v":2}

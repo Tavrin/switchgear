@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "event": "status",
+      "sessionId": "ses_mock000000000000000000",
+      "v": 2
+    },
+    {
+      "costUSD": 0.0,
+      "event": "finished",
+      "exitSummary": "permission required to edit files outside the worktree",
+      "final_text_state": "empty",
+      "sawTerminal": false,
+      "status": "needs_input",
+      "tokens": 0,
+      "turns": 1,
+      "v": 2
+    }
+  ],
+  "format": "normalized",
+  "job_id": "7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4",
+  "truncated": false,
+  "v": 2
+}

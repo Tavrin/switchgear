@@ -1,0 +1,82 @@
+{
+  "acceptance": {
+    "state": "not_required"
+  },
+  "artifacts": {
+    "events": "<ABSOLUTE_PATH>/state/jobs/7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4/evidence/events.v2.jsonl",
+    "events_normalized_version": 2,
+    "handoff": null,
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4/evidence/stderr"
+  },
+  "attempt": 1,
+  "change": {
+    "state": "none"
+  },
+  "cost_usd": 0.0,
+  "delegation": null,
+  "dir": "<ABSOLUTE_PATH>/syn/primary",
+  "effort": null,
+  "error": "permission required to edit files outside the worktree",
+  "execution": {
+    "outcome": "provider_error"
+  },
+  "exit": 0,
+  "finished": "20260820T170253Z",
+  "freeze": null,
+  "generation": 0,
+  "harness": "opencode",
+  "integrity": {
+    "git_identity_after": "e9999ae7d98fcefc5a568de3b6411d31529c146f15b29e2e04a5c2321dce2850",
+    "git_identity_before": "e9999ae7d98fcefc5a568de3b6411d31529c146f15b29e2e04a5c2321dce2850",
+    "identity_changed": false,
+    "outcome": "clean",
+    "tree_after": "ee8d457c22397a63acb8cfce6d714b734b1e6979fb0ed94501b73bb257551fef",
+    "tree_before": "ee8d457c22397a63acb8cfce6d714b734b1e6979fb0ed94501b73bb257551fef"
+  },
+  "job_id": "7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4",
+  "lease_uuid": null,
+  "mode": "readonly",
+  "model": {
+    "id": "opencode-go/deepseek-v4-flash",
+    "identity_source": "registry",
+    "model_family": "deepseek",
+    "provider": "opencode-go",
+    "vendor_family": "deepseek"
+  },
+  "policy_digest": "3554bd49e1b1fa30a4dcd48e722c61ab2ccd0bb572f4957cc144b9f0221d06ac",
+  "process": {
+    "pid": 3281707,
+    "timed_out": false
+  },
+  "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
+  "provider": "opencode",
+  "queued_s": 0.0,
+  "review": null,
+  "role": "scout",
+  "schema_version": 1,
+  "security": {
+    "containment": {
+      "backend": "bwrap",
+      "ipc_namespace": true,
+      "mount_namespace": true,
+      "network_namespace": false,
+      "pid_namespace": true,
+      "uts_namespace": true
+    },
+    "credential": {
+      "enters_worker": false,
+      "posture": "none"
+    },
+    "identity": {
+      "payload_uid": 1,
+      "uid_boundary": "subuid"
+    },
+    "network": {
+      "broker_only": false,
+      "direct": true
+    }
+  },
+  "started": "20260820T170253Z",
+  "status": "provider_error"
+}

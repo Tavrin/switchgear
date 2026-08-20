@@ -1,0 +1,22 @@
+{
+  "cap_bytes": 8192,
+  "digest_v": 1,
+  "dropped_events": 0,
+  "events": [
+    {
+      "costUSD": 0.0,
+      "digest_v": 1,
+      "event": "finished",
+      "exitSummary": "",
+      "final_text_state": "empty",
+      "sawTerminal": true,
+      "status": "completed",
+      "tokens": 0,
+      "turns": 0
+    }
+  ],
+  "events_v": 2,
+  "format": "digest",
+  "job_id": "b7d39625-0afb-4daf-b522-e971d62b0e39",
+  "truncated": false
+}

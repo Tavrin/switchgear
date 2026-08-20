@@ -1,0 +1,19 @@
+{
+  "events": [
+    {
+      "costUSD": 0.0,
+      "event": "finished",
+      "exitSummary": "",
+      "final_text_state": "empty",
+      "sawTerminal": true,
+      "status": "completed",
+      "tokens": 0,
+      "turns": 0,
+      "v": 2
+    }
+  ],
+  "format": "normalized",
+  "job_id": "b7d39625-0afb-4daf-b522-e971d62b0e39",
+  "truncated": false,
+  "v": 2
+}

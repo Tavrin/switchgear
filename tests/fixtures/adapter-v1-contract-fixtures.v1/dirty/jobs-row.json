@@ -1,0 +1,17 @@
+{
+  "awaiting_review": false,
+  "cost_usd": 1.5e-05,
+  "dir": "<ABSOLUTE_PATH>/syn/wt2",
+  "elapsed_s": 6.2,
+  "harness": "opencode",
+  "job_id": "c56c3771-232b-4a88-8227-faa1f974b08a",
+  "mode": "readonly",
+  "model": "opencode-go/deepseek-v4-flash",
+  "pool": "opencode-go",
+  "provider": "opencode-go",
+  "resumed_from": null,
+  "review_of": null,
+  "role": "scout",
+  "started_at": 1787245374.041,
+  "state": "dirty"
+}

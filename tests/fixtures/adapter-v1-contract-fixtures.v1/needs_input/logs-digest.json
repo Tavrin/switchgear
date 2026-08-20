@@ -1,0 +1,27 @@
+{
+  "cap_bytes": 8192,
+  "digest_v": 1,
+  "dropped_events": 0,
+  "events": [
+    {
+      "digest_v": 1,
+      "event": "status",
+      "sessionId": "ses_mock000000000000000000"
+    },
+    {
+      "costUSD": 0.0,
+      "digest_v": 1,
+      "event": "finished",
+      "exitSummary": "permission required to edit files outside the worktree",
+      "final_text_state": "empty",
+      "sawTerminal": false,
+      "status": "needs_input",
+      "tokens": 0,
+      "turns": 1
+    }
+  ],
+  "events_v": 2,
+  "format": "digest",
+  "job_id": "7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4",
+  "truncated": false
+}

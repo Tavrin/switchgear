@@ -224,6 +224,51 @@ def main() -> int:
                        "tokens": {"total": 42}, "cost": 1.5e-05}})
         return 0
 
+    if beh == "edit-inside-verbose":
+        # The `ok` contract fixture: a bounded write that edits a tracked file
+        # AND says something on the way out, so the captured record carries
+        # final_text_state=present. `edit-inside` deliberately stays silent --
+        # it is the fixture proving the OTHER combination is legal -- so the two
+        # behaviours exist to capture both halves of the orthogonal pair from
+        # real runs rather than by editing one capture into the other.
+        sid = "ses_mock000000000000000000"
+        r = try_write(os.path.join(directory, "tracked.txt"), "worker-edit\n")
+        emit({"type": "step_start", "sessionID": sid,
+              "part": {"type": "step-start", "sessionID": sid}})
+        emit({"type": "text", "sessionID": sid,
+              "part": {"type": "text", "sessionID": sid,
+                       "text": "Edited tracked.txt as requested."}})
+        emit(
+            {
+                "type": "complete",
+                "sessionID": sid,
+                "write": r,
+                "handoff": {
+                    "summary": "edited tracked.txt",
+                    "status": "awaiting_review",
+                    "changes": ["tracked.txt"],
+                    "remaining_risks": [],
+                    "next_action": "review",
+                },
+            }
+        )
+        return 0
+
+    if beh == "needs-input":
+        # A provider that stopped to ask for permission. The normalizer routes an
+        # error message matching its input-request classifier to the terminal
+        # status `needs_input`, which parks the work back to the operator rather
+        # than recording a failure -- while the RECORD still says provider_error,
+        # because the run produced no result. Capturing that pair from a real run
+        # is the point: the two vocabularies disagree legitimately, and a
+        # hand-written fixture would have "corrected" one of them.
+        sid = "ses_mock000000000000000000"
+        emit({"type": "step_start", "sessionID": sid,
+              "part": {"type": "step-start", "sessionID": sid}})
+        emit({"type": "error", "sessionID": sid,
+              "message": "permission required to edit files outside the worktree"})
+        return 0
+
     if beh == "many-text":
         # Enough real raw events to force the digest's byte cap. Keeping this in
         # the mock makes the truncation test exercise the rail and adapter

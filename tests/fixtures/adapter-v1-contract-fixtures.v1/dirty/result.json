@@ -1,0 +1,82 @@
+{
+  "acceptance": {
+    "state": "not_required"
+  },
+  "artifacts": {
+    "events": "<ABSOLUTE_PATH>/state/jobs/c56c3771-232b-4a88-8227-faa1f974b08a/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/c56c3771-232b-4a88-8227-faa1f974b08a/evidence/events.v2.jsonl",
+    "events_normalized_version": 2,
+    "handoff": null,
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/c56c3771-232b-4a88-8227-faa1f974b08a/evidence/stderr"
+  },
+  "attempt": 1,
+  "change": {
+    "state": "none"
+  },
+  "cost_usd": 1.5e-05,
+  "delegation": null,
+  "dir": "<ABSOLUTE_PATH>/syn/wt2",
+  "effort": null,
+  "error": "git identity changed",
+  "execution": {
+    "outcome": "completed"
+  },
+  "exit": 0,
+  "finished": "20260820T170300Z",
+  "freeze": null,
+  "generation": 0,
+  "harness": "opencode",
+  "integrity": {
+    "git_identity_after": "c216897eb9754157b2fd874eb3267b785a65d2aeb1668cb8f9c88e2a1b7dd4b7",
+    "git_identity_before": "75eed4ac4fb5b71ad777dfb25dd08b6f838042ba854bf410c3fae292365710e7",
+    "identity_changed": true,
+    "outcome": "dirty",
+    "tree_after": "62e95b83ab5b204b4f082fe7df512ae64469010f181db9d19115edffc6da2323",
+    "tree_before": "579dd56df208b6933cce77256e04962ccada8d8ec50a10897a41c20317630e6e"
+  },
+  "job_id": "c56c3771-232b-4a88-8227-faa1f974b08a",
+  "lease_uuid": null,
+  "mode": "readonly",
+  "model": {
+    "id": "opencode-go/deepseek-v4-flash",
+    "identity_source": "registry",
+    "model_family": "deepseek",
+    "provider": "opencode-go",
+    "vendor_family": "deepseek"
+  },
+  "policy_digest": "3554bd49e1b1fa30a4dcd48e722c61ab2ccd0bb572f4957cc144b9f0221d06ac",
+  "process": {
+    "pid": 3281804,
+    "timed_out": false
+  },
+  "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
+  "provider": "opencode",
+  "queued_s": 0.0,
+  "review": null,
+  "role": "scout",
+  "schema_version": 1,
+  "security": {
+    "containment": {
+      "backend": "bwrap",
+      "ipc_namespace": true,
+      "mount_namespace": true,
+      "network_namespace": false,
+      "pid_namespace": true,
+      "uts_namespace": true
+    },
+    "credential": {
+      "enters_worker": false,
+      "posture": "none"
+    },
+    "identity": {
+      "payload_uid": 1,
+      "uid_boundary": "subuid"
+    },
+    "network": {
+      "broker_only": false,
+      "direct": true
+    }
+  },
+  "started": "20260820T170254Z",
+  "status": "dirty"
+}

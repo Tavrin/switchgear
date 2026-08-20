@@ -51,6 +51,9 @@ echo "== doctor (broken installs, not just healthy ones) =="
 echo "== capabilities: derived facts, and declared ones labelled as such =="
 /usr/bin/python3 "$ROOT/tests/test_capabilities.py"
 
+echo "== contract fixture pack + published --json shape =="
+/usr/bin/python3 "$ROOT/tests/test_contract_fixtures.py"
+
 echo "== provider health + cost rollup =="
 /usr/bin/python3 "$ROOT/tests/test_health.py"
 

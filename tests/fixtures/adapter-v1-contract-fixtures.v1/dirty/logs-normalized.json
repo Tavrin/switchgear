@@ -1,0 +1,35 @@
+{
+  "events": [
+    {
+      "event": "status",
+      "sessionId": "ses_mock000000000000000000",
+      "v": 2
+    },
+    {
+      "event": "tool",
+      "name": "read",
+      "target": "calc.py",
+      "v": 2
+    },
+    {
+      "content": "mock finished",
+      "event": "text",
+      "v": 2
+    },
+    {
+      "costUSD": 1.5e-05,
+      "event": "finished",
+      "exitSummary": "mock finished",
+      "final_text_state": "present",
+      "sawTerminal": true,
+      "status": "completed",
+      "tokens": 42,
+      "turns": 1,
+      "v": 2
+    }
+  ],
+  "format": "normalized",
+  "job_id": "c56c3771-232b-4a88-8227-faa1f974b08a",
+  "truncated": false,
+  "v": 2
+}

@@ -1,0 +1,29 @@
+{
+  "events": [
+    {
+      "event": "status",
+      "sessionId": "ses_mock000000000000000000",
+      "v": 2
+    },
+    {
+      "content": "Edited tracked.txt as requested.",
+      "event": "text",
+      "v": 2
+    },
+    {
+      "costUSD": 0.0,
+      "event": "finished",
+      "exitSummary": "Edited tracked.txt as requested.",
+      "final_text_state": "present",
+      "sawTerminal": true,
+      "status": "completed",
+      "tokens": 0,
+      "turns": 1,
+      "v": 2
+    }
+  ],
+  "format": "normalized",
+  "job_id": "1caefcfe-402b-4849-b0c2-cec7fdc5d25b",
+  "truncated": false,
+  "v": 2
+}

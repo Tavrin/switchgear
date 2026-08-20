@@ -1,0 +1,38 @@
+{
+  "bytes_freed": 139264,
+  "dry_run": false,
+  "kept": [],
+  "launch_artifacts_removed": [
+    "<ABSOLUTE_PATH>/state/launch/5ebbb8c7-2f1b-4cd3-856e-1864b727672b.json",
+    "<ABSOLUTE_PATH>/state/launch/5ebbb8c7-2f1b-4cd3-856e-1864b727672b.out",
+    "<ABSOLUTE_PATH>/state/launch/5ebbb8c7-2f1b-4cd3-856e-1864b727672b.err",
+    "<ABSOLUTE_PATH>/state/launch/c56c3771-232b-4a88-8227-faa1f974b08a.json",
+    "<ABSOLUTE_PATH>/state/launch/c56c3771-232b-4a88-8227-faa1f974b08a.out",
+    "<ABSOLUTE_PATH>/state/launch/c56c3771-232b-4a88-8227-faa1f974b08a.err"
+  ],
+  "launch_records_removed": 0,
+  "protected": [
+    {
+      "job_id": "1caefcfe-402b-4849-b0c2-cec7fdc5d25b",
+      "reason": "awaiting external review",
+      "state": "awaiting_external_review"
+    },
+    {
+      "job_id": "b7d39625-0afb-4daf-b522-e971d62b0e39",
+      "reason": "awaiting review",
+      "state": "awaiting_review"
+    },
+    {
+      "job_id": "953f9260-2099-4f7e-9d3a-bec21c1af40c",
+      "reason": "awaiting review",
+      "state": "awaiting_review"
+    }
+  ],
+  "removed": [
+    "5ebbb8c7-2f1b-4cd3-856e-1864b727672b",
+    "c56c3771-232b-4a88-8227-faa1f974b08a",
+    "7c84e6a6-93b3-4b0f-9802-544cb8ff8ee4",
+    "96d8f8e2-a3ed-4b92-a05c-2721708881c2"
+  ],
+  "sessions_removed": []
+}

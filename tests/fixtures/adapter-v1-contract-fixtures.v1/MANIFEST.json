@@ -1,0 +1,29 @@
+{
+  "_regenerate": "python3 tests/helpers/capture_contract_fixtures.py",
+  "_what": "Durable records exactly as the rail wrote them, captured from real hermetic runs of the committed mock provider through the real code paths. Never hand-authored.",
+  "captured_from_commit": "f1871e915f019a943f7b6fac02b4e942c0eeac0c",
+  "contract_versions": {
+    "digest_version": 1,
+    "normalized_events_version": 2,
+    "result_schema_version": 1
+  },
+  "normalization": {
+    "absolute_paths": "every absolute prefix replaced by the single placeholder <ABSOLUTE_PATH>, preserving the path structure after it so a decoder still sees the version-bearing artifact filename",
+    "credentials": "none captured; the pack is asserted free of them",
+    "semantic_fields": "preserved verbatim; never reconciled by hand"
+  },
+  "pack": "adapter-v1-contract-fixtures.v1",
+  "pack_version": 1,
+  "scenarios": {
+    "awaiting_external_review": "operator acceptance=external: identical freeze and evidence, exit 0, promote refused, the caller's gate decides",
+    "crashed_launch_only": "runner.json with no result.json: the jobs row reads state=died and still carries launch attribution",
+    "dirty": "worktree git identity moved on the HOST during a readonly job; exit 2, nothing promoted",
+    "empty_final_text_with_change": "successful completion with NO closing assistant text beside a real frozen change: finished.status=completed, final_text_state=empty, change.state=frozen. Change presence comes from change/freeze, never from the terminal status.",
+    "gc_applied.json": "the same selection applied -- the only shape carrying launch_artifacts_removed, which gc.plan() cannot produce",
+    "gc_plan.json": "dry run; protected entries each carry their reason",
+    "needs_input": "the normalized terminal event says needs_input while result.json says provider_error -- two vocabularies disagreeing legitimately, captured rather than reconciled",
+    "ok": "clean bounded write, closing text present -> awaiting_review",
+    "provider_error": "the provider exited non-zero after a well-formed handoff"
+  },
+  "volatile_values": "job_id, timestamps, digests, durations and costs are real values from the capture run and CHANGE on every re-capture. Assert the contract, never these values."
+}

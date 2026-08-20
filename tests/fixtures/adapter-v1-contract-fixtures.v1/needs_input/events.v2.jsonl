@@ -1,0 +1,2 @@
+{"event":"status","sessionId":"ses_mock000000000000000000","v":2}
+{"event":"finished","status":"needs_input","final_text_state":"empty","turns":1,"costUSD":0.0,"tokens":0,"exitSummary":"permission required to edit files outside the worktree","sawTerminal":false,"v":2}

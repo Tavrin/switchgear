@@ -1,0 +1,38 @@
+{
+  "cap_bytes": 8192,
+  "digest_v": 1,
+  "dropped_events": 0,
+  "events": [
+    {
+      "digest_v": 1,
+      "event": "status",
+      "sessionId": "ses_mock000000000000000000"
+    },
+    {
+      "digest_v": 1,
+      "event": "tool",
+      "name": "read",
+      "target": "calc.py"
+    },
+    {
+      "content": "mock finished",
+      "digest_v": 1,
+      "event": "text"
+    },
+    {
+      "costUSD": 1.5e-05,
+      "digest_v": 1,
+      "event": "finished",
+      "exitSummary": "mock finished",
+      "final_text_state": "present",
+      "sawTerminal": true,
+      "status": "completed",
+      "tokens": 42,
+      "turns": 1
+    }
+  ],
+  "events_v": 2,
+  "format": "digest",
+  "job_id": "c56c3771-232b-4a88-8227-faa1f974b08a",
+  "truncated": false
+}
