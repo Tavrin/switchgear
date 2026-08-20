@@ -3391,6 +3391,50 @@ class CrashedJobAttribution(unittest.TestCase):
         for key in ("mode", "role", "model", "provider", "harness", "pool", "dir"):
             self.assertIsNone(row[key], f"unknown job gained {key} attribution")
 
+    def test_a_record_that_parses_to_the_wrong_type_hides_no_job(self):
+        """Parsing is not reading. `[]`, `"x"` and `123` are all valid JSON and
+        none of them has `.get`, so the attribution fallback raised
+        AttributeError out of enumerate_jobs -- and because the listing is built
+        in one pass, ONE corrupt runner.json took down the whole `jobs` output,
+        every healthy job with it. Found by probing the fallback with non-object
+        JSON after the fallback landed; the suite had only ever fed it
+        unparseable bytes, which the try/except already covered."""
+        healthy = "00000000-0000-4000-8000-00000000c2f0"
+        self._aged_job(healthy, 300)
+        wrong_types = {
+            "00000000-0000-4000-8000-00000000c2f1": "[]",
+            "00000000-0000-4000-8000-00000000c2f2": '"a string"',
+            "00000000-0000-4000-8000-00000000c2f3": "123",
+        }
+        for job_id, body in wrong_types.items():
+            jd = self.state / "jobs" / job_id
+            (jd / "evidence").mkdir(parents=True)
+            (jd / "started_at").write_text(str(time.time() - 300))
+            (jd / "runner.json").write_text(body)
+
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rows = {r["job_id"]: r for r in json.loads(p.stdout)["jobs"]}
+        self.assertIn(healthy, rows, "one corrupt record hid an unrelated job")
+        for job_id in wrong_types:
+            self.assertIn(job_id, rows)
+            # Honest, not merely non-crashing: no liveness could be established
+            # and no attribution exists, so it must claim neither.
+            self.assertEqual(rows[job_id]["state"], "unknown")
+            self.assertIsNone(rows[job_id]["harness"])
+
+        # The same rule for the result record, which had the identical shape
+        # assumption before the attribution fallback existed.
+        bad_result = "00000000-0000-4000-8000-00000000c2f4"
+        jd = self.state / "jobs" / bad_result
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 300))
+        (jd / "result.json").write_text("[]")
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(bad_result,
+                      [r["job_id"] for r in json.loads(p.stdout)["jobs"]])
+
     def test_real_job_runner_carries_complete_start_attribution(self):
         # This test exercises record construction, not the separately tested
         # subuid boundary; some hermetic containers advertise subids while

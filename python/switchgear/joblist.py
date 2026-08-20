@@ -38,6 +38,19 @@ def parse_duration(text: str) -> float:
     return float(match.group(1)) * _UNITS[match.group(2)]
 
 
+def _as_record(value: Any) -> dict[str, Any]:
+    """A parsed record, or {} if it is not an object.
+
+    `json.load` succeeding does not mean a record was read: `[]`, `"x"` and `123`
+    all parse fine and none of them has `.get`. Measured on the runner-record
+    fallback -- a single job whose runner.json held a bare `123` raised
+    AttributeError out of enumerate_jobs and took down the WHOLE listing, every
+    other job included. This module's rule is that an unreadable record must not
+    hide a job; a record that parses to the wrong type has to obey it too.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def _started_at(job_dir: str) -> float | None:
     try:
         with open(os.path.join(job_dir, "started_at"), encoding="utf-8") as fh:
@@ -112,7 +125,7 @@ def enumerate_jobs(
         result_path = os.path.join(jd, "result.json")
         if os.path.isfile(result_path):
             try:
-                rec = read_json(result_path)
+                rec = _as_record(read_json(result_path))
             except Exception:
                 rec = {}  # unreadable record is not a reason to hide the job
 
@@ -120,7 +133,7 @@ def enumerate_jobs(
         runner_path = os.path.join(jd, "runner.json")
         if os.path.isfile(runner_path):
             try:
-                runner = read_json(runner_path)
+                runner = _as_record(read_json(runner_path))
             except Exception:
                 runner = {}  # attribution unknown; liveness decides separately
 
