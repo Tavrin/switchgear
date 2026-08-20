@@ -2,7 +2,7 @@
   "boot_id": "05c84bc6-e3c5-4446-be2a-9d8f77b9253e",
   "dir": "<ABSOLUTE_PATH>/syn/primary",
   "harness": "opencode",
-  "job_id": "96d8f8e2-a3ed-4b92-a05c-2721708881c2",
+  "job_id": "75485713-fc0b-40a9-92fb-3452a28ab1a8",
   "mode": "readonly",
   "model": {
     "id": "opencode-go/deepseek-v4-flash",
@@ -11,8 +11,9 @@
     "provider": "opencode-go",
     "vendor_family": "deepseek"
   },
-  "pid": 3281566,
+  "pid": 3381978,
   "provider": "opencode",
   "role": "scout",
-  "starttime": "29263271"
+  "session_store_id": "0fdc1083-6231-4ce6-9c81-cc5d9a5ca62b",
+  "starttime": "29400572"
 }

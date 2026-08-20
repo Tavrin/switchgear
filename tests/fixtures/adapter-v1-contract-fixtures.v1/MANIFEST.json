@@ -1,7 +1,7 @@
 {
   "_regenerate": "python3 tests/helpers/capture_contract_fixtures.py",
   "_what": "Durable records exactly as the rail wrote them, captured from real hermetic runs of the committed mock provider through the real code paths. Never hand-authored.",
-  "captured_from_commit": "f1871e915f019a943f7b6fac02b4e942c0eeac0c",
+  "captured_from_commit": "70a2bc177c983c04dab15e5fbe7a25297f428a3b",
   "contract_versions": {
     "digest_version": 1,
     "normalized_events_version": 2,

@@ -13,11 +13,11 @@
     }
   ],
   "artifacts": {
-    "events": "<ABSOLUTE_PATH>/state/jobs/1caefcfe-402b-4849-b0c2-cec7fdc5d25b/evidence/events.jsonl",
-    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/1caefcfe-402b-4849-b0c2-cec7fdc5d25b/evidence/events.v2.jsonl",
+    "events": "<ABSOLUTE_PATH>/state/jobs/d3a5d59b-42a5-428f-8442-7bbc3972387a/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/d3a5d59b-42a5-428f-8442-7bbc3972387a/evidence/events.v2.jsonl",
     "events_normalized_version": 2,
-    "handoff": "<ABSOLUTE_PATH>/state/jobs/1caefcfe-402b-4849-b0c2-cec7fdc5d25b/evidence/handoff.json",
-    "stderr": "<ABSOLUTE_PATH>/state/jobs/1caefcfe-402b-4849-b0c2-cec7fdc5d25b/evidence/stderr"
+    "handoff": "<ABSOLUTE_PATH>/state/jobs/d3a5d59b-42a5-428f-8442-7bbc3972387a/evidence/handoff.json",
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/d3a5d59b-42a5-428f-8442-7bbc3972387a/evidence/stderr"
   },
   "attempt": 1,
   "change": {
@@ -31,12 +31,12 @@
     "outcome": "completed"
   },
   "exit": 0,
-  "finished": "20260820T170252Z",
+  "finished": "20260820T172545Z",
   "freeze": {
     "changed_files": [
       "tracked.txt"
     ],
-    "head": "d2d10cc5fed888c3c6ff7619ca0800aea939ee5a",
+    "head": "10d2255884ad19a52414c8545cd3daa3b066f72b",
     "independence": {
       "different_family": "preferred",
       "different_job": "required",
@@ -53,29 +53,29 @@
     "models_registry_digest": "3a119cb670d44da8b8faa555bff873baf04c4060f12a5bc236226ce7159559dc",
     "policy_digest": "bcd578a2b23a475cce4fb115873bda7a0ca9b10d8dfb01dac86e243ae9a9ee66",
     "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
-    "tree_digest": "579dd56df208b6933cce77256e04962ccada8d8ec50a10897a41c20317630e6e",
+    "tree_digest": "8efbdc8679f12d9d1ae21c9ffa164388e63a575dc076653add50acaa6a1a0f49",
     "worktree": {
       "common_dev": 64512,
       "common_git_dir": "<ABSOLUTE_PATH>/syn/primary/.git",
-      "common_ino": 10529239,
+      "common_ino": 10535571,
       "git_dir": "<ABSOLUTE_PATH>/syn/primary/.git/worktrees/wt2",
       "realpath": "<ABSOLUTE_PATH>/syn/wt2",
       "st_dev": 64512,
-      "st_ino": 10529320
+      "st_ino": 10535652
     }
   },
   "generation": 0,
   "harness": "opencode",
   "integrity": {
-    "git_identity_after": "75eed4ac4fb5b71ad777dfb25dd08b6f838042ba854bf410c3fae292365710e7",
-    "git_identity_before": "75eed4ac4fb5b71ad777dfb25dd08b6f838042ba854bf410c3fae292365710e7",
+    "git_identity_after": "18d74d29eb8d7d1003cc5501cd595f798813da36c9bc73661add9feb13b71865",
+    "git_identity_before": "18d74d29eb8d7d1003cc5501cd595f798813da36c9bc73661add9feb13b71865",
     "identity_changed": false,
     "outcome": "clean",
-    "tree_after": "579dd56df208b6933cce77256e04962ccada8d8ec50a10897a41c20317630e6e",
-    "tree_before": "45473b4bbb4e5bef747eb048ad544a45b65943994333b1ebed69a8e3c5042171"
+    "tree_after": "8efbdc8679f12d9d1ae21c9ffa164388e63a575dc076653add50acaa6a1a0f49",
+    "tree_before": "acd83bf4a6df33249eeceb3d4c128f372aed016fc43b5bc974d78b9e6b8c3132"
   },
-  "job_id": "1caefcfe-402b-4849-b0c2-cec7fdc5d25b",
-  "lease_uuid": "ffcfaff3-5a4b-4229-9213-2971c9347e2e",
+  "job_id": "d3a5d59b-42a5-428f-8442-7bbc3972387a",
+  "lease_uuid": "70047537-a6b1-4a5a-ad4e-b483fdf6c4d9",
   "mode": "bounded-write",
   "model": {
     "id": "opencode-go/glm-5.3",
@@ -86,7 +86,7 @@
   },
   "policy_digest": "bcd578a2b23a475cce4fb115873bda7a0ca9b10d8dfb01dac86e243ae9a9ee66",
   "process": {
-    "pid": 3281481,
+    "pid": 3381892,
     "timed_out": false
   },
   "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
@@ -117,6 +117,7 @@
       "direct": true
     }
   },
-  "started": "20260820T170252Z",
+  "session_store_id": "2dfa2a02-caad-4141-a66b-1d65fb27bd19",
+  "started": "20260820T172545Z",
   "status": "awaiting_external_review"
 }
