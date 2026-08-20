@@ -1018,7 +1018,10 @@ def run_job(
                 "denied_detail": sorted(set(bk.denials))[:10],
                 "transport": len(bk.transport_errors),
             }
-        if status == "awaiting_review":
+        # Bind the evidence to the fact it substantiates. Keying this on the
+        # projected status let external acceptance assert change.state=frozen
+        # while persisting freeze:null -- a claim the record did not substantiate.
+        if change_state == jobstate.CHANGE_FROZEN:
             record["freeze"] = {
                 "head": after.head,
                 "tree_digest": after_tree,

@@ -3182,5 +3182,128 @@ class CorrelationUnit(unittest.TestCase):
         self.assertEqual(offenders, [], "correlation reached the job path:\n" + "\n".join(offenders))
 
 
+class ExternalAcceptanceContract(unittest.TestCase):
+    """External acceptance is a successful, evidence-bearing handoff."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="aiops-external-"))
+        self.state = self.tmp / "state"
+        self.syn = self.tmp / "syn"
+        self.profile = self.tmp / "profile.json"
+        self.external_budget = self.tmp / "external-budget.json"
+        self.default_budget = self.tmp / "default-budget.json"
+        proc = subprocess.run(
+            ["bash", str(MAKE_REPO), str(self.syn)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        vals = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+        self.wt = Path(vals["WT"])
+        self.wt2 = Path(vals["WT2"])
+        write_profile(self.profile, write_enabled=True, commands={"probe": True})
+        self.external_budget.write_text(json.dumps({"acceptance": "external"}))
+        p = run_cli(["--state", str(self.state), "state", "provision", str(self.state)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def args(self, *rest):
+        return [
+            "--profile",
+            str(self.profile),
+            "--state",
+            str(self.state),
+            "--provider",
+            str(MOCK),
+            *rest,
+        ]
+
+    def _acquire(self, worktree):
+        p = run_cli(
+            self.args("lease", "acquire", "--dir", str(worktree), "--owner", "external-test")
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return next(
+            line.split("=", 1)[1]
+            for line in p.stdout.splitlines()
+            if line.startswith("lease=")
+        )
+
+    def _write(self, worktree, budget, *, background=False):
+        token = self._acquire(worktree)
+        envf = self.tmp / f"envelope-{worktree.name}.json"
+        envf.write_text(json.dumps(envelope(str(worktree))))
+        argv = self.args(
+            "--json",
+            "write",
+            str(worktree),
+            "implement",
+            "--envelope",
+            str(envf),
+            "--token",
+            token,
+        )
+        if background:
+            argv.append("--background")
+        return run_cli(
+            argv,
+            env={
+                "SWITCHGEAR_WRITE": "1",
+                "SWITCHGEAR_MOCK_BEHAVIOR": "edit-inside",
+                "SWITCHGEAR_BUDGET_FILE": str(budget),
+            },
+        )
+
+    def _persisted_record(self, proc):
+        job_id = json.loads(proc.stdout)["job_id"]
+        return json.loads((self.state / "jobs" / job_id / "result.json").read_text())
+
+    def test_external_foreground_exits_zero_and_freeze_matches_interlock(self):
+        """A frozen external handoff is successful and carries the same evidence
+        shape as the default interlock path. Without the binding, the record said
+        change.state=frozen while persisting freeze:null."""
+        external = self._write(self.wt, self.external_budget)
+        self.assertEqual(external.returncode, 0, external.stderr + external.stdout)
+        external_record = self._persisted_record(external)
+        self.assertEqual(external_record["status"], "awaiting_external_review")
+        self.assertIsNotNone(external_record["freeze"])
+        self.assertEqual(
+            external_record["freeze"]["tree_digest"],
+            external_record["integrity"]["tree_after"],
+        )
+        head = subprocess.run(
+            ["git", "-C", str(self.wt), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertEqual(external_record["freeze"]["head"], head)
+        self.assertTrue(external_record["freeze"]["changed_files"])
+
+        interlock = self._write(self.wt2, self.default_budget)
+        self.assertEqual(interlock.returncode, 0, interlock.stderr + interlock.stdout)
+        interlock_record = self._persisted_record(interlock)
+        self.assertEqual(interlock_record["status"], "awaiting_review")
+        self.assertEqual(
+            set(external_record["freeze"]),
+            set(interlock_record["freeze"]),
+        )
+
+    def test_external_background_wait_exits_zero(self):
+        """Background wait uses the job's exit table, so it must report the same
+        successful external handoff as a foreground write."""
+        launched = self._write(self.wt, self.external_budget, background=True)
+        self.assertEqual(launched.returncode, 0, launched.stderr + launched.stdout)
+        job_id = json.loads(launched.stdout)["job_id"]
+        waited = run_cli(
+            self.args("--json", "wait", job_id),
+            env={"SWITCHGEAR_BUDGET_FILE": str(self.external_budget)},
+        )
+        self.assertEqual(waited.returncode, 0, waited.stderr + waited.stdout)
+        self.assertEqual(json.loads(waited.stdout)["status"], "awaiting_external_review")
+
+
 if __name__ == "__main__":
     unittest.main()

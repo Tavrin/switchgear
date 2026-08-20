@@ -222,7 +222,7 @@ def exit_code_for(status: str) -> int:
     silently did not, so `rc == 124` meant different things for `scout` and
     `review`. One table, used everywhere.
 
-        0    the job did its work (ok, awaiting_review)
+        0    the job did its work (ok, awaiting_review, awaiting_external_review)
         1    refusal or provider error
         2    dirty -- worktree integrity changed during the job
         124  timed out
@@ -231,6 +231,8 @@ def exit_code_for(status: str) -> int:
         return 2
     if status == "timeout":
         return 124
-    if status in {"ok", "awaiting_review"}:
+    # External acceptance is success here because the handoff happened; whether
+    # the frozen change lands is a decision this tool does not own.
+    if status in {"ok", "awaiting_review", "awaiting_external_review"}:
         return 0
     return 1

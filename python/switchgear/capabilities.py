@@ -31,7 +31,8 @@ REFUSAL_CONTRACT = {
         "remedy. Treat any refusal as fail-closed: no work was promoted."
     ),
     "exit_codes": {
-        "0": "the job did its work (ok, awaiting_review), or an informational command answered",
+        "0": ("the job did its work (ok, awaiting_review, "
+              "awaiting_external_review), or an informational command answered"),
         "1": "refusal or provider error",
         "2": "dirty — worktree integrity changed during the job",
         "124": "timed out",
