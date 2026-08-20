@@ -42,7 +42,16 @@ def _alive(pid: int, start: str, boot: str) -> bool:
 
 
 def identity_key(ident: WorktreeIdentity) -> str:
-    raw = f"{ident.st_dev}:{ident.st_ino}:{ident.realpath}"
+    return identity_key_from_facts({
+        "realpath": ident.realpath,
+        "st_dev": ident.st_dev,
+        "st_ino": ident.st_ino,
+    })
+
+
+def identity_key_from_facts(worktree: dict[str, Any]) -> str:
+    """The legacy/lease key reconstructed from recorded worktree facts."""
+    raw = f"{worktree['st_dev']}:{worktree['st_ino']}:{worktree['realpath']}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 

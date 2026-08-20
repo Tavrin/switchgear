@@ -9,7 +9,7 @@ from typing import Any, Optional
 from . import broker as brokermod
 from . import commands as cmdlib
 from . import delegate as delegatemod
-from . import events, identity, jobstate, lease, process, provider, review, sandbox, state
+from . import events, identity, jobstate, lease, process, provider, review, sandbox, sessions, state
 from .digest import sha256_json
 from .errors import DirtyWorktree, ProviderError, Refuse
 from .paths import require_disjoint
@@ -80,7 +80,7 @@ def _now() -> str:
 
 def _runner_record(
     *, job_id: str, worktree: str, harness: str, mode: str, role: str,
-    model: dict[str, Any],
+    model: dict[str, Any], session_store_id: str | None = None,
 ) -> dict[str, Any]:
     """Launch identity and attribution persisted before provider execution.
 
@@ -101,6 +101,7 @@ def _runner_record(
         "starttime": lease._starttime(os.getpid()),
         "boot_id": lease._boot_id(),
         "job_id": job_id,
+        "session_store_id": session_store_id,
         "dir": worktree,
         "harness": harness,
         "mode": mode,
@@ -388,6 +389,7 @@ def run_job(
     attachments: Optional[dict[str, str]] = None,
     resume_session: Optional[str] = None,
     resumed_from: Optional[str] = None,
+    session_store_id: Optional[str] = None,
 ) -> dict[str, Any]:
     profile = load_profile(profile_path)
     profile_digest = sha256_json(profile)
@@ -449,6 +451,11 @@ def run_job(
     # after the spend is an audit, not a control.
     quotamod.assert_within_budget(root.path)
     job_id = job_id or new_job_id()
+    legacy_resume = bool(resume_session) and session_store_id is None
+    if session_store_id is None:
+        session_store_id = sessions.new_session_store_id()
+    else:
+        sessions.require_session_store_id(session_store_id)
 
     # ONE enforcement point, so --background is covered automatically (it just
     # re-execs this CLI) rather than special-cased per command.
@@ -459,11 +466,15 @@ def run_job(
         wait=os.environ.get("SWITCHGEAR_BACKGROUND_CHILD") == "1",
     )
     dirs = state.create_job_dirs(root, job_id)
-    # Liveness record for EVERY job, not just backgrounded ones. Without it a
+    # Launch attribution for EVERY job, not just backgrounded ones. Without it a
     # FOREGROUND job whose process died left a directory with no result.json,
     # and `status` reported "running" forever -- measured on a job abandoned five
     # hours earlier. pid alone is not identity (pids are recycled), hence
     # starttime and boot_id, the same triple the lease uses.
+    # The lineage id has to survive a controller crash before provider startup:
+    # otherwise the durable conversation exists but no record can identify
+    # which store belongs to the job. A failed attribution write therefore
+    # refuses the launch instead of spending with an unidentifiable store.
     try:
         atomic_write_json(
             os.path.join(dirs["job"], "runner.json"),
@@ -474,12 +485,14 @@ def run_job(
                 mode=mode,
                 role=role,
                 model=model,
+                session_store_id=session_store_id,
             ),
         )
     except Exception:
-        # Never fail a job because its liveness marker could not be written; the
-        # status command degrades to "unknown" rather than lying.
-        pass
+        # Attribution failure now refuses the launch, but it must not strand the
+        # concurrency slot while doing so.
+        concurrency.release(root.path, job_id)
+        raise
     lock_cm = None
     token_uuid = None
     if mode == "bounded-write":
@@ -697,30 +710,13 @@ def run_job(
             provider.assert_pinned_version(
                 probe.returncode, probe.stdout, probe.timed_out, adapter.name
             )
-        # Durable conversation state, per worktree per provider, so a later
-        # `resume` can continue this session. It lives OUTSIDE the job directory
-        # precisely because the job's sandbox home is reclaimed when the job
-        # ends -- which is why the first resume attempt failed with "No
-        # conversation found with session ID".
+        # Durable conversation state follows this job's controller-minted
+        # lineage. Fresh jobs never discover or adopt a store by filesystem
+        # identity; only an explicit resume reaches an existing lineage.
         session_binds = []
-        if adapter.session_store_paths():
-            # Which worktree this store belongs to, recorded where retention can
-            # read it. The directory name is sha256(st_dev:st_ino:realpath), which
-            # cannot be reversed -- so without this marker `gc` could not tell an
-            # orphaned store from a live one by inspection, and would have to
-            # guess. Written once, beside the store, never inside it.
-            key_dir = os.path.join(root.path, "sessions", lease.identity_key(ident))
-            os.makedirs(key_dir, mode=0o700, exist_ok=True)
-            marker = os.path.join(key_dir, "worktree.json")
-            if not os.path.exists(marker):
-                atomic_write_json(marker, {
-                    "worktree": ident.realpath,
-                    "st_dev": ident.st_dev,
-                    "st_ino": ident.st_ino,
-                })
         for rel in adapter.session_store_paths():
             src = os.path.join(
-                root.path, "sessions", lease.identity_key(ident), adapter.name, rel
+                root.path, "sessions", session_store_id, adapter.name, rel
             )
             os.makedirs(src, mode=0o700, exist_ok=True)
             _assert_no_credentials(src)
@@ -939,6 +935,7 @@ def run_job(
             # and must stay readable.
             "schema_version": SCHEMA_VERSION,
             "job_id": job_id,
+            "session_store_id": session_store_id,
             # The one word callers already branch on, DERIVED from the four facts
             # below rather than assigned directly. Its values and its precedence
             # are unchanged.
@@ -1152,10 +1149,26 @@ def run_job(
         _reclaim_sandbox_home(dirs["home"], root.path)
         return record
 
+    def _prepare_session_lineage() -> None:
+        # This runs after a write lease is established but before credentials,
+        # version probes, or the provider. A refused resume therefore cannot
+        # mount, read, or mutate the store it failed to verify.
+        if resume_session:
+            if legacy_resume:
+                sessions.migrate_legacy(
+                    root, session_store_id, adapter.name, job_id, ident
+                )
+            else:
+                sessions.verify_lineage(root, session_store_id, adapter.name, ident)
+        else:
+            sessions.create_lineage(root, session_store_id, adapter.name, job_id, ident)
+
     try:
         if lock_cm:
             with lock_cm:
+                _prepare_session_lineage()
                 return _execute_with_broker()
+        _prepare_session_lineage()
         return _execute_with_broker()
     finally:
         # The slot goes back however the job ended. A crashed job's marker is

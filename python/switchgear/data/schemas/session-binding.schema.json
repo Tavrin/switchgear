@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Provider session lineage binding",
+  "type": "object",
+  "required": [
+    "binding_version",
+    "session_store_id",
+    "harness",
+    "created_at",
+    "created_by_job",
+    "worktree"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "binding_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "session_store_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "harness": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z$"
+    },
+    "created_by_job": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "worktree": {
+      "type": "object",
+      "required": [
+        "realpath",
+        "st_dev",
+        "st_ino",
+        "git_dir",
+        "common_git_dir",
+        "common_dev",
+        "common_ino"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "realpath": {"type": "string", "minLength": 1},
+        "st_dev": {"type": "integer", "minimum": 0},
+        "st_ino": {"type": "integer", "minimum": 0},
+        "git_dir": {"type": "string", "minLength": 1},
+        "common_git_dir": {"type": "string", "minLength": 1},
+        "common_dev": {"type": "integer", "minimum": 0},
+        "common_ino": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

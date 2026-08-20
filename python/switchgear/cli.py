@@ -77,6 +77,7 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             # written before it existed, which stay readable.
             "schema_version": record.get("schema_version"),
             "job_id": record["job_id"],
+            "session_store_id": record.get("session_store_id"),
             "status": record["status"],
             # The four facts `status` projects. A caller asking "did the provider
             # fail?" no longer has to know that `dirty` outranks it.
@@ -578,6 +579,7 @@ def cmd_resume(ns: argparse.Namespace) -> int:
         job_id=os.environ.get("SWITCHGEAR_JOB_ID") or None,
         resume_session=session,
         resumed_from=ns.job,
+        session_store_id=prior.get("session_store_id"),
     )
     _print_job(rec, getattr(ns, "json", False))
     return jobstate.exit_code_for(rec["status"])
@@ -1368,6 +1370,8 @@ def cmd_gc(ns: argparse.Namespace) -> int:
         print(f"removed {len(result['removed'])} job(s), freed {mb:.1f}MB")
         for k in result["kept"]:
             print(f"  kept {k['job_id'][:8]}: {k['reason']}")
+        for sess in result.get("sessions_kept", []):
+            print(f"  kept session {sess['key'][:8]}: {sess['reason']}")
         for pr in result.get("protected", []):
             print(f"  protected {pr['job_id'][:8]}: {pr['reason']}")
     return 0
@@ -1883,7 +1887,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="fold spend.jsonl history older than today into an "
                          "append-only spend-rollup.jsonl (totals are preserved)")
     gp.add_argument("--include-sessions", dest="include_sessions", action="store_true",
-                    help="also remove session stores whose worktree is gone. Needs "
+                    help="also remove session stores whose bound worktree is "
+                         "definitively absent. Needs "
                          "--yes as well: a job directory can be recreated by "
                          "re-running the job, a conversation cannot")
     gp.set_defaults(func=cmd_gc)

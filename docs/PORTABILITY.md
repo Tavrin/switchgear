@@ -53,9 +53,11 @@ Caveats worth knowing before starting:
   a headless VM you log in once and the credential file lands inside the VM;
   `doctor` will tell you if it is missing or expired.
 - Keep the state root **inside** the VM's own filesystem, not on a shared mount.
-  Worktree identity is `(st_dev, st_ino)` and lease/session keys hash it;
-  virtiofs and other shared filesystems do not always preserve inode identity
-  across remounts, which would invalidate leases and orphan session stores.
+  Worktree identity is `(st_dev, st_ino)` and lease keys hash it; virtiofs and
+  other shared filesystems do not always preserve inode identity across
+  remounts, which would invalidate leases. Session lineages have random ids, but
+  their binding records still require those worktree facts to match on resume,
+  so a remount can deliberately make an existing conversation non-resumable.
 - Bind the repo you are working on into the VM as normal, but expect shared-mount
   filesystems to be slower for the tree digest on large repos.
 

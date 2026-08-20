@@ -4130,5 +4130,338 @@ class CrashedJobAttribution(unittest.TestCase):
                          {str(path) for path in artifacts})
 
 
+class SessionLineageTests(unittest.TestCase):
+    """A provider conversation follows an explicit lineage, never a pathname."""
+
+    def setUp(self):
+        RailTests.setUp(self)
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def tearDown(self):
+        RailTests.tearDown(self)
+
+    args = RailTests.args
+
+    @property
+    def _session_env(self):
+        return {
+            "SWITCHGEAR_MOCK_BEHAVIOR": "session-probe",
+            # These tests are about the session bind. The uid boundary has its
+            # own end-to-end suite and may be unavailable inside nested CI.
+            "SWITCHGEAR_NO_UID_BOUNDARY": "1",
+        }
+
+    def _fresh(self, worktree=None):
+        p = run_cli(
+            self.args("--json", "scout", str(worktree or self.primary), "look"),
+            env=self._session_env,
+        )
+        self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
+        return json.loads(p.stdout)
+
+    def _resume(self, job_id):
+        return run_cli(
+            self.args("--json", "resume", job_id, "continue"),
+            env=self._session_env,
+        )
+
+    def _convert_to_legacy(self, result, worktree, *, mismatch=False):
+        from switchgear import identity, lease
+
+        ident = identity.inspect_worktree(str(worktree))
+        old_id = result["session_store_id"]
+        lineage = self.state / "sessions" / old_id
+        legacy = self.state / "sessions" / lease.identity_key(ident)
+        legacy.mkdir(parents=True)
+        os.rename(lineage / "opencode", legacy / "opencode")
+        (legacy / "claude").mkdir()
+        (legacy / "claude" / "keep").write_text("other harness")
+        (legacy / "worktree.json").write_text(json.dumps({
+            "worktree": ident.realpath,
+            "st_dev": ident.st_dev,
+            "st_ino": ident.st_ino + (1 if mismatch else 0),
+        }))
+        (lineage / "binding.json").unlink()
+        lineage.rmdir()
+        result_path = self.state / "jobs" / result["job_id"] / "result.json"
+        prior = json.loads(result_path.read_text())
+        prior.pop("session_store_id")
+        result_path.write_text(json.dumps(prior))
+        return legacy
+
+    def test_fresh_jobs_do_not_adopt_a_recreated_paths_conversation(self):
+        """Force the old identity key to collide by replacing both observed
+        worktree inode values with constants. The repository is genuinely
+        deleted and recreated at the same path, but the test is deterministic
+        even when the host filesystem would allocate a different inode."""
+        from dataclasses import replace
+        from unittest import mock
+
+        from switchgear import identity, lease
+        from switchgear.job import run_job
+
+        repo = self.tmp / "reused-worktree"
+
+        def initialise(label):
+            repo.mkdir()
+            subprocess.run(["/usr/bin/git", "-C", str(repo), "init", "-q"], check=True)
+            subprocess.run(["/usr/bin/git", "-C", str(repo), "config", "user.email",
+                            "test@example.invalid"], check=True)
+            subprocess.run(["/usr/bin/git", "-C", str(repo), "config", "user.name",
+                            "Session Test"], check=True)
+            (repo / "tracked.txt").write_text(label)
+            subprocess.run(["/usr/bin/git", "-C", str(repo), "add", "tracked.txt"], check=True)
+            subprocess.run(["/usr/bin/git", "-C", str(repo), "commit", "-qm", label], check=True)
+
+        initialise("first")
+        real_inspect = identity.inspect_worktree
+
+        def forced_inspect(path):
+            return replace(real_inspect(path), st_dev=4242, st_ino=1717)
+
+        env = dict(self._session_env)
+        env["SWITCHGEAR_ALLOW_LIVE_PROVIDER"] = ""
+        with mock.patch.object(identity, "inspect_worktree", side_effect=forced_inspect), \
+                mock.patch.dict(os.environ, env, clear=False):
+            first_ident = forced_inspect(str(repo))
+            first = run_job(
+                profile_path=str(self.profile), state_path=str(self.state),
+                mode="readonly", role="scout", worktree=str(repo), prompt="first",
+                provider_path=str(MOCK),
+            )
+        shutil.rmtree(repo)
+        initialise("second")
+        with mock.patch.object(identity, "inspect_worktree", side_effect=forced_inspect), \
+                mock.patch.dict(os.environ, env, clear=False):
+            second_ident = forced_inspect(str(repo))
+            second = run_job(
+                profile_path=str(self.profile), state_path=str(self.state),
+                mode="readonly", role="scout", worktree=str(repo), prompt="second",
+                provider_path=str(MOCK),
+            )
+
+        self.assertEqual(
+            lease.identity_key(first_ident), lease.identity_key(second_ident),
+            "fixture did not force the legacy identity collision",
+        )
+        self.assertNotEqual(
+            first["session_store_id"], second["session_store_id"],
+            "a fresh job adopted the recreated path's previous conversation lineage",
+        )
+        second_events = Path(second["artifacts"]["events"]).read_text()
+        self.assertIn("prior=''", second_events,
+                      "the unrelated fresh worker could see the first conversation")
+        first_history = (self.state / "sessions" / first["session_store_id"] /
+                         "opencode" / ".local" / "share" / "opencode" /
+                         "conversation.txt")
+        self.assertEqual(first_history.read_text(), "turn\n")
+
+    def test_fresh_result_runner_projection_and_binding_name_one_lineage(self):
+        from switchgear.schema import validate
+
+        projected = self._fresh()
+        result = json.loads((self.state / "jobs" / projected["job_id"] /
+                             "result.json").read_text())
+        runner = json.loads((self.state / "jobs" / projected["job_id"] /
+                             "runner.json").read_text())
+        lineage_id = projected["session_store_id"]
+        self.assertEqual(result["session_store_id"], lineage_id)
+        self.assertEqual(runner["session_store_id"], lineage_id,
+                         "runner.json lost the pre-provider lineage attribution")
+        binding = json.loads((self.state / "sessions" / lineage_id /
+                              "binding.json").read_text())
+        validate(binding, "session-binding.schema.json")
+        self.assertEqual(binding["created_by_job"], projected["job_id"])
+        self.assertEqual(binding["harness"], "opencode")
+
+    def test_resume_refuses_repository_and_worktree_admin_slot_reuse(self):
+        first = self._fresh()
+        lineage = self.state / "sessions" / first["session_store_id"]
+        binding_path = lineage / "binding.json"
+        original = json.loads(binding_path.read_text())
+        history = lineage / "opencode" / ".local" / "share" / "opencode" / "conversation.txt"
+
+        variants = {
+            "different repository": {
+                "common_git_dir": original["worktree"]["common_git_dir"] + "-other",
+                "common_ino": original["worktree"]["common_ino"] + 1,
+            },
+            "different worktree admin slot": {
+                "git_dir": original["worktree"]["git_dir"] + "-other",
+            },
+        }
+        for label, changed in variants.items():
+            with self.subTest(label=label):
+                bad = json.loads(json.dumps(original))
+                bad["worktree"].update(changed)
+                binding_path.write_text(json.dumps(bad))
+                p = self._resume(first["job_id"])
+                self.assertNotEqual(
+                    p.returncode, 0,
+                    f"resume accepted the {label} binding and could mount it",
+                )
+                self.assertIn("risk mounting an unrelated conversation", p.stderr)
+                self.assertIn("Start a new job instead", p.stderr)
+                self.assertEqual(
+                    history.read_text(), "turn\n",
+                    "a mismatched store was mounted and modified by the provider",
+                )
+                binding_path.write_text(json.dumps(original))
+
+    def test_resume_refuses_missing_invalid_and_unknown_binding_records(self):
+        first = self._fresh()
+        lineage = self.state / "sessions" / first["session_store_id"]
+        binding_path = lineage / "binding.json"
+        original = json.loads(binding_path.read_text())
+        history = lineage / "opencode" / ".local" / "share" / "opencode" / "conversation.txt"
+        cases = {
+            "missing": None,
+            "schema-invalid": dict(original, unexpected="not schema covered"),
+            "unknown-version": dict(original, binding_version=2),
+        }
+        for label, binding in cases.items():
+            with self.subTest(label=label):
+                if binding is None:
+                    binding_path.unlink()
+                else:
+                    binding_path.write_text(json.dumps(binding))
+                p = self._resume(first["job_id"])
+                self.assertNotEqual(
+                    p.returncode, 0,
+                    f"resume accepted a {label} binding record",
+                )
+                self.assertIn("Start a new job instead", p.stderr)
+                self.assertEqual(history.read_text(), "turn\n")
+                binding_path.write_text(json.dumps(original))
+
+    def test_legacy_resume_migrates_only_its_harness_and_keeps_context(self):
+        first = self._fresh()
+        legacy = self._convert_to_legacy(first, self.primary)
+        p = self._resume(first["job_id"])
+        self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
+        resumed = json.loads(p.stdout)
+        new_lineage = self.state / "sessions" / resumed["session_store_id"]
+        self.assertTrue((new_lineage / "binding.json").is_file())
+        self.assertTrue((new_lineage / "opencode").is_dir())
+        self.assertFalse((legacy / "opencode").exists())
+        self.assertTrue((legacy / "claude" / "keep").is_file(),
+                        "migration moved another harness's conversation")
+        self.assertTrue((legacy / "worktree.json").is_file())
+        events = [json.loads(line) for line in
+                  Path(resumed["artifacts"]["events"]).read_text().splitlines()]
+        text = next(event["part"]["text"] for event in events
+                    if event.get("type") == "text")
+        self.assertEqual(text, "prior='turn\\n'",
+                         "the migrated conversation did not survive resume")
+
+    def test_unverifiable_legacy_resume_is_quarantined_and_refused(self):
+        from switchgear import gc as gcmod
+        from switchgear.state import StateRoot
+
+        first = self._fresh()
+        legacy = self._convert_to_legacy(first, self.primary, mismatch=True)
+        p = self._resume(first["job_id"])
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("could not be safely bound", p.stderr)
+        self.assertIn("set aside", p.stderr)
+        self.assertIn("Start a new job instead", p.stderr)
+        self.assertFalse(legacy.exists())
+        quarantined = list((self.state / "sessions" / ".quarantine").iterdir())
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual(
+            (quarantined[0] / "opencode" / ".local" / "share" / "opencode" /
+             "conversation.txt").read_text(),
+            "turn\n",
+        )
+        classified = gcmod._session_candidates(StateRoot(str(self.state)))
+        quarantine_rows = [row for row in classified["skipped"]
+                           if row["key"].startswith(".quarantine/")]
+        self.assertTrue(
+            quarantine_rows,
+            "quarantined store was not reported as operator-only retention",
+        )
+        quarantine_row = quarantine_rows[0]
+        self.assertIn("operator must remove", quarantine_row["reason"])
+
+    def _bound_store(self, bound_path):
+        from dataclasses import replace
+
+        from switchgear import identity, sessions
+        from switchgear.state import StateRoot, new_job_id
+
+        ident = replace(identity.inspect_worktree(str(self.primary)),
+                        realpath=str(bound_path))
+        lineage_id = sessions.new_session_store_id()
+        sessions.create_lineage(
+            StateRoot(str(self.state)), lineage_id, "opencode", new_job_id(), ident
+        )
+        return lineage_id, self.state / "sessions" / lineage_id
+
+    def test_permission_denied_worktree_is_skipped_with_errno(self):
+        """chmod cannot deny root, so say loudly when that environment cannot
+        construct the permission failure instead of passing vacuously."""
+        if os.geteuid() == 0:
+            self.skipTest("running as root: cannot construct EACCES with an unreadable parent")
+        from switchgear import gc as gcmod
+        from switchgear.state import StateRoot
+
+        parent = self.tmp / "unreadable"
+        bound = parent / "worktree"
+        bound.mkdir(parents=True)
+        lineage_id, store = self._bound_store(bound)
+        parent.chmod(0)
+        try:
+            classified = gcmod._session_candidates(StateRoot(str(self.state)))
+        finally:
+            parent.chmod(0o700)
+        self.assertTrue(store.exists())
+        skipped = {row["key"]: row for row in classified["skipped"]}
+        self.assertIn(lineage_id, skipped,
+                      "permission-denied session was not reported as skipped")
+        row = skipped[lineage_id]
+        self.assertIn("errno 13", row["reason"],
+                      "the permission errno did not reach the gc report")
+
+    def test_non_enoent_stat_error_is_skipped_with_errno(self):
+        import errno
+        from unittest import mock
+
+        from switchgear import gc as gcmod
+        from switchgear.state import StateRoot
+
+        lineage_id, store = self._bound_store(self.tmp / "missing-worktree")
+        with mock.patch.object(
+            gcmod, "_stat_worktree",
+            side_effect=OSError(errno.EIO, "constructed I/O failure"),
+        ):
+            classified = gcmod._session_candidates(StateRoot(str(self.state)))
+        self.assertTrue(store.exists())
+        self.assertEqual(classified["remove"], [])
+        skipped = {row["key"]: row for row in classified["skipped"]}
+        self.assertIn(lineage_id, skipped,
+                      "non-ENOENT session was not reported as skipped")
+        row = skipped[lineage_id]
+        self.assertIn("errno 5", row["reason"],
+                      "the non-ENOENT errno did not reach the gc report")
+
+    def test_delete_time_recheck_keeps_a_store_when_worktree_reappears(self):
+        from switchgear import gc as gcmod
+        from switchgear.state import StateRoot
+
+        bound = self.tmp / "reappearing-worktree"
+        lineage_id, store = self._bound_store(bound)
+        root = StateRoot(str(self.state))
+        classified = gcmod._session_candidates(root)
+        self.assertIn(lineage_id, [row["key"] for row in classified["remove"]],
+                      "fixture was not a removal candidate before the race")
+        bound.mkdir()
+        result = gcmod.apply(str(self.state), {"sessions": classified["remove"]})
+        self.assertTrue(store.exists(),
+                        "delete-time recheck removed a now-bound session store")
+        self.assertNotIn(lineage_id, result["sessions_removed"])
+        kept = {row["key"]: row["reason"] for row in result["sessions_kept"]}
+        self.assertIn("appeared since the plan", kept[lineage_id])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,14 @@
       "type": "string",
       "minLength": 1
     },
+    "session_store_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Controller-minted provider conversation lineage. Null or absent only on historical records."
+    },
     "correlation": {
       "type": "object",
       "description": "the caller's own identifiers, exactly as supplied on the envelope. Never interpreted by Switchgear.",

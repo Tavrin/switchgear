@@ -124,3 +124,21 @@ be bound to more than the inode triple, so a recreated worktree at a reused
 inode starts a fresh conversation instead of inheriting one. That is a change to
 how a store is *identified*, not to how long it is *kept*, and it is the more
 useful of the two questions.
+
+## Decision and implementation (2026-08-20)
+
+The owner decided to replace inferred store identity with an explicit
+controller-minted session lineage. Each fresh job now gets a uuid4
+`session_store_id` and a schema-validated `binding.json`; worktree and repository
+facts constrain an explicit resume but never select a store. Resume follows the
+prior job's recorded lineage and fails closed before mounting if any binding fact
+is absent, invalid or different. Verified legacy stores migrate lazily one
+harness subtree at a time; unverifiable ones are quarantined for deliberate
+operator handling.
+
+The retention recommendation above was preserved: sessions remain
+worktree-scoped and are not coupled to job protection. GC now enumerates lineage,
+legacy and quarantine shapes, reports every non-ENOENT stat failure with its
+errno, never automatically collects quarantine, and rechecks both absence and
+the lease immediately before deletion. As noted above, ENOENT still cannot prove
+that a mount which should contain the worktree is mounted.

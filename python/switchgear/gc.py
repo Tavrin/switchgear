@@ -23,7 +23,8 @@ import os
 import time
 from typing import Any
 
-from . import jobstate
+from . import jobstate, lease, sessions as sessionmod
+from .digest import sha256_json
 from .errors import Refuse
 from .paths import safe_rmtree
 from .state import StateRoot, read_json
@@ -181,7 +182,7 @@ def plan(
 
     orphan_launches, protected_launches = _orphan_launch_records(root)
     protected.extend(protected_launches)
-    sessions = _session_candidates(root, rows) if include_sessions else {"remove": [], "skipped": []}
+    sessions = _session_candidates(root) if include_sessions else {"remove": [], "skipped": []}
 
     return {
         "jobs": candidates,
@@ -284,50 +285,110 @@ def _protected_launch_state(path: str) -> str | None:
     return str(rec["launch_state"])
 
 
-def _session_candidates(root: StateRoot, rows: list[dict[str, Any]]) -> dict[str, list]:
-    """Session stores whose worktree no longer exists.
+def _session_descriptor(path: str, key: str) -> tuple[dict[str, Any] | None, str | None]:
+    """A schema-checked lineage marker or the legacy marker it replaced."""
+    binding_path = os.path.join(path, "binding.json")
+    legacy_path = os.path.join(path, "worktree.json")
+    if os.path.isfile(binding_path):
+        try:
+            binding = sessionmod.read_binding(binding_path)
+        except (OSError, Refuse, ValueError) as exc:
+            return None, f"binding.json unreadable or invalid: {exc}"
+        if binding.get("binding_version") != sessionmod.BINDING_VERSION:
+            return None, f"unsupported binding version {binding.get('binding_version')!r}"
+        if binding.get("session_store_id") != key:
+            return None, "binding.json names a different session lineage"
+        worktree = binding["worktree"]
+        return ({
+            "kind": "lineage",
+            "worktree": worktree["realpath"],
+            "lease_key": lease.identity_key_from_facts(worktree),
+            "marker_digest": sha256_json(binding),
+        }, None)
+    if os.path.isfile(legacy_path):
+        try:
+            marker = read_json(legacy_path)
+        except Exception as exc:
+            return None, f"legacy worktree marker unreadable: {exc}"
+        if not isinstance(marker, dict) or not marker.get("worktree"):
+            return None, "legacy worktree marker names no path"
+        return ({
+            "kind": "legacy",
+            "worktree": marker["worktree"],
+            # Legacy directories and leases use the same identity key.
+            "lease_key": key,
+            "marker_digest": sha256_json(marker),
+        }, None)
+    return None, "no binding.json or legacy worktree.json; cannot identify it"
 
-    Returns `remove` and `skipped`. The distinction is the whole point: if a
-    worktree cannot be stat'ed, its key is UNVERIFIABLE, not absent -- an
-    unmounted disk or a permission error is not proof that a conversation is
-    orphaned. Those are skipped and reported, never deleted.
+
+def _stat_worktree(path: str):
+    """Explicit seam so tests can force errors that a local filesystem rarely emits."""
+    return os.stat(path)
+
+
+def _stat_reason(path: str, exc: OSError) -> str:
+    number = exc.errno if exc.errno is not None else "unknown"
+    detail = os.strerror(exc.errno) if exc.errno is not None else str(exc)
+    return f"cannot stat {path}: errno {number} ({detail})"
+
+
+def _session_candidates(root: StateRoot) -> dict[str, list]:
+    """Session stores whose bound worktree is definitively absent.
+
+    Session retention is worktree-scoped by design and deliberately NOT coupled
+    to job protection. Returns `remove` and `skipped`: every `OSError` except a
+    definitive `FileNotFoundError` is unverifiable and therefore skipped with
+    its errno. Even ENOENT is an imperfect signal because an unmounted mount
+    point can present as absence; gc states that limit rather than promising an
+    impossible guarantee.
     """
     remove: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    sessions = os.path.join(root.path, "sessions")
-    if not os.path.isdir(sessions):
+    sessions_root = os.path.join(root.path, "sessions")
+    if not os.path.isdir(sessions_root):
         return {"remove": remove, "skipped": skipped}
 
-    for key in sorted(os.listdir(sessions)):
-        kdir = os.path.join(sessions, key)
+    for key in sorted(os.listdir(sessions_root)):
+        kdir = os.path.join(sessions_root, key)
+        if key == ".quarantine":
+            if os.path.isdir(kdir):
+                for name in sorted(os.listdir(kdir)):
+                    skipped.append({
+                        "key": f".quarantine/{name}",
+                        "reason": "quarantined binding could not be verified; an operator must remove it deliberately",
+                    })
+            continue
         if not os.path.isdir(kdir):
             continue
-        marker = os.path.join(kdir, "worktree.json")
-        if not os.path.isfile(marker):
-            skipped.append({"key": key, "reason": "no worktree marker; cannot identify it"})
+        descriptor, reason = _session_descriptor(kdir, key)
+        if descriptor is None:
+            skipped.append({"key": key, "reason": reason})
             continue
         try:
-            wt = read_json(marker).get("worktree")
-        except Exception:
-            skipped.append({"key": key, "reason": "worktree marker unreadable"})
+            _stat_worktree(descriptor["worktree"])
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            skipped.append({"key": key, "reason": _stat_reason(descriptor["worktree"], exc)})
             continue
-        if not wt:
-            skipped.append({"key": key, "reason": "worktree marker names no path"})
-            continue
-        try:
-            exists = os.path.exists(wt)
-        except OSError:
-            skipped.append({"key": key, "reason": f"cannot stat {wt}"})
-            continue
-        if exists:
+        else:
             continue  # the worktree is still there; the conversation may be wanted
-        # Leases are stored under the SAME identity key, so a live lease is a
-        # direct lookup rather than something to infer. A leased worktree whose
-        # path has vanished is a contradiction worth reporting, not resolving.
-        if os.path.isdir(os.path.join(root.leases, key)):
+        # A leased worktree whose path has vanished is a contradiction worth
+        # reporting, not resolving. Lineage stores reconstruct the lease key
+        # from binding facts; legacy stores already carry it as their name.
+        if os.path.isdir(os.path.join(root.leases, descriptor["lease_key"])):
             skipped.append({"key": key, "reason": "a lease still exists for it"})
             continue
-        remove.append({"key": key, "worktree": wt, "bytes": _dir_bytes(kdir), "path": kdir})
+        remove.append({
+            "key": key,
+            "worktree": descriptor["worktree"],
+            "bytes": _dir_bytes(kdir),
+            "path": kdir,
+            "marker_kind": descriptor["kind"],
+            "marker_digest": descriptor["marker_digest"],
+            "lease_key": descriptor["lease_key"],
+        })
     return {"remove": remove, "skipped": skipped}
 
 
@@ -409,12 +470,47 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
         launch_records_removed += 1
 
     sessions_removed = []
+    sessions_kept: list[dict[str, str]] = []
     sessions_root = os.path.join(root.path, "sessions")
     for store in planned.get("sessions", []):
+        descriptor, reason = _session_descriptor(store["path"], store["key"])
+        if descriptor is None:
+            sessions_kept.append({"key": store["key"], "reason": reason or "binding became unverifiable"})
+            continue
+        if (descriptor["kind"] != store.get("marker_kind")
+                or descriptor["marker_digest"] != store.get("marker_digest")):
+            sessions_kept.append({
+                "key": store["key"],
+                "reason": "binding changed since the plan; refusing to delete a different store",
+            })
+            continue
+        try:
+            _stat_worktree(descriptor["worktree"])
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            sessions_kept.append({
+                "key": store["key"],
+                "reason": _stat_reason(descriptor["worktree"], exc),
+            })
+            continue
+        else:
+            sessions_kept.append({
+                "key": store["key"],
+                "reason": "bound worktree appeared since the plan",
+            })
+            continue
+        if os.path.isdir(os.path.join(root.leases, descriptor["lease_key"])):
+            sessions_kept.append({
+                "key": store["key"],
+                "reason": "a lease appeared for it since the plan",
+            })
+            continue
         try:
             safe_rmtree(store["path"], must_be_under=sessions_root,
                         label=f"session store {store['key']}")
-        except (OSError, Refuse):
+        except (OSError, Refuse) as exc:
+            sessions_kept.append({"key": store["key"], "reason": f"could not remove: {exc}"})
             continue
         freed += store.get("bytes", 0)
         sessions_removed.append(store["key"])
@@ -424,6 +520,7 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
         "kept": kept,
         "protected": planned.get("protected", []),
         "sessions_removed": sessions_removed,
+        "sessions_kept": sessions_kept,
         # Counted from what was ACTUALLY unlinked. Reporting the planned length
         # would over-report every record the recheck above just saved.
         "launch_records_removed": launch_records_removed,
