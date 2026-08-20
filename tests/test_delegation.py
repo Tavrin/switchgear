@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -215,12 +216,40 @@ class RunningChild(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_a_missing_record_reads_as_running_not_as_finished(self):
-        """Absence is not evidence of a benign state -- the rule this codebase
-        learned five times. A child with no result.json has not succeeded."""
-        out = self.broker.child_result("kid")
-        self.assertEqual(out["state"], "running")
-        self.assertNotIn("status", out)
+    def test_a_missing_or_unreadable_record_uses_the_launch_liveness(self):
+        """A missing result used to mean running forever, even after the child
+        died. A real live-then-dead pid identity makes both sides non-vacuous and
+        also proves corrupt result bytes do not hide the launch verdict."""
+        from switchgear.lease import _boot_id, _starttime
+
+        launch = self.state / "launch"
+        launch.mkdir()
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+        )
+        try:
+            (launch / "kid.json").write_text(json.dumps({
+                "job_id": "kid",
+                "pid": proc.pid,
+                "starttime": _starttime(proc.pid),
+                "boot_id": _boot_id(),
+            }))
+            live = self.broker.child_result("kid")
+            self.assertIn(live["state"], ("running", "queued"))
+            self.assertNotIn("status", live)
+
+            proc.terminate()
+            proc.wait(timeout=10)
+            dead = self.broker.child_result("kid")
+            self.assertEqual(dead, {"job_id": "kid", "state": "died"})
+
+            (self.state / "jobs" / "kid" / "result.json").write_text("{broken")
+            unreadable = self.broker.child_result("kid")
+            self.assertEqual(unreadable, {"job_id": "kid", "state": "died"})
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)
 
     def test_the_worker_gets_the_answer_and_not_the_record(self):
         """A bounded projection: the child's paths, digests and policy are not

@@ -40,9 +40,10 @@ UNHEALTHY_RATIO = 0.5
 def observe(state_path: str, scan: int = DEFAULT_SCAN) -> dict[str, Any]:
     """Per-model outcome counts over the most recent jobs.
 
-    Only TERMINAL states are counted. A running job has no outcome yet, and a job
-    of unknown liveness has no outcome anyone can establish -- counting either as
-    a failure would manufacture bad news out of missing information.
+    Only explicitly classified terminal states enter `ok + failed`. Running,
+    queued, cancelled and recordless-unknown jobs say nothing about provider
+    success. A result that exists without a string outcome is reported as
+    unrecognized instead of silently disappearing or manufacturing success.
     """
     from .joblist import enumerate_jobs
 
@@ -52,7 +53,26 @@ def observe(state_path: str, scan: int = DEFAULT_SCAN) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = {}
     for row in rows:
         state = row.get("state")
-        if state in ("running", "queued", "unknown"):
+
+        # Cancellation is operator intent, not a provider outcome. Running,
+        # queued and genuinely recordless-unknown jobs have no outcome yet. A
+        # parsed result with no string status is different: it tried and failed
+        # to state an outcome, so retain that fact in `unrecognized` below.
+        result_record: dict[str, Any] | None = None
+        try:
+            value = read_json(os.path.join(root.jobs, row["job_id"], "result.json"))
+            if isinstance(value, dict):
+                result_record = value
+        except Exception:
+            pass
+        missing_outcome = (
+            result_record is not None
+            and not isinstance(result_record.get("status"), str)
+        )
+        if (
+            state in ("running", "queued", "unknown", "cancelled")
+            and not missing_outcome
+        ):
             continue
         model = row.get("model")
         if not model:
@@ -62,21 +82,31 @@ def observe(state_path: str, scan: int = DEFAULT_SCAN) -> dict[str, Any]:
             "provider": row.get("provider"),
             "ok": 0,
             "failed": 0,
+            "unrecognized": 0,
             "denied": 0,
             "transport": 0,
             "last_failure": None,
+            "last_unrecognized": None,
         })
-        if state in jobstate.FAILURE_STATUSES or state == "died":
+        if missing_outcome:
+            slot["unrecognized"] += 1
+            # None is the honest last value for both an absent status and a
+            # non-string status: neither is a state that consumers may branch on.
+            slot["last_unrecognized"] = None
+        elif state in jobstate.SUCCESS_STATUSES:
+            slot["ok"] += 1
+        elif state in jobstate.FAILURE_STATUSES or state == "died":
             slot["failed"] += 1
             slot["last_failure"] = state
         else:
-            slot["ok"] += 1
+            slot["unrecognized"] += 1
+            slot["last_unrecognized"] = state
 
         # Broker counters separate a POLICY denial from an upstream blip. A
         # network problem and a model refusing requests need different actions,
         # and blending them would hide both.
         try:
-            rec = read_json(os.path.join(root.jobs, row["job_id"], "result.json"))
+            rec = result_record or {}
             calls = rec.get("provider_calls") or {}
             slot["denied"] += int(calls.get("denied") or 0)
             slot["transport"] += int(calls.get("transport") or 0)

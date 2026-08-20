@@ -46,6 +46,7 @@ import sys
 import threading
 from typing import Any, Optional
 
+from . import jobstate
 from .errors import Refuse
 
 #: Where the socket is bound inside the sandbox. Named like the credential
@@ -293,14 +294,25 @@ class DelegationBroker:
         if not known:
             raise Refuse("no such subagent for this job")
         path = os.path.join(self.state_path, "jobs", job_id, "result.json")
-        if not os.path.isfile(path):
-            # Absence is not "fine" and not "failed": it is "no record yet".
-            return {"job_id": job_id, "state": "running"}
+        rec: dict[str, Any] = {}
+        record_exists = False
         try:
             with open(path, encoding="utf-8") as fh:
-                rec = json.load(fh)
+                parsed = json.load(fh)
+            if isinstance(parsed, dict):
+                rec = parsed
+                record_exists = True
         except (OSError, ValueError):
-            return {"job_id": job_id, "state": "unknown"}
+            pass
+        if not record_exists:
+            # Missing result bytes used to mean `running` forever after a child
+            # crashed or was cancelled. Children are background launches, so the
+            # launch triple is the authority rather than absence or a guess.
+            job_dir = os.path.join(self.state_path, "jobs", job_id)
+            return {
+                "job_id": job_id,
+                "state": jobstate.live_state(self.state_path, job_id, {}, job_dir),
+            }
         # A bounded projection, not the record. The worker gets the answer it
         # asked for, not the child's paths, digests or policy.
         return {

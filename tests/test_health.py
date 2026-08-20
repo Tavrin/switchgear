@@ -22,7 +22,10 @@ MAIN = ROOT / "python" / "switchgear" / "__main__.py"
 PYTHON = "/usr/bin/python3"
 sys.path.insert(0, str(ROOT / "python"))
 
-from switchgear import health, quota  # noqa: E402
+from switchgear import health, jobstate, quota  # noqa: E402
+
+
+MISSING_STATUS = object()
 
 
 def run_cli(args, timeout=60):
@@ -45,8 +48,10 @@ class Base(unittest.TestCase):
         jd = self.state / "jobs" / job_id
         (jd / "evidence").mkdir(parents=True)
         (jd / "started_at").write_text(str(time.time() - 100))
-        rec = {"status": status, "role": "scout", "mode": "readonly",
+        rec = {"role": "scout", "mode": "readonly",
                "model": {"id": model, "provider": model.split("/")[0]}}
+        if status is not MISSING_STATUS:
+            rec["status"] = status
         if calls:
             rec["provider_calls"] = calls
         (jd / "result.json").write_text(json.dumps(rec))
@@ -54,6 +59,79 @@ class Base(unittest.TestCase):
 
 
 class Health(Base):
+    def test_result_without_status_uses_a_derived_state(self):
+        """A parsed result with no outcome used to invent the terminal state
+        ``"None"`` instead of consulting the liveness evidence."""
+        job_id = self._job(0, MISSING_STATUS, "pool/missing-outcome")
+        jd = self.state / "jobs" / job_id
+        rec = json.loads((jd / "result.json").read_text())
+
+        state = jobstate.live_state(str(self.state), job_id, rec, str(jd))
+
+        self.assertNotEqual(state, "None")
+        self.assertIn(state, jobstate.DERIVED_STATES)
+
+    def test_result_with_non_string_status_uses_a_derived_state(self):
+        """A JSON value is not an outcome merely because it occupies the
+        status key; only a string may override measured liveness."""
+        job_id = self._job(0, 7, "pool/invalid-outcome")
+        jd = self.state / "jobs" / job_id
+        rec = json.loads((jd / "result.json").read_text())
+
+        state = jobstate.live_state(str(self.state), job_id, rec, str(jd))
+
+        self.assertNotEqual(state, "7")
+        self.assertIn(state, jobstate.DERIVED_STATES)
+
+    def test_absent_outcomes_do_not_dilute_the_failure_ratio(self):
+        """Missing outcomes are visible but are neither success nor failure.
+        The real success proves this cannot pass by counting nothing."""
+        model = "pool/incomplete-model"
+        self._job(0, "ok", model)
+        self._job(1, "provider_error", model)
+        for i in range(2, 5):
+            self._job(i, MISSING_STATUS, model)
+
+        row = next(m for m in health.observe(str(self.state))["models"]
+                   if m["model"] == model)
+
+        self.assertEqual(row["ok"], 1)
+        self.assertEqual(row["failed"], 1)
+        self.assertEqual(row["unrecognized"], 3)
+        self.assertEqual(row["observations"], 2)
+        self.assertEqual(row["failure_ratio"], 0.5)
+
+    def test_unrecognised_outcomes_are_reported_but_do_not_warn(self):
+        """A future terminal value must be visible without silently becoming a
+        success or turning provider health into a gate."""
+        model = "pool/future-model"
+        self._job(0, "future_terminal", model)
+
+        row = next(m for m in health.observe(str(self.state))["models"]
+                   if m["model"] == model)
+
+        self.assertEqual(row["ok"], 0)
+        self.assertEqual(row["failed"], 0)
+        self.assertEqual(row["unrecognized"], 1)
+        self.assertEqual(row["last_unrecognized"], "future_terminal")
+        self.assertEqual(row["observations"], 0)
+        self.assertFalse(row["unhealthy"])
+        self.assertEqual(health.warnings(str(self.state)), [])
+
+    def test_cancelled_jobs_are_not_provider_successes(self):
+        """An operator cancellation says nothing about whether the model could
+        do the work, so it must not improve the provider's health."""
+        model = "pool/cancelled-model"
+        self._job(0, "ok", model)
+        self._job(1, "cancelled", model)
+
+        row = next(m for m in health.observe(str(self.state))["models"]
+                   if m["model"] == model)
+
+        self.assertEqual(row["ok"], 1)
+        self.assertEqual(row["failed"], 0)
+        self.assertEqual(row["observations"], 1)
+
     def test_a_failing_model_is_reported(self):
         for i in range(4):
             self._job(i, "provider_error", "pool/dead-model")

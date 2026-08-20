@@ -196,12 +196,13 @@ def plan(
 def _orphan_launch_records(root: StateRoot) -> tuple[list[str], list[dict[str, str]]]:
     """Classify launch records that have no job directory.
 
-    Sweepable litter is only a record liveness cannot be DECIDED from at all --
-    unparseable, or with no convertible pid. Anything liveness can be decided
-    from is kept: a dead verdict is the sole identity left by a launch that
-    crashed before its job directory existed, and deleting it erased exactly the
-    crash evidence an operator needed to reconstruct the failure. Live
-    launch-only records are protected for the same reason live jobs are.
+    Sweepable litter is a record with neither decidable liveness nor a recognised
+    pre-spawn state. Intent and failed-spawn records deliberately have no pid:
+    deleting them as malformed erased exactly the evidence that distinguishes a
+    vanished launcher from a job id that never existed. Anything liveness can be
+    decided from is also kept: a dead verdict is the sole identity left by a
+    launch that crashed before its job directory existed. Live launch-only
+    records are protected for the same reason live jobs are.
 
     Stated as "decidable" rather than "a usable triple" because those are not
     the same set and the difference is not academic: `_liveness` only requires a
@@ -223,6 +224,18 @@ def _orphan_launch_records(root: StateRoot) -> tuple[list[str], list[dict[str, s
         if os.path.isdir(os.path.join(root.jobs, job_id)):
             continue
         path = os.path.join(launch, name)
+        launch_state = _protected_launch_state(path)
+        if launch_state is not None:
+            reason = (
+                "launch record declares intent"
+                if launch_state == "intent"
+                else "launch record declares failed spawn"
+            )
+            state = jobstate.live_state(
+                root.path, job_id, {}, os.path.join(root.jobs, job_id)
+            )
+            protected.append({"job_id": job_id, "state": state, "reason": reason})
+            continue
         liveness = jobstate._liveness(path)
         if liveness is None:
             out.append(path)
@@ -240,6 +253,18 @@ def _orphan_launch_records(root: StateRoot) -> tuple[list[str], list[dict[str, s
             reason = "launch process is still alive"
         protected.append({"job_id": job_id, "state": state, "reason": reason})
     return out, protected
+
+
+def _protected_launch_state(path: str) -> str | None:
+    """A recognised pre-spawn launch state, or None for other record shapes."""
+    try:
+        rec = read_json(path)
+    except Exception:
+        return None
+    if not isinstance(rec, dict):
+        return None
+    launch_state = rec.get("launch_state")
+    return launch_state if launch_state in ("intent", "failed") else None
 
 
 def _session_candidates(root: StateRoot, rows: list[dict[str, Any]]) -> dict[str, list]:
@@ -351,6 +376,11 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
         # by a relaunch, or the record was mid-write when it was classified.
         # This loop deleted unconditionally, so it was the one destructive path
         # in gc with no delete-time recheck at all.
+        launch_state = _protected_launch_state(path)
+        if launch_state is not None:
+            kept.append({"job_id": os.path.basename(path)[: -len(".json")],
+                         "reason": f"launch record became {launch_state} since the plan"})
+            continue
         if jobstate._liveness(path) is not None:
             kept.append({"job_id": os.path.basename(path)[: -len(".json")],
                          "reason": "launch record became identifiable since the plan"})

@@ -33,6 +33,14 @@ FAILURE_STATUSES = frozenset(
     {"provider_error", "timeout", "dirty", "refused", "review_failed"}
 )
 
+# Terminal statuses that mean the job DID do its work. `exit_code_for` must use
+# this set directly: provider health had already drifted from the zero-exit table
+# by treating cancellation and unknown terminal values as success. Neither
+# consumer may manufacture success outside the same closed set.
+SUCCESS_STATUSES = frozenset(
+    {"ok", "awaiting_review", "awaiting_external_review"}
+)
+
 # States derived from liveness rather than from a persisted record.
 DERIVED_STATES = frozenset({"running", "queued", "died", "cancelled", "unknown"})
 
@@ -186,11 +194,15 @@ def live_state(state_path: str, job_id: str, rec: dict[str, Any], jd: str) -> st
     """The job's state now: a persisted status, or one derived from liveness.
 
     `rec` is the parsed result.json (empty dict if absent) and `jd` the job
-    directory. A persisted status always wins -- it is the job's own account of
-    how it ended.
+    directory. A persisted string status always wins -- it is the job's own
+    account of how it ended. A record with no string outcome falls through to
+    the same liveness evidence as an absent record; it cannot invent a terminal
+    state from missing or malformed data.
     """
     if rec:
-        return str(rec.get("status"))
+        status = rec.get("status")
+        if isinstance(status, str):
+            return status
 
     # A backgrounded job's launch record also carries cancellation INTENT, which
     # the in-job runner record cannot know.
@@ -233,6 +245,6 @@ def exit_code_for(status: str) -> int:
         return 124
     # External acceptance is success here because the handoff happened; whether
     # the frozen change lands is a decision this tool does not own.
-    if status in {"ok", "awaiting_review", "awaiting_external_review"}:
+    if status in SUCCESS_STATUSES:
         return 0
     return 1

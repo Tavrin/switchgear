@@ -438,6 +438,21 @@ def launch_background(ns: argparse.Namespace) -> int:
     ldir = _launch_dir(state_path)
     out_path = os.path.join(ldir, f"{job_id}.out")
     err_path = os.path.join(ldir, f"{job_id}.err")
+    meta_path = os.path.join(ldir, f"{job_id}.json")
+
+    # The intent must precede Popen. Without it, a launcher killed after fork
+    # left a child writing to the caller's worktree under an id that cancel and
+    # gc could not even establish existed. Keep caller input out of this
+    # state-root record: any holder of that root can read it, so argv, prompt,
+    # envelope and environment belong only to the child launch, never to this
+    # index.
+    intent_at = time.time()
+    intent = {
+        "job_id": job_id,
+        "launch_state": "intent",
+        "intent_at": intent_at,
+    }
+    atomic_write_json(meta_path, intent)
 
     # Drop --background from the child's argv or it would launch forever.
     argv = [a for a in sys.argv[1:] if a != "--background"]
@@ -450,17 +465,29 @@ def launch_background(ns: argparse.Namespace) -> int:
     child_env["SWITCHGEAR_BACKGROUND_CHILD"] = "1"
 
     with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
-        proc = subprocess.Popen(
-            [sys.executable, "-s", os.path.join(os.path.dirname(__file__), "__main__.py"), *argv],
-            stdout=out_fh,
-            stderr=err_fh,
-            env=child_env,
-            # Its own session: the job outlives this process, which is the whole
-            # point, and it also keeps the worker's process group separate so a
-            # cancel kills the job and not the caller.
-            start_new_session=True,
-            close_fds=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-s", os.path.join(os.path.dirname(__file__), "__main__.py"), *argv],
+                stdout=out_fh,
+                stderr=err_fh,
+                env=child_env,
+                # Its own session: the job outlives this process, which is the whole
+                # point, and it also keeps the worker's process group separate so a
+                # cancel kills the job and not the caller.
+                start_new_session=True,
+                close_fds=True,
+            )
+        except Exception as exc:
+            # Preserve the original exception contract, but replace intent with
+            # an explicit terminal account of the failed spawn. Only the type is
+            # recorded: exception text from process construction is not a safe
+            # place to assume caller arguments will never be repeated.
+            atomic_write_json(meta_path, {
+                **intent,
+                "launch_state": "failed",
+                "launch_error": f"{type(exc).__name__}: detached process spawn failed",
+            })
+            raise
     from .lease import _boot_id, _starttime
 
     meta = {
@@ -468,8 +495,10 @@ def launch_background(ns: argparse.Namespace) -> int:
         "pid": proc.pid,
         "starttime": _starttime(proc.pid),
         "boot_id": _boot_id(),
+        "launch_state": "spawned",
+        "intent_at": intent_at,
     }
-    atomic_write_json(os.path.join(ldir, f"{job_id}.json"), meta)
+    atomic_write_json(meta_path, meta)
 
     info = {
         "job_id": job_id,
@@ -633,7 +662,35 @@ def cmd_cancel(ns: argparse.Namespace) -> int:
     meta = read_json(meta_path)
     from .lease import _alive
 
-    pid = int(meta["pid"])
+    launch_state = meta.get("launch_state") if isinstance(meta, dict) else None
+    if launch_state == "intent":
+        _die(
+            f"job {ns.job} has launch intent but no process identity was recorded: "
+            "the launcher did not survive the spawn window, so the job may or may "
+            "not be running and cancel cannot invent a kill target. Check "
+            f"`switchgear status {ns.job}` and `switchgear jobs --all` under this "
+            "state root to find out."
+        )
+    if launch_state == "failed":
+        _die(
+            f"job {ns.job} has a failed background launch and no process identity "
+            "was recorded, so cancel cannot invent a kill target. Check "
+            f"`switchgear status {ns.job}` and `switchgear jobs --all` under this "
+            "state root for its recorded state."
+        )
+
+    # Any other record without a convertible pid: a truncated or hand-edited
+    # record reaches here too, and `int(meta["pid"])` raised a traceback for all
+    # of them. A cancel that cannot name its target must say so, not crash.
+    try:
+        pid = int(meta["pid"])
+    except (KeyError, TypeError, ValueError):
+        _die(
+            f"the launch record for {ns.job} carries no usable process id, so "
+            "cancel has no target it can verify and will not guess one. Inspect "
+            f"{meta_path}, and check `switchgear status {ns.job}` for what the "
+            "job's own records say happened."
+        )
     # pid + starttime + boot_id, not pid alone: pids are recycled, and killing
     # whatever now holds a recorded pid is how a cancel becomes an outage.
     if not _alive(pid, meta.get("starttime", ""), meta.get("boot_id", "")):
@@ -1119,8 +1176,13 @@ def cmd_execution_profile(ns: argparse.Namespace) -> int:
 def cmd_capabilities(ns: argparse.Namespace) -> int:
     """Describe this tool to a caller that has never seen it.
 
-    Everything is derived from live code: commands from the parser, providers
+    Most of it is derived from live code: commands from the parser, providers
     from the adapter registry, effort from each adapter, limits from the budget.
+    The refusal contract and the fixed explanatory text are DECLARED constants in
+    `capabilities.py`; the emitted `provenance` block says which is which. This
+    docstring used to claim everything here was derived, directly above a call
+    that emits a hand-maintained literal -- the exact stale-copy hazard the
+    command exists to remove.
     """
     from . import capabilities as capmod
 
@@ -1609,7 +1671,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Run a coding agent inside a sandbox and keep evidence of what it did. "
             "Every command takes --json for a stable machine-readable contract. "
-            "Exit codes: 0 ok, 1 refusal or error, 2 dirty worktree, 124 timeout. "
+            "Exit codes: 0 ok, 1 refusal or error, 2 dirty worktree OR an argv "
+            "usage error before any job starts, 124 timeout. "
             "Refusals print `switchgear: REFUSING — ...` on stderr and name a remedy."
         ),
     )

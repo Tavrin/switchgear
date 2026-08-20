@@ -294,6 +294,53 @@ class RailTests(unittest.TestCase):
         st = json.loads((self.state / "jobs" / job / "result.json").read_text())
         self.assertEqual(st["status"], "ok")
 
+    def test_completed_empty_can_carry_a_frozen_change(self):
+        """Transcript emptiness and change presence are independent facts.
+
+        A worker can edit tracked.txt and emit no closing assistant text, so
+        `finished.status=completed_empty` is legal beside a frozen change. The
+        controller-computed `change.state` and `freeze.changed_files`, never the
+        transcript status, are authoritative for whether files changed.
+        """
+        token = self._acquire()
+        envf = self.tmp / "completed-empty-envelope.json"
+        envf.write_text(json.dumps(envelope(str(self.wt))))
+        p = run_cli(
+            self.args(
+                "--json",
+                "write",
+                str(self.wt),
+                "implement",
+                "--envelope",
+                str(envf),
+                "--token",
+                token,
+            ),
+            env={
+                "SWITCHGEAR_WRITE": "1",
+                "SWITCHGEAR_MOCK_BEHAVIOR": "edit-inside",
+            },
+        )
+        self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
+        record = json.loads(p.stdout)
+        events = [
+            json.loads(line)
+            for line in Path(record["artifacts"]["events_normalized"])
+            .read_text()
+            .splitlines()
+            if line.strip()
+        ]
+        finished = next(event for event in events if event["event"] == "finished")
+
+        self.assertEqual(
+            (
+                finished["status"],
+                record["change"]["state"],
+                record["freeze"]["changed_files"],
+            ),
+            ("completed_empty", "frozen", ["tracked.txt"]),
+        )
+
     def test_standalone_review_persists_its_verdict_on_its_own_record(self):
         """Bug #3: a review with no parent left review:null on disk. The verdict
         lived only in events.jsonl and was lost once the sandbox home was
@@ -926,11 +973,23 @@ class RailTests(unittest.TestCase):
     def test_background_launch_returns_a_job_id_without_waiting(self):
         """The rail used to block for the whole job, so every long run had to be
         hand-backgrounded by its caller."""
+        from switchgear.lease import _alive
+
         t0 = time.time()
         info = self._launch("6")
         self.assertLess(time.time() - t0, 3.0, "launch blocked on the job")
         self.assertTrue(info["job_id"])
         self.assertEqual(info["state"], "launched")
+        launch = json.loads(
+            (self.state / "launch" / f"{info['job_id']}.json").read_text()
+        )
+        self.assertEqual(launch["launch_state"], "spawned")
+        self.assertIsInstance(launch["intent_at"], (int, float))
+        self.assertLessEqual(launch["intent_at"], time.time())
+        self.assertTrue(
+            _alive(launch["pid"], launch["starttime"], launch["boot_id"]),
+            "the spawned launch record did not carry a usable live identity",
+        )
         try:
             self.assertEqual(self._state_of(info["job_id"]), "running")
             deadline = time.time() + 40
@@ -2251,6 +2310,103 @@ class RailTests(unittest.TestCase):
         p, out = self._gc("--older-than", "1h", "--yes")
         self.assertTrue(jd.exists(), "a job of unknown liveness was deleted")
 
+    def test_launch_intent_and_failure_survive_gc_and_cancel_refuses_cleanly(self):
+        """A launcher can vanish after recording intent but before it records a
+        child identity. Sweeping that record destroys the only evidence that the
+        id exists, while indexing its absent pid makes cancel traceback instead
+        of naming the only honest remedy."""
+        from switchgear import gc as gcmod
+
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        records = {
+            "00000000-0000-4000-8000-00000000aa71": {
+                "launch_state": "intent", "intent_at": time.time(),
+            },
+            "00000000-0000-4000-8000-00000000aa72": {
+                "launch_state": "failed", "intent_at": time.time(),
+                "launch_error": "OSError: detached process spawn failed",
+            },
+        }
+        paths = {}
+        for job_id, body in records.items():
+            body["job_id"] = job_id
+            paths[job_id] = launch / f"{job_id}.json"
+            paths[job_id].write_text(json.dumps(body))
+
+        planned = gcmod.plan(str(self.state), older_than_s=3600)
+        protected = {row["job_id"]: row["reason"]
+                     for row in planned["protected"]}
+        for job_id, body in records.items():
+            with self.subTest(job_id=job_id):
+                self.assertNotIn(str(paths[job_id]),
+                                 planned["orphan_launch_records"])
+                self.assertIn(body["launch_state"], protected[job_id])
+
+        applied = gcmod.apply(str(self.state), planned)
+        self.assertEqual(applied["launch_records_removed"], 0)
+
+        # Delete-time protection is independently non-vacuous: this record was
+        # litter when planned, then became a real launch intent before apply.
+        raced_id = "00000000-0000-4000-8000-00000000aa73"
+        raced = launch / f"{raced_id}.json"
+        raced.write_text("{mid-write")
+        raced_plan = gcmod.plan(str(self.state), older_than_s=3600)
+        self.assertIn(str(raced), raced_plan["orphan_launch_records"])
+        raced.write_text(json.dumps({
+            "job_id": raced_id,
+            "launch_state": "intent",
+            "intent_at": time.time(),
+        }))
+        raced_apply = gcmod.apply(str(self.state), raced_plan)
+        self.assertTrue(raced.exists(), "a newly recorded launch intent was deleted")
+        self.assertEqual(raced_apply["launch_records_removed"], 0)
+        self.assertIn(raced_id, [row["job_id"] for row in raced_apply["kept"]])
+
+        for job_id, path in paths.items():
+            with self.subTest(job_id=job_id):
+                self.assertTrue(path.exists(), "launch evidence was deleted")
+                cancelled = run_cli(self.args("cancel", job_id))
+                self.assertNotEqual(cancelled.returncode, 0)
+                self.assertIn("no process identity was recorded", cancelled.stderr)
+                self.assertIn(f"status {job_id}", cancelled.stderr)
+                self.assertIn("jobs --all", cancelled.stderr)
+                self.assertNotIn("Traceback", cancelled.stderr)
+
+    def test_launch_failure_preserves_the_pre_spawn_intent_and_original_error(self):
+        """If Popen raises, the launcher must leave a failed record without
+        swallowing the launch error. The Popen probe also proves intent existed
+        before the call rather than being reconstructed afterwards."""
+        import argparse
+        from unittest import mock
+
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear import cli
+
+        observed = {}
+
+        def fail_spawn(*_args, **_kwargs):
+            records = list((self.state / "launch").glob("*.json"))
+            observed["intent"] = json.loads(records[0].read_text()) if records else None
+            raise OSError("constructed spawn failure")
+
+        ns = argparse.Namespace(state=str(self.state), json=True)
+        with mock.patch.object(cli.subprocess, "Popen", side_effect=fail_spawn):
+            with self.assertRaisesRegex(OSError, "constructed spawn failure"):
+                cli.launch_background(ns)
+
+        self.assertIsNotNone(observed["intent"], "Popen ran before intent was recorded")
+        self.assertEqual(observed["intent"]["launch_state"], "intent")
+        self.assertNotIn("pid", observed["intent"])
+        records = list((self.state / "launch").glob("*.json"))
+        self.assertEqual(len(records), 1)
+        failed = json.loads(records[0].read_text())
+        self.assertEqual(failed["launch_state"], "failed")
+        self.assertEqual(failed["intent_at"], observed["intent"]["intent_at"])
+        self.assertIn("OSError", failed["launch_error"])
+        for forbidden in ("argv", "prompt", "envelope", "environment", "env"):
+            self.assertNotIn(forbidden, failed)
+
     def test_the_cooldown_floor_applies_on_top_of_the_selector(self):
         """--older-than 1s must not mean "delete everything"."""
         jd = self._aged_job("00000000-0000-4000-8000-00000000aa08", 60)
@@ -2699,6 +2855,78 @@ class FindingsGateUnit(unittest.TestCase):
         rec = promote(subject_path=str(subj), review_artifact=art, live_head="H",
                       live_tree_digest="T", expected_files=["a.py"], generation=0)
         self.assertEqual(rec["status"], "ok")
+
+
+class PromotionRevalidationUnit(unittest.TestCase):
+    """Promotion must not make a durable result record unreadable."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def test_invalid_promoted_record_refuses_without_writing(self):
+        import tempfile
+
+        from switchgear.errors import Refuse
+        from switchgear.review import promote
+        from switchgear.schema import validate
+
+        d = Path(tempfile.mkdtemp(prefix="aiops-promote-validation-"))
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        freeze = {"head": "H", "tree_digest": "T", "policy_digest": "P",
+                  "models_registry_digest": "R", "changed_files": ["a.py"]}
+        valid_subject = {
+            "job_id": "S", "status": "awaiting_review", "mode": "bounded-write",
+            "role": "implement", "model": {"id": "m", "provider": "p"},
+            "dir": str(d), "exit": 0, "started": "s", "generation": 0,
+            "freeze": freeze,
+        }
+        artifact = {
+            "subject_job": "S", "reviewer_job": "R",
+            "model": {"id": "m2", "provider": "p2"}, "role": "review",
+            "independence": {"different_job": True, "different_model": True,
+                             "different_family": True, "different_provider": True},
+            "verdict": "promote", "subject_head": "H",
+            "subject_tree_digest": "T", "subject_policy_digest": "P",
+            "reviewed_dir": str(d), "reviewed_tree_digest": "T",
+            "models_registry_digest": "R", "reviewed_files": ["a.py"],
+            "required_unmet": [], "findings": [],
+        }
+
+        # The unknown top-level field survives promotion, and the result schema
+        # is closed. Prove the constructed poison is real before testing the gate.
+        invalid_subject = {**valid_subject, "promotion_poison": True}
+        with self.assertRaises(Refuse) as schema_ctx:
+            validate(invalid_subject, "result.schema.json")
+        self.assertIn(
+            "Additional properties are not allowed", str(schema_ctx.exception)
+        )
+
+        invalid_path = d / "invalid-result.json"
+        before = json.dumps(invalid_subject, indent=3).encode()
+        invalid_path.write_bytes(before)
+        with self.assertRaises(Refuse) as promote_ctx:
+            promote(subject_path=str(invalid_path), review_artifact=artifact,
+                    live_head="H", live_tree_digest="T", expected_files=["a.py"],
+                    generation=0)
+        refusal = str(promote_ctx.exception)
+        self.assertIn("promotion would produce an invalid result record", refusal)
+        self.assertIn("on disk is unchanged", refusal)
+        self.assertIn(f"Inspect the subject record at {invalid_path}", refusal)
+        self.assertIn("result.schema.json validation failed", refusal)
+        self.assertEqual(invalid_path.read_bytes(), before)
+
+        # Non-vacuity: refusing every promotion would satisfy the failure half.
+        # A valid subject must still be promoted and durably rewritten.
+        valid_path = d / "valid-result.json"
+        valid_before = json.dumps(valid_subject, indent=3).encode()
+        valid_path.write_bytes(valid_before)
+        promoted = promote(subject_path=str(valid_path), review_artifact=artifact,
+                           live_head="H", live_tree_digest="T",
+                           expected_files=["a.py"], generation=0)
+        self.assertEqual(promoted["status"], "ok")
+        self.assertEqual(promoted["acceptance"], {"state": "accepted"})
+        self.assertEqual(promoted["generation"], 1)
+        self.assertNotEqual(valid_path.read_bytes(), valid_before)
 
 
 class BrokerUnit(unittest.TestCase):
@@ -3490,10 +3718,12 @@ class CrashedJobAttribution(unittest.TestCase):
                          "the count reported a deletion that did not happen")
         self.assertIn(job_id, [k["job_id"] for k in out["kept"]])
 
-    def test_real_job_runner_carries_complete_start_attribution(self):
-        # This test exercises record construction, not the separately tested
-        # subuid boundary; some hermetic containers advertise subids while
-        # refusing newuidmap at execution time.
+    def test_real_job_runner_constructs_complete_start_record(self):
+        # This test deliberately targets start-record construction only. The uid
+        # boundary is proven for real by tests/test_uid_boundary.py. The override
+        # is unconditional because some hermetic containers advertise subids while
+        # refusing newuidmap at execution time; a conditional override would make
+        # this test's own coverage host-dependent and unprovable.
         p = run_cli(
             self.args("--json", "scout", str(self.primary), "hello"),
             env={"SWITCHGEAR_NO_UID_BOUNDARY": "1"},

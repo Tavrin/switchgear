@@ -176,5 +176,18 @@ def promote(
     )
     subject["review"] = review_artifact
     subject["generation"] = generation + 1
+    # Promotion was the one durable result-record write that skipped schema
+    # validation. A malformed preserved field could therefore turn an acceptance
+    # decision into a record no reader could trust; validate the complete mutation
+    # before the atomic write so a failure leaves the on-disk subject untouched.
+    try:
+        validate(subject, "result.schema.json")
+    except Refuse as exc:
+        raise Refuse(
+            "promotion would produce an invalid result record that no reader can "
+            "trust; the subject record on disk is unchanged. Inspect the subject "
+            f"record at {subject_path} and repair or recover it before retrying "
+            f"promotion. Schema error: {exc}"
+        ) from exc
     atomic_write_json(subject_path, subject)
     return subject
