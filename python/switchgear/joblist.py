@@ -5,10 +5,10 @@ a day of use: 22 jobs, four of which had no result.json at all -- crashed or
 interrupted runs that were completely invisible. You cannot operate what you
 cannot list.
 
-Cheap by construction, because an agent will poll this: it reads result.json and
-the started_at marker, and NEVER opens evidence/events.jsonl. `logs` exists for
-that, and reading a stream per row would make a listing cost more than the jobs
-it lists.
+Cheap by construction, because an agent will poll this: it reads result.json,
+runner.json and the started_at marker, and NEVER opens evidence/events.jsonl.
+`logs` exists for that, and reading a stream per row would make a listing cost
+more than the jobs it lists.
 """
 
 from __future__ import annotations
@@ -116,11 +116,28 @@ def enumerate_jobs(
             except Exception:
                 rec = {}  # unreadable record is not a reason to hide the job
 
+        runner: dict[str, Any] = {}
+        runner_path = os.path.join(jd, "runner.json")
+        if os.path.isfile(runner_path):
+            try:
+                runner = read_json(runner_path)
+            except Exception:
+                runner = {}  # attribution unknown; liveness decides separately
+
+        # Attribution is descriptive only. live_state receives the result record
+        # exactly as before, so runner metadata cannot manufacture or alter a
+        # terminal state when result.json is absent or unreadable.
         state = jobstate.live_state(state_path, job_id, rec, jd)
         started = _started_at(jd)
         ref = now if state == "running" else _last_write(jd)
-        model = rec.get("model") or {}
-        job_dir_value = rec.get("dir")
+        attribution = rec or runner
+        model = attribution.get("model") or {}
+        job_dir_value = attribution.get("dir")
+        harness = (
+            rec.get("harness") or rec.get("provider")
+            or runner.get("harness") or runner.get("provider")
+        )
+        pool = model.get("provider") if isinstance(model, dict) else None
 
         if states and state not in states:
             continue
@@ -134,10 +151,15 @@ def enumerate_jobs(
             {
                 "job_id": job_id,
                 "state": state,
-                "mode": rec.get("mode"),
-                "role": rec.get("role"),
+                "mode": attribution.get("mode"),
+                "role": attribution.get("role"),
                 "model": model.get("id") if isinstance(model, dict) else None,
-                "provider": model.get("provider") if isinstance(model, dict) else None,
+                # A listing row's legacy `provider` has always named the model
+                # pool, while a result record's `provider` names the harness.
+                # Both aliases remain so existing consumers keep their meaning.
+                "provider": pool,
+                "harness": harness,
+                "pool": pool,
                 "dir": job_dir_value,
                 "started_at": started,
                 "elapsed_s": (

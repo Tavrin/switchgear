@@ -361,12 +361,19 @@ switchgear --state <root> gc --older-than 7d          # report only
 switchgear --state <root> gc --older-than 7d --yes    # actually delete
 ```
 
-Protected regardless of the selector: anything `awaiting_review`; any job whose
-process is alive (re-checked at delete time, since a job can start between the
-plan and the deletion); any review whose subject still awaits review; and any job
-whose **liveness could not be established at all**. That last one matters —
-`unknown` is not `dead`, and the rest of the rail never reads a missing record as
-a benign state.
+Protected regardless of the selector: anything `awaiting_review` or
+`awaiting_external_review`; any job whose process is alive (re-checked at delete
+time, since a job can start between the plan and the deletion); any review whose
+subject still awaits review; and any job whose **liveness could not be established
+at all**. That last one matters — `unknown` is not `dead`, and the rest of the
+rail never reads a missing record as a benign state. A dead launch record with no
+job directory is also protected: its usable liveness triple is the only surviving
+identity of a launch that crashed before creating the directory. Only malformed
+launch-only records with no usable triple are swept as litter.
+
+When a job directory is collected, its `launch/<id>.json`, `.out`, and `.err`
+files are collected with it. Each existing path appears under the candidate's
+`launch_artifacts` key in a dry run before anything is removed.
 
 A cool-down floor (`SWITCHGEAR_GC_MIN_AGE_S`, default 1h) applies **on top of** your
 selector, so `--older-than 1s` still does not mean "delete everything".
@@ -499,6 +506,9 @@ Every row carries the job's **live** state, not merely what it last wrote — a 
 whose process is gone but which never persisted a result reads `died`, and one
 whose liveness cannot be established at all reads `unknown`. Those are different
 facts and the listing keeps them apart; neither is ever rendered as `running`.
+A crashed job is still attributed from its start-time `runner.json`, including
+in a realpath-based `--worktree` query. Rows name both the `harness` (agent CLI)
+and `pool` (model service); the legacy row key `provider` remains the pool.
 `awaiting_review` is surfaced as its own boolean so a poller does not have to
 know how the status is spelled.
 
@@ -507,8 +517,9 @@ in the JSON), because an agent should not have to read a whole history to find
 one job. `--all` removes the cap. Filters: `--state-filter`, `--since 30m|24h|7d`,
 `--worktree <path>`, `--limit N`.
 
-It is deliberately cheap: it reads each job's result record and start marker and
-never opens `evidence/events.jsonl`. Use `logs` when you want the stream.
+It is deliberately cheap: it reads each job's result record, runner record and
+start marker and never opens `evidence/events.jsonl`. Use `logs` when you want
+the stream.
 
 ### Knowing when a job is done
 
