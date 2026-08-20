@@ -1,38 +1,38 @@
 {
-  "bytes_freed": 139264,
+  "bytes_freed": 151552,
   "dry_run": false,
   "kept": [],
   "launch_artifacts_removed": [
-    "<ABSOLUTE_PATH>/state/launch/3082eb69-41c5-46eb-8a86-6cfbad452e94.json",
-    "<ABSOLUTE_PATH>/state/launch/3082eb69-41c5-46eb-8a86-6cfbad452e94.out",
-    "<ABSOLUTE_PATH>/state/launch/3082eb69-41c5-46eb-8a86-6cfbad452e94.err",
-    "<ABSOLUTE_PATH>/state/launch/e9b7e356-2abe-4a32-8520-de960b63adea.json",
-    "<ABSOLUTE_PATH>/state/launch/e9b7e356-2abe-4a32-8520-de960b63adea.out",
-    "<ABSOLUTE_PATH>/state/launch/e9b7e356-2abe-4a32-8520-de960b63adea.err"
+    "<ABSOLUTE_PATH>/state/launch/904b5d54-e8a0-4988-bbb0-58069bb1090d.json",
+    "<ABSOLUTE_PATH>/state/launch/904b5d54-e8a0-4988-bbb0-58069bb1090d.out",
+    "<ABSOLUTE_PATH>/state/launch/904b5d54-e8a0-4988-bbb0-58069bb1090d.err",
+    "<ABSOLUTE_PATH>/state/launch/5a6a15df-69ed-4ae3-92b8-24230f62d069.json",
+    "<ABSOLUTE_PATH>/state/launch/5a6a15df-69ed-4ae3-92b8-24230f62d069.out",
+    "<ABSOLUTE_PATH>/state/launch/5a6a15df-69ed-4ae3-92b8-24230f62d069.err"
   ],
   "launch_records_removed": 0,
   "protected": [
     {
-      "job_id": "146fb128-f9b8-4110-afae-77b56b623981",
+      "job_id": "fa173565-b216-4e85-8a5d-d23824b06f1f",
       "reason": "awaiting external review",
       "state": "awaiting_external_review"
     },
     {
-      "job_id": "ba424adf-7ce3-4406-adfe-3b9a4cfb0141",
+      "job_id": "bcdad5f8-229a-4752-9ee9-e65dfe4a053f",
       "reason": "awaiting review",
       "state": "awaiting_review"
     },
     {
-      "job_id": "6825df85-b837-45af-bb05-e05648965ab1",
+      "job_id": "d27b9477-a34c-43ed-ba8b-364a2815b5e2",
       "reason": "awaiting review",
       "state": "awaiting_review"
     }
   ],
   "removed": [
-    "3082eb69-41c5-46eb-8a86-6cfbad452e94",
-    "e9b7e356-2abe-4a32-8520-de960b63adea",
-    "0058d57f-5127-405e-a162-d4adedd8cc1e",
-    "28211dfc-298b-44d5-bd6f-434e73970407"
+    "904b5d54-e8a0-4988-bbb0-58069bb1090d",
+    "5a6a15df-69ed-4ae3-92b8-24230f62d069",
+    "391f44dd-ddae-4190-a50e-1892612612e2",
+    "b8fafd78-cb1c-43bc-b2bb-ca3dc9e93460"
   ],
   "sessions_kept": [],
   "sessions_removed": []

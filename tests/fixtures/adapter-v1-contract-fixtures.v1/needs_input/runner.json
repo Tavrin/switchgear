@@ -3,7 +3,7 @@
   "dir": "<ABSOLUTE_PATH>/syn/primary",
   "events_normalized_version": 2,
   "harness": "opencode",
-  "job_id": "0058d57f-5127-405e-a162-d4adedd8cc1e",
+  "job_id": "391f44dd-ddae-4190-a50e-1892612612e2",
   "mode": "readonly",
   "model": {
     "id": "opencode-go/deepseek-v4-flash",
@@ -12,9 +12,9 @@
     "provider": "opencode-go",
     "vendor_family": "deepseek"
   },
-  "pid": 281,
+  "pid": 3548822,
   "provider": "opencode",
   "role": "scout",
-  "session_store_id": "fcdc15e7-7c47-493e-99c8-fd57aebbe3dd",
-  "starttime": "29656112"
+  "session_store_id": "3fb8a65f-ef21-4c3d-8252-66f4338b52ab",
+  "starttime": "29684976"
 }
