@@ -15,7 +15,11 @@ The normalized vocabulary, from docs/OBSERVABILITY.md:
     {"event": "finished", "v": int, "status": str, "turns": int,
                             "costUSD": float, "tokens": int, "exitSummary": str}
 
-Every line carries the `event` discriminator and `v` contract version.
+Every event carries the `event` discriminator. `v` is stamped on by whoever
+writes the stream out -- `job._write_normalized_events` into
+`evidence/events.v1.jsonl`, and `logs --format normalized` -- not by an adapter,
+which returns the events themselves. The byte-capped `logs` digest is a
+projection over the same events and does not carry `v`.
 `finished.status` is one of completed / completed_empty / needs_input / failed.
 `needs_input` is load-bearing for a caller: it parks the work back to the
 operator rather than recording a failure.

@@ -315,10 +315,15 @@ Commands and their flags, providers with version/resume/effort/credential-tier,
 the limits in force, the refusal contract and the exit table — for a caller that
 has never seen this tool and cannot go and read docs mid-task.
 
-Everything in it is **derived from live code**: commands by walking the argparse
+Most of it is **derived from live code**: commands by walking the argparse
 parser, providers from the adapter registry crossed with the version pins, effort
-from each adapter's own `effort_support()`, limits from the budget file. Nothing
-is written down twice, because a hand-maintained capability list is stale the day
+from each adapter's own `effort_support()`, limits from the budget file. The
+refusal contract, the exit table and the fixed explanatory text are **declared**
+constants in `capabilities.py`, and the emitted `provenance` block labels every
+top-level path as one or the other — read it rather than assuming, because this
+paragraph claimed the whole document was derived while the exit table beside it
+was a literal. What is derived is not written down twice, because a
+hand-maintained capability list is stale the day
 after it is written — the model registry had already drifted to 18 hand-listed
 ids where the provider served 26.
 
@@ -617,8 +622,15 @@ ones are the defaults on purpose:
   an agent's context. There is deliberately no default that lands here.
 
 The digest speaks a provider-neutral vocabulary: every line carries an `event`
-discriminator and `v` contract version, and the five event values are `status`,
-`tool`, `text`, `progress` and `finished`. `finished` carries `status` ∈
+discriminator, and the five event values are `status`, `tool`, `text`,
+`progress` and `finished`. **`v` is not on a digest line.** The version is
+carried by the normalized stream — `evidence/events.v1.jsonl` and
+`logs --format normalized`, which is the contract, and where every line has it.
+The digest is a bounded projection over that stream for an agent's context, and
+it can also emit one line the normalized stream never does: a final
+`{"event":"truncated","dropped_events":N,"cap_bytes":N}` when it hit the cap.
+Consume `logs --format normalized` if you branch on the version.
+`finished` carries `status` ∈
 `completed` | `completed_empty` | `needs_input` | `failed`, plus `turns`,
 `tokens`, `costUSD` and a bounded `exitSummary`. `sessionId` is surfaced because
 without it a resume cannot exist.

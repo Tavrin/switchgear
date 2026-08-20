@@ -88,16 +88,22 @@ def observe(state_path: str, scan: int = DEFAULT_SCAN) -> dict[str, Any]:
             "last_failure": None,
             "last_unrecognized": None,
         })
-        if missing_outcome:
-            slot["unrecognized"] += 1
-            # None is the honest last value for both an absent status and a
-            # non-string status: neither is a state that consumers may branch on.
-            slot["last_unrecognized"] = None
-        elif state in jobstate.SUCCESS_STATUSES:
+        # Order matters, and it is not the obvious one. A record that states no
+        # outcome is unrecognized ONLY when liveness could not establish one
+        # either: a statusless record whose process is measurably gone is a
+        # `died` job, and letting the malformed record win there hid a real
+        # provider failure behind a bookkeeping counter -- it left `failed` at 0,
+        # `observations` at 0, and the model looking untested rather than dead.
+        if state in jobstate.SUCCESS_STATUSES:
             slot["ok"] += 1
         elif state in jobstate.FAILURE_STATUSES or state == "died":
             slot["failed"] += 1
             slot["last_failure"] = state
+        elif missing_outcome:
+            slot["unrecognized"] += 1
+            # None is the honest last value for both an absent status and a
+            # non-string status: neither is a state that consumers may branch on.
+            slot["last_unrecognized"] = None
         else:
             slot["unrecognized"] += 1
             slot["last_unrecognized"] = state

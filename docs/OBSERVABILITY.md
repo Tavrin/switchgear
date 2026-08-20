@@ -127,8 +127,11 @@ finished {status, exitSummary, turns, costUSD, tokens, sawTerminal}
          # needs_input parks the ticket back to the operator -- load-bearing
 ```
 
-Every line carries the `event` discriminator shown above and a `v` contract
-version. `completed_empty` means the execution succeeded without non-whitespace
+Every line carries the `event` discriminator shown above. `v` is carried by the
+written-out normalized stream — `evidence/events.v1.jsonl` and
+`logs --format normalized` — and not by the byte-capped `logs` digest, which is a
+projection over the same events and can add a final `truncated` line of its own.
+`completed_empty` means the execution succeeded without non-whitespace
 closing assistant text; it does not say whether files changed. Change presence
 comes from the controller-computed `change.state` and `freeze.changed_files`,
 and the enum name remains unchanged until the contract-v1-rc1 compatibility

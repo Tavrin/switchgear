@@ -256,15 +256,32 @@ def _orphan_launch_records(root: StateRoot) -> tuple[list[str], list[dict[str, s
 
 
 def _protected_launch_state(path: str) -> str | None:
-    """A recognised pre-spawn launch state, or None for other record shapes."""
+    """A recognised pre-spawn launch state, or None for other record shapes.
+
+    The whole record has to be one this launcher could have written, not just a
+    file containing the right word. Checking the `launch_state` string alone let
+    any object carrying it -- `{"launch_state": "intent"}`, or one naming a
+    different job -- pin a state root permanently, which turns evidence
+    retention into a way to make gc stop collecting. So the record must also
+    name the job its own filename names, and carry the numeric `intent_at` the
+    launcher stamps. Anything else is litter, as it was before.
+    """
     try:
         rec = read_json(path)
     except Exception:
         return None
     if not isinstance(rec, dict):
         return None
-    launch_state = rec.get("launch_state")
-    return launch_state if launch_state in ("intent", "failed") else None
+    if rec.get("launch_state") not in ("intent", "failed"):
+        return None
+    job_id = os.path.basename(path)[: -len(".json")]
+    if rec.get("job_id") != job_id:
+        return None
+    if not isinstance(rec.get("intent_at"), (int, float)) or isinstance(
+        rec.get("intent_at"), bool
+    ):
+        return None
+    return str(rec["launch_state"])
 
 
 def _session_candidates(root: StateRoot, rows: list[dict[str, Any]]) -> dict[str, list]:

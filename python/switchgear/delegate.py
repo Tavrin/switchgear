@@ -295,19 +295,23 @@ class DelegationBroker:
             raise Refuse("no such subagent for this job")
         path = os.path.join(self.state_path, "jobs", job_id, "result.json")
         rec: dict[str, Any] = {}
-        record_exists = False
         try:
             with open(path, encoding="utf-8") as fh:
                 parsed = json.load(fh)
             if isinstance(parsed, dict):
                 rec = parsed
-                record_exists = True
         except (OSError, ValueError):
             pass
-        if not record_exists:
-            # Missing result bytes used to mean `running` forever after a child
-            # crashed or was cancelled. Children are background launches, so the
-            # launch triple is the authority rather than absence or a guess.
+        # `finished` requires the record to SAY how it finished. Bytes that parse
+        # are not an outcome: an empty object, or a record whose status field is
+        # absent or not a string, reported `finished` with `status: null` -- the
+        # same absence-is-benign answer this method was fixed to stop giving,
+        # rebuilt out of a different absence. Anything short of a stated string
+        # status falls through to the same liveness triple everything else uses.
+        if not isinstance(rec.get("status"), str):
+            # Missing or unstated outcome used to mean `running` forever after a
+            # child crashed or was cancelled. Children are background launches,
+            # so the launch triple is the authority rather than a guess.
             job_dir = os.path.join(self.state_path, "jobs", job_id)
             return {
                 "job_id": job_id,

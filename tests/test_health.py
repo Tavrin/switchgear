@@ -118,6 +118,39 @@ class Health(Base):
         self.assertFalse(row["unhealthy"])
         self.assertEqual(health.warnings(str(self.state)), [])
 
+    def test_a_statusless_record_whose_process_died_still_counts_as_a_failure(self):
+        """`unrecognized` must not outrank measured liveness.
+
+        A record that states no outcome AND whose process is measurably gone is
+        a job that died. Letting the malformed record win there filed a real
+        provider failure under bookkeeping: `failed` stayed 0, `observations`
+        stayed 0, and a dead model looked untested rather than dead.
+        """
+        from switchgear.lease import _boot_id
+
+        model = "pool/died-model"
+        job_id = self._job(0, None, model)
+        # A statusless record: `status: null` is exactly what item 1 was about.
+        jd = self.state / "jobs" / job_id
+        rec = json.loads((jd / "result.json").read_text())
+        rec.pop("status", None)
+        (jd / "result.json").write_text(json.dumps(rec))
+        # And a launch triple naming a process that is not alive. A pid that
+        # cannot be running beats a pattern match; see AGENTS.md.
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        (launch / f"{job_id}.json").write_text(json.dumps({
+            "job_id": job_id, "pid": 2 ** 22, "starttime": "1",
+            "boot_id": _boot_id(),
+        }))
+
+        row = next(m for m in health.observe(str(self.state))["models"]
+                   if m["model"] == model)
+        self.assertEqual(row["failed"], 1, "a measured death was filed as bookkeeping")
+        self.assertEqual(row["last_failure"], "died")
+        self.assertEqual(row["unrecognized"], 0)
+        self.assertEqual(row["observations"], 1)
+
     def test_cancelled_jobs_are_not_provider_successes(self):
         """An operator cancellation says nothing about whether the model could
         do the work, so it must not improve the provider's health."""

@@ -301,6 +301,15 @@ class RailTests(unittest.TestCase):
         `finished.status=completed_empty` is legal beside a frozen change. The
         controller-computed `change.state` and `freeze.changed_files`, never the
         transcript status, are authoritative for whether files changed.
+
+        This is a CHARACTERIZATION test, and deliberately passes against the
+        revision before the vocabulary was documented: the three fields were
+        always individually correct, and the defect was that four documents
+        published a name that invites the diff reading without ever saying which
+        sense was meant. What it pins is that the combination stays legal -- a
+        later change that "fixed" the apparent contradiction by making
+        `completed_empty` mean an empty diff would break here, which is the
+        regression actually worth guarding.
         """
         token = self._acquire()
         envf = self.tmp / "completed-empty-envelope.json"
@@ -2369,9 +2378,86 @@ class RailTests(unittest.TestCase):
                 cancelled = run_cli(self.args("cancel", job_id))
                 self.assertNotEqual(cancelled.returncode, 0)
                 self.assertIn("no process identity was recorded", cancelled.stderr)
-                self.assertIn(f"status {job_id}", cancelled.stderr)
-                self.assertIn("jobs --all", cancelled.stderr)
                 self.assertNotIn("Traceback", cancelled.stderr)
+                if records[job_id]["launch_state"] == "intent":
+                    # Genuinely undecided: the launcher may have vanished with a
+                    # child running, so the remedy is where liveness is answered.
+                    self.assertIn(f"status {job_id}", cancelled.stderr)
+                    self.assertIn("jobs --all", cancelled.stderr)
+                else:
+                    # A failed spawn is decided, and the reason is in the record
+                    # we already read. Sending the caller to `status` -- which
+                    # answers `unknown` from liveness -- would point at the one
+                    # place that cannot say what this record already knows.
+                    self.assertIn("never started", cancelled.stderr)
+                    self.assertIn(
+                        records[job_id]["launch_error"], cancelled.stderr,
+                        "the recorded reason was not surfaced",
+                    )
+
+    def test_cancel_refuses_rather_than_tracebacking_on_a_broken_record(self):
+        """A launch record is a file: a crash mid-write truncates it, and an
+        operator can edit it. `read_json` raising produced a JSONDecodeError
+        traceback, and the pid guard that claimed to cover that case sat AFTER
+        the call that made it unreachable."""
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        cases = {
+            "00000000-0000-4000-8000-00000000aa81": "{ truncated mid-write",
+            "00000000-0000-4000-8000-00000000aa82": '"a bare string"',
+            "00000000-0000-4000-8000-00000000aa83": json.dumps(
+                {"job_id": "00000000-0000-4000-8000-00000000aa83", "pid": None}
+            ),
+        }
+        for job_id, body in cases.items():
+            with self.subTest(job_id=job_id):
+                (launch / f"{job_id}.json").write_text(body)
+                p = run_cli(self.args("cancel", job_id))
+                self.assertNotEqual(p.returncode, 0)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertIn("switchgear: REFUSING", p.stderr)
+                self.assertIn(job_id, p.stderr)
+
+    def test_gc_protects_only_records_this_launcher_could_have_written(self):
+        """Protection keyed on one string let any object carrying it pin a state
+        root forever, which turns evidence retention into a way to stop gc
+        collecting. The record must also name its own file's job and carry the
+        numeric stamp the launcher writes."""
+        from switchgear import gc as gcmod
+
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        real_id = "00000000-0000-4000-8000-00000000aa91"
+        litter = {
+            "00000000-0000-4000-8000-00000000aa92": {"launch_state": "intent"},
+            "00000000-0000-4000-8000-00000000aa93": {
+                "launch_state": "failed", "job_id": "someone-else",
+                "intent_at": time.time(),
+            },
+            "00000000-0000-4000-8000-00000000aa94": {
+                "launch_state": "intent",
+                "job_id": "00000000-0000-4000-8000-00000000aa94",
+                "intent_at": "nonsense",
+            },
+        }
+        (launch / f"{real_id}.json").write_text(json.dumps({
+            "job_id": real_id, "launch_state": "intent", "intent_at": time.time(),
+        }))
+        for job_id, body in litter.items():
+            (launch / f"{job_id}.json").write_text(json.dumps(body))
+
+        planned = gcmod.plan(str(self.state), older_than_s=3600)
+        swept = set(planned["orphan_launch_records"])
+        protected = {row["job_id"] for row in planned["protected"]}
+        # Non-vacuity: the well-formed record is still protected, so this cannot
+        # pass against a version that simply stopped protecting anything.
+        self.assertIn(real_id, protected)
+        self.assertNotIn(str(launch / f"{real_id}.json"), swept)
+        for job_id in litter:
+            with self.subTest(job_id=job_id):
+                self.assertIn(str(launch / f"{job_id}.json"), swept,
+                              "a record this launcher could not have written "
+                              "was allowed to pin the state root")
 
     def test_launch_failure_preserves_the_pre_spawn_intent_and_original_error(self):
         """If Popen raises, the launcher must leave a failed record without

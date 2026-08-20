@@ -29,7 +29,15 @@ One directory per scenario, with these contents:
 | `crashed_launch_only` | the P2 case: `runner.json`, no `result.json`, `jobs --worktree` row with `state=died` |
 | `dirty`, `provider_error` | one each, so a decoder's closed enums are exercised on the failure side |
 | `needs_input`, `completed_empty` | terminal events, per the finished-status enum |
-| `gc_plan.json` | a dry run with a protected `awaiting_external_review` job and a protected dead launch-only record, showing `launch_artifacts`, `protected`, `launch_artifacts_removed` |
+| `gc_plan.json` | a dry run with a protected `awaiting_external_review` job and a protected dead launch-only record, showing `launch_artifacts` and `protected` |
+| `gc_applied.json` | the same selection actually applied, which is the only place `launch_artifacts_removed` exists |
+
+The Wave 1A statement of this table asked for `launch_artifacts_removed` in the
+dry run. It is not there and cannot be: a dry run returns `gc.plan()`, whose keys
+are `jobs`, `protected`, `orphan_launch_records`, `sessions`, `sessions_skipped`
+and `bytes`, while `launch_artifacts_removed` is produced by `gc.apply()`. A
+decoder needs both shapes, so both are captured — which is exactly the kind of
+correction capturing from a real run produces and hand-authoring does not.
 
 ## Normalization and versioning
 

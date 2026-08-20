@@ -464,8 +464,12 @@ def launch_background(ns: argparse.Namespace) -> int:
     # wants to be told, not stalled) or waits for a slot.
     child_env["SWITCHGEAR_BACKGROUND_CHILD"] = "1"
 
-    with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
-        try:
+    # Opening the two log files is inside the same guard as the spawn, not
+    # around it: a full disk or a bad permission there also means the job never
+    # started, and leaving `intent` behind for that would report "the launcher
+    # may have vanished mid-spawn" for a launch that provably never happened.
+    try:
+        with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
             proc = subprocess.Popen(
                 [sys.executable, "-s", os.path.join(os.path.dirname(__file__), "__main__.py"), *argv],
                 stdout=out_fh,
@@ -477,17 +481,17 @@ def launch_background(ns: argparse.Namespace) -> int:
                 start_new_session=True,
                 close_fds=True,
             )
-        except Exception as exc:
-            # Preserve the original exception contract, but replace intent with
-            # an explicit terminal account of the failed spawn. Only the type is
-            # recorded: exception text from process construction is not a safe
-            # place to assume caller arguments will never be repeated.
-            atomic_write_json(meta_path, {
-                **intent,
-                "launch_state": "failed",
-                "launch_error": f"{type(exc).__name__}: detached process spawn failed",
-            })
-            raise
+    except Exception as exc:
+        # Preserve the original exception contract, but replace intent with
+        # an explicit terminal account of the failed spawn. Only the type is
+        # recorded: exception text from process construction is not a safe
+        # place to assume caller arguments will never be repeated.
+        atomic_write_json(meta_path, {
+            **intent,
+            "launch_state": "failed",
+            "launch_error": f"{type(exc).__name__}: detached process spawn failed",
+        })
+        raise
     from .lease import _boot_id, _starttime
 
     meta = {
@@ -659,10 +663,28 @@ def cmd_cancel(ns: argparse.Namespace) -> int:
     meta_path = os.path.join(_launch_dir(state_path), f"{ns.job}.json")
     if not os.path.isfile(meta_path):
         _die(f"no background launch record for {ns.job}")
-    meta = read_json(meta_path)
+    # A launch record is a file in a state root, so it can be truncated by a
+    # crash mid-write or edited by hand. `read_json` raising here printed a
+    # JSONDecodeError traceback rather than a refusal -- and the guard below
+    # claimed to cover that case while sitting after the call that made it
+    # impossible to reach.
+    try:
+        meta = read_json(meta_path)
+    except Exception as exc:
+        _die(
+            f"the launch record for {ns.job} is unreadable ({type(exc).__name__}), "
+            "so cancel cannot establish what to signal and will not guess. "
+            f"Inspect {meta_path}; if the job is running, `switchgear jobs --all` "
+            "under this state root still lists it from its own runner record."
+        )
+    if not isinstance(meta, dict):
+        _die(
+            f"the launch record for {ns.job} is not a JSON object, so it names no "
+            f"process cancel could verify. Inspect {meta_path}."
+        )
     from .lease import _alive
 
-    launch_state = meta.get("launch_state") if isinstance(meta, dict) else None
+    launch_state = meta.get("launch_state")
     if launch_state == "intent":
         _die(
             f"job {ns.job} has launch intent but no process identity was recorded: "
@@ -672,15 +694,19 @@ def cmd_cancel(ns: argparse.Namespace) -> int:
             "state root to find out."
         )
     if launch_state == "failed":
+        # The recorded reason is repeated here rather than pointed at: `status`
+        # answers from liveness and reports this job as `unknown`, so it cannot
+        # surface the one fact the record already knows, and a remedy that sends
+        # a caller somewhere that does not have the answer is not a remedy.
         _die(
-            f"job {ns.job} has a failed background launch and no process identity "
-            "was recorded, so cancel cannot invent a kill target. Check "
-            f"`switchgear status {ns.job}` and `switchgear jobs --all` under this "
-            "state root for its recorded state."
+            f"job {ns.job} never started: its background launch failed "
+            f"({meta.get('launch_error') or 'no reason recorded'}) and no process "
+            "identity was recorded, so there is nothing to cancel. The record is "
+            f"at {meta_path}."
         )
 
-    # Any other record without a convertible pid: a truncated or hand-edited
-    # record reaches here too, and `int(meta["pid"])` raised a traceback for all
+    # Any other record without a convertible pid -- a null, a string, or a record
+    # written by an older version. `int(meta["pid"])` raised a traceback for all
     # of them. A cancel that cannot name its target must say so, not crash.
     try:
         pid = int(meta["pid"])

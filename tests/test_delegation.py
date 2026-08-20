@@ -216,6 +216,46 @@ class RunningChild(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_a_record_that_states_no_outcome_is_not_reported_as_finished(self):
+        """Bytes that parse are not an outcome.
+
+        The absence fix checked whether a record EXISTED, so an empty object or
+        one whose status was absent or non-string reported `finished` with
+        `status: null` -- the same absence-is-benign answer, rebuilt out of a
+        different absence, and handed to the untrusted worker as a verdict.
+        """
+        from switchgear.lease import _boot_id, _starttime
+
+        launch = self.state / "launch"
+        launch.mkdir()
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            (launch / "kid.json").write_text(json.dumps({
+                "job_id": "kid", "pid": proc.pid,
+                "starttime": _starttime(proc.pid), "boot_id": _boot_id(),
+            }))
+            result = self.state / "jobs" / "kid" / "result.json"
+            for body in ("{}", json.dumps({"job_id": "kid"}),
+                         json.dumps({"job_id": "kid", "status": 7})):
+                with self.subTest(body=body):
+                    result.write_text(body)
+                    out = self.broker.child_result("kid")
+                    self.assertNotEqual(out["state"], "finished")
+                    self.assertNotIn("status", out)
+                    self.assertIn(out["state"], ("running", "queued"))
+            # Non-vacuity: a record that DOES state its outcome still finishes,
+            # so this cannot pass against a version that never reports finished.
+            result.write_text(json.dumps({"job_id": "kid", "status": "ok",
+                                          "exitSummary": "done"}))
+            done = self.broker.child_result("kid")
+            self.assertEqual(done["state"], "finished")
+            self.assertEqual(done["status"], "ok")
+            self.assertEqual(done["answer"], "done")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)
+
     def test_a_missing_or_unreadable_record_uses_the_launch_liveness(self):
         """A missing result used to mean running forever, even after the child
         died. A real live-then-dead pid identity makes both sides non-vacuous and
