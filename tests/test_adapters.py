@@ -21,13 +21,18 @@ sys.path.insert(0, str(ROOT / "python"))
 FIXTURE = ROOT / "tests" / "fixtures" / "opencode-real-scout.jsonl"
 
 from switchgear.adapters import (  # noqa: E402
+    FINAL_TEXT_EMPTY,
+    FINAL_TEXT_PRESENT,
+    FINAL_TEXT_UNKNOWN,
     TERMINAL_COMPLETED,
     TERMINAL_EMPTY,
     TERMINAL_FAILED,
+    TERMINAL_NEEDS_INPUT,
     get_adapter,
     parse_lenient,
 )
 from switchgear.errors import Refuse  # noqa: E402
+from switchgear.harnesses.normalization import down_project_v2_events_to_v1  # noqa: E402
 
 
 class RealStream(unittest.TestCase):
@@ -98,14 +103,89 @@ class Vocabulary(unittest.TestCase):
     def setUp(self):
         self.adapter = get_adapter("opencode")
 
-    def test_a_run_with_no_assistant_text_is_completed_empty(self):
-        """Not a success to report as one -- the orchestrator distinguishes the two."""
+    def test_a_run_with_no_assistant_text_keeps_outcome_orthogonal(self):
+        """Success and closing-text absence are separate v2 facts."""
         evs = [
             {"type": "step_start", "sessionID": "ses_x", "part": {}},
             {"type": "step_finish", "sessionID": "ses_x", "part": {"reason": "stop"}},
         ]
         fin = [n for n in self.adapter.normalize(evs) if n["event"] == "finished"][0]
-        self.assertEqual(fin["status"], TERMINAL_EMPTY)
+        self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+        self.assertEqual(
+            fin["final_text_state"], FINAL_TEXT_EMPTY,
+            "v2 fused empty closing text back into the execution outcome",
+        )
+
+    def test_a_run_with_closing_assistant_text_records_it_as_present(self):
+        evs = [
+            {"type": "text", "sessionID": "ses_x", "part": {"text": "done"}},
+            {"type": "step_finish", "sessionID": "ses_x", "part": {"reason": "stop"}},
+        ]
+        fin = [n for n in self.adapter.normalize(evs) if n["event"] == "finished"][0]
+        self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+        self.assertEqual(
+            fin["final_text_state"], FINAL_TEXT_PRESENT,
+            "v2 lost the provider's non-whitespace closing assistant text",
+        )
+
+    def test_needs_input_and_failed_never_invent_unknown_for_a_live_run(self):
+        cases = [
+            (
+                [
+                    {"type": "text", "sessionID": "ses_x", "part": {"text": "approve"}},
+                    {"type": "error", "message": "permission required"},
+                ],
+                TERMINAL_NEEDS_INPUT,
+                FINAL_TEXT_PRESENT,
+            ),
+            ([{"type": "error", "message": "provider failed"}],
+             TERMINAL_FAILED, FINAL_TEXT_EMPTY),
+        ]
+        for events, status, text_state in cases:
+            with self.subTest(status=status):
+                fin = [
+                    n for n in self.adapter.normalize(events, run_ended=True)
+                    if n["event"] == "finished"
+                ][0]
+                self.assertEqual(fin["status"], status)
+                self.assertEqual(
+                    fin["final_text_state"], text_state,
+                    "needs_input/failed did not preserve live closing-text presence",
+                )
+                self.assertNotEqual(
+                    fin["final_text_state"], FINAL_TEXT_UNKNOWN,
+                    "a live v2 run emitted historical-only final_text_state=unknown",
+                )
+
+    def test_v2_to_v1_down_projection_is_exact_for_all_six_pairs(self):
+        cases = [
+            (TERMINAL_COMPLETED, FINAL_TEXT_PRESENT, TERMINAL_COMPLETED),
+            (TERMINAL_COMPLETED, FINAL_TEXT_EMPTY, TERMINAL_EMPTY),
+            (TERMINAL_NEEDS_INPUT, FINAL_TEXT_PRESENT, TERMINAL_NEEDS_INPUT),
+            (TERMINAL_NEEDS_INPUT, FINAL_TEXT_EMPTY, TERMINAL_NEEDS_INPUT),
+            (TERMINAL_FAILED, FINAL_TEXT_PRESENT, TERMINAL_FAILED),
+            (TERMINAL_FAILED, FINAL_TEXT_EMPTY, TERMINAL_FAILED),
+        ]
+        for status, text_state, expected in cases:
+            with self.subTest(status=status, final_text_state=text_state):
+                projected = down_project_v2_events_to_v1([
+                    {"event": "finished", "status": status,
+                     "final_text_state": text_state, "v": 2}
+                ])[0]
+                self.assertEqual(
+                    projected["status"], expected,
+                    "v2-to-v1 terminal status mapping changed",
+                )
+                self.assertEqual(projected["v"], 1)
+                self.assertNotIn(
+                    "final_text_state", projected,
+                    "v1 down-projection retained the v2-only terminal field",
+                )
+
+        nonterminal = down_project_v2_events_to_v1(
+            [{"event": "text", "content": "same", "v": 2}]
+        )[0]
+        self.assertEqual(nonterminal, {"event": "text", "content": "same", "v": 1})
 
     def test_text_is_bounded_at_write_time(self):
         evs = [{"type": "text", "sessionID": "ses_x", "part": {"text": "A" * 5000}}]
@@ -163,6 +243,7 @@ class Vocabulary(unittest.TestCase):
         norm = self.adapter.normalize(evs, run_ended=False)
         fin = [n for n in norm if n["event"] == "finished"][0]
         self.assertEqual(fin["status"], TERMINAL_COMPLETED)
+        self.assertEqual(fin["final_text_state"], FINAL_TEXT_PRESENT)
 
     def test_unknown_provider_refuses_rather_than_guessing(self):
         with self.assertRaises(Refuse):

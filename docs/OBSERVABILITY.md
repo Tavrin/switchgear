@@ -122,20 +122,36 @@ status   {sessionId}                 # REQUIRED: without it resume cannot exist
 tool     {name, target}              # rendered as text by the orchestrator; keep minimal
 text     {content}                   # truncate at write time (the orchestrator uses 400 chars)
 progress {turns, costUSD, tokens}    # a running job has no finished event
-finished {status, exitSummary, turns, costUSD, tokens, sawTerminal}
-         # status: completed | completed_empty | needs_input | failed
+finished {status, final_text_state, exitSummary, turns, costUSD, tokens, sawTerminal}
+         # status: completed | needs_input | failed
+         # final_text_state: present | empty | unknown
          # needs_input parks the ticket back to the operator -- load-bearing
 ```
 
 Every line carries the `event` discriminator shown above. `v` is carried by the
-written-out normalized stream — `evidence/events.v1.jsonl` and
-`logs --format normalized` — and not by the byte-capped `logs` digest, which is a
-projection over the same events and can add a final `truncated` line of its own.
-`completed_empty` means the execution succeeded without non-whitespace
-closing assistant text; it does not say whether files changed. Change presence
-comes from the controller-computed `change.state` and `freeze.changed_files`,
-and the enum name remains unchanged until the contract-v1-rc1 compatibility
-review.
+written-out normalized stream — the version-dependent
+`evidence/events.v*.jsonl` and `logs --format normalized` — and not by the
+byte-capped `logs` digest. New jobs write v2; historical v1 jobs remain readable
+and their durable artifacts are never rewritten. Each digest line instead
+carries `digest_v: 1`, including its final `truncated` sentinel. A digest JSON
+envelope carries both `digest_v` (projection format) and `events_v` (normalized
+event vocabulary); plain digest lines deliberately carry no `events_v`. If a
+consumer meets an unrecognised `digest_v`, it must not decode that digest and
+must fall back to `logs --format normalized`.
+
+Execution outcome and closing assistant text are orthogonal in v2. A live run
+always emits `final_text_state` as `present` or `empty`; `unknown` is only the
+honest consumer-side upgrade for a v1 `needs_input` or `failed` event, because
+v1 did not preserve text presence for those outcomes.
+
+The exact v2 -> v1 mapping is `(completed,present) -> completed`,
+`(completed,empty) -> completed_empty`, `(needs_input,present)` and
+`(needs_input,empty) -> needs_input`, and `(failed,present)` and
+`(failed,empty) -> failed`; v1 removes `final_text_state` and stamps `v: 1`.
+The exact consumer-side v1 -> v2 mapping is `completed ->
+(completed,present)`, `completed_empty -> (completed,empty)`, `needs_input ->
+(needs_input,unknown)`, and `failed -> (failed,unknown)`. Non-terminal events
+are identical apart from `v`.
 
 `changed_files` is deliberately absent: the orchestrator derives the result manifest from
 git itself and ignores agent-reported file lists. Keep it internally if useful.
@@ -199,13 +215,14 @@ The first draft was missing fields the orchestrator actually consumes
 | `v` | the contract version carried by every normalized event |
 | `sessionID` — see correction below | captured for resume; **without it, reply-by-restart cannot work at all** |
 | `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
-| `finished.status` ∈ `completed` / `completed_empty` / `needs_input` / `failed` | `needs_input` parks the ticket back to the operator; `failed` records provider errors and streams that ended without a terminal event |
+| `finished.status` ∈ `completed` / `needs_input` / `failed` | execution outcome; `needs_input` parks the ticket back to the operator, while `failed` records provider errors and streams that ended without a terminal event |
+| `finished.final_text_state` ∈ `present` / `empty` / `unknown` | closing assistant text presence, independent of outcome; live v2 emits only `present`/`empty`, while consumer-upgraded v1 failures and input requests use `unknown` |
 | `exitSummary` text | shown on the record |
 | `text{content}` | mid-run display; the orchestrator truncates to 400 chars per line (measured in the consuming orchestrator) |
 
-Here too, `completed_empty` is transcript emptiness, not diff emptiness. Read
-`change.state` and `freeze.changed_files` for controller-measured change
-presence; the name is frozen until the contract-v1-rc1 compatibility review.
+The v2/v1 mapping above is exact in both directions; do not infer a text state
+for v1 `needs_input` or `failed`. Read `change.state` and `freeze.changed_files`
+for controller-measured change presence rather than any transcript field.
 
 **Drop `changed_files` from the orchestrator-facing contract.** The orchestrator never trusts
 agent-reported file lists: it derives the result manifest itself from git at

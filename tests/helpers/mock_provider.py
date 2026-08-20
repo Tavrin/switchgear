@@ -224,6 +224,26 @@ def main() -> int:
                        "tokens": {"total": 42}, "cost": 1.5e-05}})
         return 0
 
+    if beh == "many-text":
+        # Enough real raw events to force the digest's byte cap. Keeping this in
+        # the mock makes the truncation test exercise the rail and adapter
+        # instead of manufacturing the normalized projection it is meant to
+        # verify.
+        sid = "ses_mock000000000000000000"
+        emit({"type": "step_start", "sessionID": sid})
+        for index in range(80):
+            emit({"type": "text", "sessionID": sid,
+                  "part": {"type": "text", "sessionID": sid,
+                           # Sized so the old "fill, then append sentinel"
+                           # algorithm left fewer bytes than the sentinel needs.
+                           # A larger payload happened to leave enough slack and
+                           # let that broken accounting pass by accident.
+                           "text": f"event-{index}-" + "x" * 49}})
+        emit({"type": "step_finish", "sessionID": sid,
+              "part": {"type": "step-finish", "reason": "stop", "sessionID": sid,
+                       "tokens": {"total": 80}, "cost": 0.0}})
+        return 0
+
     if beh == "whoami":
         # Reports the identity the worker actually runs as, so the uid boundary
         # can be asserted from outside rather than assumed from a flag.

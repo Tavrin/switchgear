@@ -41,9 +41,9 @@ no longer do either of the things the session store exists for:
   rail refuses a cwd that is not a git worktree before any provider runs.
 
 What remains in the store after that is the harness's private transcript. The
-rail's own evidence for the job — `result.json`, `evidence/events.jsonl`,
-`evidence/events.v1.jsonl`, the handoff — lives in the job directory, which job
-protection already covers and which `--include-sessions` does not touch.
+rail's own evidence for the job — `result.json`, `evidence/events.jsonl`, the
+versioned `evidence/events.v*.jsonl`, the handoff — lives in the job directory,
+which job protection already covers and which `--include-sessions` does not touch.
 
 ## Two measurements that change the shape of the question
 
