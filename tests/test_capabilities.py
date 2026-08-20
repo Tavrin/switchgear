@@ -88,6 +88,7 @@ class Honesty(unittest.TestCase):
         self.assertEqual(exit_code_for("timeout"), 124)
         self.assertEqual(exit_code_for("ok"), 0)
         self.assertEqual(exit_code_for("awaiting_review"), 0)
+        self.assertEqual(exit_code_for("awaiting_external_review"), 0)
         self.assertEqual(exit_code_for("provider_error"), 1)
         published = set(self.out["refusals"]["exit_codes"])
         self.assertEqual(published, {"0", "1", "2", "124"})
