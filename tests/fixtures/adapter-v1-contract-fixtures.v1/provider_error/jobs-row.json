@@ -2,9 +2,9 @@
   "awaiting_review": false,
   "cost_usd": 0.0,
   "dir": "<ABSOLUTE_PATH>/syn/primary",
-  "elapsed_s": 0.2,
+  "elapsed_s": 0.1,
   "harness": "opencode",
-  "job_id": "75485713-fc0b-40a9-92fb-3452a28ab1a8",
+  "job_id": "28211dfc-298b-44d5-bd6f-434e73970407",
   "mode": "readonly",
   "model": "opencode-go/deepseek-v4-flash",
   "pool": "opencode-go",
@@ -12,6 +12,6 @@
   "resumed_from": null,
   "review_of": null,
   "role": "scout",
-  "started_at": 1787246746.115,
+  "started_at": 1787249301.099,
   "state": "provider_error"
 }

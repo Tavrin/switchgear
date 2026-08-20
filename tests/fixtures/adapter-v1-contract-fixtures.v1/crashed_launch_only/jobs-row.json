@@ -4,7 +4,7 @@
   "dir": "<ABSOLUTE_PATH>/syn/primary",
   "elapsed_s": 0.0,
   "harness": "opencode",
-  "job_id": "3527bb63-7e5a-4ca1-9193-45399c14c31e",
+  "job_id": "3082eb69-41c5-46eb-8a86-6cfbad452e94",
   "mode": "readonly",
   "model": "opencode-go/deepseek-v4-flash",
   "pool": "opencode-go",
@@ -12,6 +12,6 @@
   "resumed_from": null,
   "review_of": null,
   "role": "scout",
-  "started_at": 1787246754.247,
+  "started_at": 1787249309.23,
   "state": "died"
 }

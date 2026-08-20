@@ -41,9 +41,12 @@ The captured artifact is the authority and the document is the suspect.
 
 ## Scenarios
 
-One directory per scenario. Each holds `result.json`, `runner.json`, the
-versioned `events.v<N>.jsonl`, the `jobs --json` row for it, and the
-`logs --json` digest and normalized envelopes.
+One directory per scenario. Every completed-job scenario holds `result.json`,
+`runner.json`, the versioned `events.v<N>.jsonl`, the `jobs --json` row for it,
+and the `logs --json` digest and normalized envelopes. The
+`crashed_launch_only` scenario deliberately holds only `runner.json` and its
+`jobs --json` row: by definition it produced neither a result nor a completed
+normalized projection.
 
 | scenario | what it pins |
 |---|---|

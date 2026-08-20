@@ -1131,7 +1131,7 @@ class RailTests(unittest.TestCase):
         from switchgear.cli import DIGEST_MAX_BYTES
 
         p = run_cli(
-            self.args("scout", str(self.primary), "look"),
+            self.args("--json", "scout", str(self.primary), "look"),
             env={"SWITCHGEAR_MOCK_BEHAVIOR": "slow-stream", "SWITCHGEAR_MOCK_EXTRA": "0"},
         )
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -1181,6 +1181,52 @@ class RailTests(unittest.TestCase):
         )
         self.assertEqual(events[-1]["event"], "truncated")
         self.assertGreater(events[-1]["dropped_events"], 0)
+
+    def test_digest_cap_claim_names_compact_jsonl_not_the_json_envelope(self):
+        """The event payload was capped, but the indented --json envelope was
+        published as if the same byte ceiling covered its serialization."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear.cli import DIGEST_MAX_BYTES
+
+        p = run_cli(
+            self.args("--json", "scout", str(self.primary), "look"),
+            env={"SWITCHGEAR_MOCK_BEHAVIOR": "many-text",
+                 "SWITCHGEAR_NO_UID_BOUNDARY": "1"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = json.loads(p.stdout)["job_id"]
+        plain = run_cli(self.args("logs", job_id))
+        wrapped = run_cli(self.args("--json", "logs", job_id))
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertEqual(wrapped.returncode, 0, wrapped.stderr)
+        self.assertLessEqual(
+            len(plain.stdout.encode()), DIGEST_MAX_BYTES,
+            "plain compact JSONL digest exceeded its payload cap",
+        )
+        self.assertGreater(
+            len(wrapped.stdout.encode()), DIGEST_MAX_BYTES,
+            "constructed JSON envelope did not exceed the compact payload cap",
+        )
+        lines = [json.loads(line) for line in plain.stdout.splitlines()]
+        envelope = json.loads(wrapped.stdout)
+        self.assertEqual(
+            envelope["events"], lines[:-1],
+            "JSON digest envelope does not carry the same bounded real events",
+        )
+        self.assertEqual(envelope["dropped_events"], lines[-1]["dropped_events"])
+
+        help_out = run_cli(self.args("logs", "--help"))
+        self.assertIn(
+            "compact JSONL event payload bounded to 8 KiB",
+            " ".join(help_out.stdout.split()),
+            "logs help still claims the indented JSON envelope shares the cap",
+        )
+        for relative in ("docs/INTEGRATION.md", "docs/OBSERVABILITY.md"):
+            text = (ROOT / relative).read_text()
+            self.assertIn(
+                "compact JSONL event payload", text,
+                f"{relative} does not state what the digest byte cap measures",
+            )
 
     def test_evidence_is_readable_while_the_job_is_still_running(self):
         """The enabling property for observing a delegated agent mid-run.
@@ -1679,6 +1725,24 @@ class RailTests(unittest.TestCase):
         self.assertEqual(
             strays, [], "serialization failure left its temp file behind"
         )
+
+    def test_atomic_write_does_not_unlink_after_a_successful_replace(self):
+        """After replace consumed this writer's temp, an unconditional unlink
+        could delete another writer's file if the unique name was reused in the
+        gap. Success owns no temp path to clean up."""
+        from unittest.mock import patch
+
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear.state import atomic_write_json
+
+        target = self.tmp / "successful.json"
+        with patch("switchgear.state.os.unlink") as unlink:
+            atomic_write_json(str(target), {"installed": True})
+        self.assertFalse(
+            unlink.called,
+            "successful atomic replace still tried to unlink a path it no longer owns",
+        )
+        self.assertEqual(json.loads(target.read_text()), {"installed": True})
 
     def test_atomic_write_drains_short_writes(self):
         """A single os.write can legally write only a prefix. Installing that
@@ -2692,11 +2756,21 @@ class RailTests(unittest.TestCase):
     def test_sessions_need_include_sessions_on_top_of_yes(self):
         """A job directory can be recreated by re-running the job; a session
         store is the only durable copy of a conversation."""
-        key = "f" * 64
+        from switchgear import lease
+
+        marker = {
+            "worktree": str(self.tmp / "deleted-worktree"),
+            "st_dev": 41,
+            "st_ino": 42,
+        }
+        key = lease.identity_key_from_facts({
+            "realpath": marker["worktree"],
+            "st_dev": marker["st_dev"],
+            "st_ino": marker["st_ino"],
+        })
         sess = self.state / "sessions" / key
         (sess / "opencode").mkdir(parents=True)
-        (sess / "worktree.json").write_text(json.dumps(
-            {"worktree": str(self.tmp / "deleted-worktree")}))
+        (sess / "worktree.json").write_text(json.dumps(marker))
         p, out = self._gc("--older-than", "1h", "--yes")
         self.assertTrue(sess.exists(), "a bare --yes removed a session store")
 
@@ -2704,12 +2778,50 @@ class RailTests(unittest.TestCase):
         self.assertFalse(sess.exists(), "--include-sessions did not remove it")
 
     def test_a_session_whose_worktree_still_exists_is_kept(self):
-        key = "e" * 64
+        from switchgear import lease
+
+        stat = self.primary.stat()
+        marker = {
+            "worktree": str(self.primary.resolve()),
+            "st_dev": stat.st_dev,
+            "st_ino": stat.st_ino,
+        }
+        key = lease.identity_key_from_facts({
+            "realpath": marker["worktree"],
+            "st_dev": marker["st_dev"],
+            "st_ino": marker["st_ino"],
+        })
         sess = self.state / "sessions" / key
         (sess / "opencode").mkdir(parents=True)
-        (sess / "worktree.json").write_text(json.dumps({"worktree": str(self.primary)}))
+        (sess / "worktree.json").write_text(json.dumps(marker))
         p, out = self._gc("--older-than", "1h", "--yes", "--include-sessions")
         self.assertTrue(sess.exists())
+
+    def test_incomplete_legacy_marker_is_unverifiable_not_deletion_evidence(self):
+        """A path-only marker could point at anything missing and made a real
+        conversation eligible for deletion despite carrying no identity facts."""
+        key = "f" * 64
+        sess = self.state / "sessions" / key
+        (sess / "opencode").mkdir(parents=True)
+        (sess / "worktree.json").write_text(json.dumps({
+            "worktree": "/definitely/missing",
+        }))
+
+        p, planned = self._gc("--older-than", "1h", "--include-sessions")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p, _applied = self._gc(
+            "--older-than", "1h", "--yes", "--include-sessions"
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(
+            sess.exists(),
+            "gc deleted a conversation using an incomplete legacy marker",
+        )
+        skipped = {
+            row["key"]: row["reason"] for row in planned["sessions_skipped"]
+        }
+        self.assertIn(key, skipped, "incomplete legacy marker was not reported")
+        self.assertIn("UNVERIFIABLE", skipped[key])
 
     def test_an_unidentifiable_session_is_skipped_and_reported(self):
         """Unverifiable is not absent. A store with no marker must be reported,
@@ -3472,6 +3584,57 @@ class NormalizedStream(unittest.TestCase):
                 self.assertEqual(out["v"], 1)
                 self.assertTrue(all(event["v"] == 1 for event in out["events"]))
 
+    def test_corrupt_existing_result_refuses_logs_and_status_without_guessing(self):
+        """Unreadable bytes were silently treated as a v1 record, while valid
+        non-object JSON reached `.get()` and raised AttributeError."""
+        rec = self._scout()
+        job = rec["job_id"]
+        result_path = self.state / "jobs" / job / "result.json"
+
+        for label, body in (("unreadable", "{not json"), ("non-object", "[]")):
+            with self.subTest(label=label):
+                result_path.write_text(body)
+                for command in (("logs", job), ("status", job)):
+                    projection = run_cli(self.args(*command))
+                    self.assertNotEqual(
+                        projection.returncode, 0,
+                        f"{command[0]} accepted a corrupt existing result as history",
+                    )
+                    self.assertIn(str(result_path), projection.stderr)
+                    self.assertIn("Restore a valid result JSON object",
+                                  projection.stderr)
+                    self.assertNotIn(
+                        "Traceback", projection.stderr,
+                        f"{command[0]} exposed a traceback for {label} result JSON",
+                    )
+
+    def test_resultless_projection_uses_the_version_owned_by_runner(self):
+        """A running v1 job can outlive an upgrade of the symlinked package.
+        Its start record, not the newly installed binary, owns live labels."""
+        rec = self._scout()
+        job = rec["job_id"]
+        jd = self.state / "jobs" / job
+        runner_path = jd / "runner.json"
+        runner = json.loads(runner_path.read_text())
+        runner["events_normalized_version"] = 1
+        runner_path.write_text(json.dumps(runner))
+        (jd / "result.json").unlink()
+
+        projection = run_cli(
+            self.args("--json", "logs", job, "--format", "normalized")
+        )
+        self.assertEqual(projection.returncode, 0, projection.stderr)
+        out = json.loads(projection.stdout)
+        self.assertEqual(
+            out["v"], 1,
+            "result-less job was relabelled with the currently installed version",
+        )
+        self.assertTrue(out["events"])
+        self.assertTrue(all(event["v"] == 1 for event in out["events"]))
+        finished = next(event for event in out["events"]
+                        if event["event"] == "finished")
+        self.assertNotIn("final_text_state", finished)
+
     def test_normalized_is_not_capped_but_the_digest_is(self):
         """Two different jobs: the digest is bounded for an agent's context, the
         normalized stream is complete for a UI. Conflating them would either
@@ -4037,6 +4200,50 @@ class CrashedJobAttribution(unittest.TestCase):
                          "the count reported a deletion that did not happen")
         self.assertIn(job_id, [k["job_id"] for k in out["kept"]])
 
+    def test_failed_runner_write_removes_the_unknown_job_directory(self):
+        """create_job_dirs runs before runner.json. A refused attribution write
+        left no result or runner, so gc correctly protected the unknown job
+        forever and the refusal became permanent litter."""
+        from unittest import mock
+
+        from switchgear import job as jobmod
+
+        job_id = "00000000-0000-4000-8000-00000000c2d1"
+        original = OSError("constructed runner attribution failure")
+        env = dict(os.environ, SWITCHGEAR_NO_UID_BOUNDARY="1")
+        with mock.patch.object(jobmod, "atomic_write_json", side_effect=original), \
+                mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(
+                OSError, "constructed runner attribution failure"
+            ):
+                jobmod.run_job(
+                    profile_path=str(self.profile), state_path=str(self.state),
+                    mode="readonly", role="scout",
+                    worktree=str(self.primary), prompt="never starts",
+                    provider_path=str(MOCK), job_id=job_id,
+                )
+        self.assertFalse(
+            (self.state / "jobs" / job_id).exists(),
+            "failed runner attribution stranded an unknown job directory",
+        )
+
+        # A cleanup error must not replace the launch refusal with a different
+        # traceback; the original attribution failure is the actionable cause.
+        second_id = "00000000-0000-4000-8000-00000000c2d2"
+        with mock.patch.object(
+            jobmod, "atomic_write_json",
+            side_effect=OSError("original attribution error"),
+        ), mock.patch.object(
+            jobmod, "safe_rmtree", side_effect=OSError("cleanup failed")
+        ), mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(OSError, "original attribution error"):
+                jobmod.run_job(
+                    profile_path=str(self.profile), state_path=str(self.state),
+                    mode="readonly", role="scout",
+                    worktree=str(self.primary), prompt="never starts",
+                    provider_path=str(MOCK), job_id=second_id,
+                )
+
     def test_real_job_runner_constructs_complete_start_record(self):
         # This test deliberately targets start-record construction only. The uid
         # boundary is proven for real by tests/test_uid_boundary.py. The override
@@ -4060,6 +4267,11 @@ class CrashedJobAttribution(unittest.TestCase):
         self.assertEqual(runner["mode"], "readonly")
         self.assertEqual(runner["role"], "scout")
         self.assertEqual(runner["model"], result["model"])
+        self.assertEqual(
+            runner.get("events_normalized_version"),
+            result["artifacts"]["events_normalized_version"],
+            "fresh runner omitted its job-owned normalized event version",
+        )
         jobs_p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
         self.assertEqual(jobs_p.returncode, 0, jobs_p.stderr)
         jobs = json.loads(jobs_p.stdout)["jobs"]
@@ -4353,6 +4565,121 @@ class SessionLineageTests(unittest.TestCase):
                     if event.get("type") == "text")
         self.assertEqual(text, "prior='turn\\n'",
                          "the migrated conversation did not survive resume")
+
+    def test_legacy_resume_requires_the_prior_jobs_full_git_identity(self):
+        """Path, device and inode can all be reused by an unrelated repository.
+        The prior result's full git identity is the only corroborating evidence
+        the legacy rail retained."""
+        first = self._fresh()
+        legacy = self._convert_to_legacy(first, self.primary)
+        result_path = self.state / "jobs" / first["job_id"] / "result.json"
+        prior = json.loads(result_path.read_text())
+        prior["integrity"]["git_identity_after"] = "0" * 64
+        result_path.write_text(json.dumps(prior))
+
+        p = self._resume(first["job_id"])
+        self.assertNotEqual(
+            p.returncode, 0,
+            "legacy resume trusted reused path/device/inode without repository identity",
+        )
+        self.assertIn("prior job's full git identity", p.stderr)
+        self.assertIn("even one later commit intentionally refuses", p.stderr)
+        self.assertIn("Start a new job instead", p.stderr)
+        self.assertFalse(legacy.exists(), "unverified legacy store was not quarantined")
+        quarantined = list((self.state / "sessions" / ".quarantine").iterdir())
+        self.assertEqual(len(quarantined), 1)
+        history = (quarantined[0] / "opencode" / ".local" / "share" /
+                   "opencode" / "conversation.txt")
+        self.assertEqual(
+            history.read_text(), "turn\n",
+            "repository-identity mismatch mounted and modified the conversation",
+        )
+
+    def test_legacy_migration_failure_paths_never_fail_silently(self):
+        """A failed first move leaked the exclusive lineage target."""
+        from unittest import mock
+
+        from switchgear import identity, sessions
+        from switchgear.errors import Refuse
+        from switchgear.state import StateRoot
+
+        first = self._fresh()
+        legacy = self._convert_to_legacy(first, self.primary)
+        ident = identity.inspect_worktree(str(self.primary))
+        prior = json.loads(
+            (self.state / "jobs" / first["job_id"] / "result.json").read_text()
+        )
+        recorded = prior["integrity"]["git_identity_after"]
+        root = StateRoot(str(self.state))
+
+        move_failure_id = sessions.new_session_store_id()
+        with mock.patch.object(
+            sessions.os, "rename", side_effect=OSError("constructed first move failure")
+        ):
+            with self.assertRaisesRegex(OSError, "constructed first move failure"):
+                sessions.migrate_legacy(
+                    root, move_failure_id, "opencode", first["job_id"], ident,
+                    recorded,
+                )
+        self.assertFalse(
+            (self.state / "sessions" / move_failure_id).exists(),
+            "failed first legacy move left an empty reserved lineage",
+        )
+        self.assertTrue(legacy.exists())
+
+    def test_legacy_migration_rollback_failure_names_the_stranded_copy(self):
+        """A failed rollback silently stranded the only conversation under an
+        unbound lineage, leaving the operator no path or remedy."""
+        from unittest import mock
+
+        from switchgear import identity, sessions
+        from switchgear.errors import Refuse
+        from switchgear.state import StateRoot
+
+        first = self._fresh()
+        legacy = self._convert_to_legacy(first, self.primary)
+        ident = identity.inspect_worktree(str(self.primary))
+        prior = json.loads(
+            (self.state / "jobs" / first["job_id"] / "result.json").read_text()
+        )
+        recorded = prior["integrity"]["git_identity_after"]
+        root = StateRoot(str(self.state))
+
+        rollback_id = sessions.new_session_store_id()
+        harness_src = legacy / "opencode"
+        harness_dst = self.state / "sessions" / rollback_id / "opencode"
+        real_rename = os.rename
+
+        def fail_only_rollback(src, dst):
+            if Path(src) == harness_dst and Path(dst) == harness_src:
+                raise OSError("constructed rollback failure")
+            return real_rename(src, dst)
+
+        with mock.patch.object(
+            sessions, "_write_binding", side_effect=OSError("binding failed")
+        ), mock.patch.object(sessions.os, "rename", side_effect=fail_only_rollback):
+            try:
+                sessions.migrate_legacy(
+                    root, rollback_id, "opencode", first["job_id"], ident,
+                    recorded,
+                )
+            except Exception as exc:
+                self.assertIsInstance(
+                    exc, Refuse,
+                    "legacy rollback failure was swallowed behind the binding-write error",
+                )
+                refused = exc
+            else:
+                self.fail("legacy rollback failure returned as if migration succeeded")
+        message = str(refused)
+        self.assertIn(str(harness_dst), message)
+        self.assertIn("no valid binding", message)
+        self.assertIn(f"Move it back to {harness_src}", message)
+        self.assertTrue(
+            harness_dst.exists(),
+            "rollback failure fixture did not leave the conversation at the reported path",
+        )
+        self.assertFalse((harness_dst.parent / "binding.json").exists())
 
     def test_unverifiable_legacy_resume_is_quarantined_and_refused(self):
         from switchgear import gc as gcmod

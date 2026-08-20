@@ -20,14 +20,24 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tempfile
+import types
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACK = ROOT / "tests" / "fixtures" / "adapter-v1-contract-fixtures.v1"
 sys.path.insert(0, str(ROOT / "python"))
+sys.path.insert(0, str(ROOT / "tests" / "helpers"))
 
-PLACEHOLDER = "<ABSOLUTE_PATH>"
+from capture_contract_fixtures import (  # noqa: E402
+    Capture,
+    EXPECTED_ROOT_FILES,
+    EXPECTED_MANIFEST_SCENARIOS,
+    EXPECTED_SCENARIO_FILES,
+    PLACEHOLDER,
+    capture_safety_findings,
+)
 
 
 class ContractFixturePack(unittest.TestCase):
@@ -56,26 +66,140 @@ class ContractFixturePack(unittest.TestCase):
             if not path.is_file():
                 continue
             text = path.read_text()
-            for m in re.finditer(r"(^|[^A-Za-z0-9_])/(home|Users|tmp)/[A-Za-z0-9._-]",
-                                 text, re.M):
-                offenders.append(f"{path.relative_to(PACK)}: {m.group(0)!r}")
-            for needle in ("auth.json", "BEGIN RSA PRIVATE KEY",
-                           "BEGIN OPENSSH PRIVATE KEY"):
-                if needle in text:
-                    offenders.append(f"{path.relative_to(PACK)}: {needle}")
+            offenders.extend(
+                f"{path.relative_to(PACK)}: {finding}"
+                for finding in capture_safety_findings(text)
+            )
         self.assertEqual(offenders, [], "the pack carries machine paths or credentials")
+
+    def test_the_safety_scan_constructs_every_broadened_exposure(self):
+        hostile = (
+            '/ /var/lib/private /mnt/customer/data /opt/vendor/config '
+            '{"access_token":"value","refresh_token":"value",'
+            '"api_key":"value","secret":"value"} '
+            'Authorization: Bearer-value'
+        )
+        findings = capture_safety_findings(hostile)
+        for needle in (
+            "absolute path '/'", "/var/lib/private", "/mnt/customer/data",
+            "/opt/vendor/config",
+            "access_token", "refresh_token", "api_key", "secret",
+            "Authorization:",
+        ):
+            self.assertTrue(
+                any(needle in finding for finding in findings),
+                f"fixture safety scan missed constructed exposure {needle}",
+            )
+        self.assertEqual(
+            capture_safety_findings(f'{PLACEHOLDER}/state/jobs/id'), [],
+            "the documented absolute-path placeholder was rejected",
+        )
+
+    def test_declared_scenarios_and_files_match_the_pack_exactly(self):
+        actual_dirs = {path.name for path in PACK.iterdir() if path.is_dir()}
+        self.assertEqual(
+            actual_dirs, set(EXPECTED_SCENARIO_FILES),
+            "committed fixture scenarios differ from the one declared set",
+        )
+        actual_root_files = {path.name for path in PACK.iterdir() if path.is_file()}
+        self.assertEqual(
+            actual_root_files, set(EXPECTED_ROOT_FILES),
+            "committed fixture root files differ from the one declared set",
+        )
+        self.assertEqual(
+            set(self.manifest["scenarios"]), set(EXPECTED_MANIFEST_SCENARIOS),
+            "manifest scenarios differ from the one declared scenario set",
+        )
+        for scenario, expected in EXPECTED_SCENARIO_FILES.items():
+            actual = {path.name for path in (PACK / scenario).iterdir()
+                      if path.is_file()}
+            self.assertEqual(
+                actual, set(expected),
+                f"fixture scenario {scenario} is partial or has undeclared files",
+            )
+
+    def test_generator_refuses_every_partial_job_artifact_path(self):
+        """The old generator skipped each missing artifact independently, so a
+        successful run could publish a partial scenario without one error."""
+        cases = {
+            "result.json": "no required result.json",
+            "runner.json": "no required runner.json",
+            "events.v2.jsonl": "normalized artifacts were",
+            "jobs-row.json": "no required jobs --json row",
+            "logs-digest.json": "digest projection failed",
+            "logs-normalized.json": "normalized projection failed",
+        }
+        for missing, expected_error in cases.items():
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                cap = Capture.__new__(Capture)
+                cap.out = base / "out"
+                cap.state = base / "state"
+                cap.tmp = base
+                job_id = "00000000-0000-4000-8000-000000000099"
+                jd = cap.state / "jobs" / job_id
+                (jd / "evidence").mkdir(parents=True)
+                if missing != "result.json":
+                    (jd / "result.json").write_text("{}")
+                if missing != "runner.json":
+                    (jd / "runner.json").write_text("{}")
+                if missing != "events.v2.jsonl":
+                    (jd / "evidence" / "events.v2.jsonl").write_text(
+                        '{"event":"finished"}\n'
+                    )
+
+                def fake_run(*args, **_kwargs):
+                    if "jobs" in args:
+                        rows = [] if missing == "jobs-row.json" else [
+                            {"job_id": job_id}
+                        ]
+                        return types.SimpleNamespace(
+                            returncode=0, stdout=json.dumps({"jobs": rows}), stderr=""
+                        )
+                    if "normalized" in args:
+                        if missing == "logs-normalized.json":
+                            return types.SimpleNamespace(
+                                returncode=1, stdout="",
+                                stderr="constructed normalized projection failure",
+                            )
+                        return types.SimpleNamespace(
+                            returncode=0, stdout="{}", stderr=""
+                        )
+                    if missing == "logs-digest.json":
+                        return types.SimpleNamespace(
+                            returncode=1, stdout="", stderr="constructed projection failure"
+                        )
+                    return types.SimpleNamespace(
+                        returncode=0, stdout="{}", stderr=""
+                    )
+
+                cap._run = fake_run
+                with self.assertRaisesRegex(
+                    RuntimeError, expected_error,
+                    msg=f"fixture generator silently accepted missing {missing}",
+                ):
+                    cap._capture_job(
+                        "provider_error", job_id, worktree=Path("/synthetic")
+                    )
 
     def test_every_captured_result_validates_against_the_shipped_schema(self):
         """Captured records are the contract. If one no longer validates, either
         the capture is stale or the schema moved under it."""
         from switchgear.schema import validate
 
-        found = 0
-        for result in sorted(PACK.glob("*/result.json")):
+        expected_results = {
+            PACK / scenario / "result.json"
+            for scenario, files in EXPECTED_SCENARIO_FILES.items()
+            if "result.json" in files
+        }
+        actual_results = set(PACK.glob("*/result.json"))
+        self.assertEqual(
+            actual_results, expected_results,
+            "the pack's result set does not cover every declared result scenario",
+        )
+        for result in sorted(actual_results):
             record = json.loads(result.read_text())
             validate(record, "result.schema.json")
-            found += 1
-        self.assertGreaterEqual(found, 5, "the pack lost scenarios")
 
     def test_the_empty_final_text_scenario_still_carries_a_real_change(self):
         """The whole reason fixtures are captured and never hand-written.
@@ -143,7 +267,13 @@ class ContractFixturePack(unittest.TestCase):
                             "every protected entry must say which rule kept it")
 
     def test_the_digest_fixtures_carry_their_format_version(self):
-        for digest in sorted(PACK.glob("*/logs-digest.json")):
+        digests = [
+            PACK / scenario / "logs-digest.json"
+            for scenario, files in EXPECTED_SCENARIO_FILES.items()
+            if "logs-digest.json" in files
+        ]
+        self.assertTrue(digests, "the declared fixture contract has no digests")
+        for digest in sorted(digests):
             envelope = json.loads(digest.read_text())
             self.assertIn("digest_v", envelope, f"{digest} has no digest version")
             self.assertIn("events_v", envelope, f"{digest} names no event vocabulary")
@@ -197,6 +327,43 @@ class PublishedJsonShape(unittest.TestCase):
             "docs/INTEGRATION.md and cli._print_job disagree about the "
             "published --json key set",
         )
+
+
+class PublishedBehaviorClaims(unittest.TestCase):
+    def test_fixture_scenario_shape_claim_stays_true(self):
+        fixture_doc = (ROOT / "docs" / "ADAPTER-V1-CONTRACT-FIXTURES.md").read_text()
+        self.assertIn(
+            "Every completed-job scenario holds", fixture_doc,
+            "fixture doc again claims crashed_launch_only has completed artifacts",
+        )
+        self.assertIn(
+            "deliberately holds only `runner.json` and its", fixture_doc,
+            "fixture doc does not state the launch-only scenario's real shape",
+        )
+
+    def test_admission_order_claim_stays_true(self):
+        architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text()
+        compact = re.sub(r"\s+", " ", architecture)
+        self.assertIn(
+            "Admission: budget, concurrency slot, job directory and `runner.json`, "
+            "disk headroom, exclusive lease.",
+            compact,
+            "architecture admission order differs from run_job's measured order",
+        )
+
+    def test_event_version_readback_claim_stays_true(self):
+        architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text()
+        for claim in (
+            "result's recorded version",
+            "start-time `runner.json` version",
+            "Records predating both stamps default to v1",
+            "neither record uses the installed version",
+            "corrupt/non-object result is refused",
+        ):
+            self.assertIn(
+                claim, architecture,
+                f"architecture omits event-version read-back rule: {claim}",
+            )
 
 
 if __name__ == "__main__":
