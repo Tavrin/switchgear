@@ -15,11 +15,11 @@ a job actually flows, and what is promised to callers.
 > because stale documentation here has already caused real drift, including a
 > security property stated backwards in three places at once.
 >
-> The one write of a schema-covered record that is not re-validated at the write
-> is `lease.WorktreeLock.__enter__` stamping `job_id` onto a token it validated
-> on read (`lease.py`). Stated rather than glossed: an unqualified "validated on
-> every write" was false here for months, and a claim this file cannot back is
-> the defect this box exists to prevent.
+> The lease token is schema-validated before every `acquire` write, before
+> `load_token` or `release` trusts its fields, and after `WorkerLock.__enter__`
+> stamps `job_id` immediately before it rewrites the token (`lease.py`). These
+> checks are stated at their actual boundaries because a claim this file cannot
+> back is the defect this box exists to prevent.
 
 ## 1. Scope
 

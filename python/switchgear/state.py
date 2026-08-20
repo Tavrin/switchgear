@@ -108,21 +108,27 @@ def atomic_write_json(path: str, obj: Any) -> None:
     tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     fd = open_nofollow(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
-        data = json.dumps(obj, indent=2, sort_keys=True).encode("utf-8") + b"\n"
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
+        try:
+            data = json.dumps(obj, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+            remaining = memoryview(data)
+            # A short write is legal. Installing that prefix made the atomic
+            # rename preserve a truncated record instead of a complete one.
+            while remaining:
+                written = os.write(fd, remaining)
+                if written == 0:
+                    raise OSError("atomic JSON write made no progress")
+                remaining = remaining[written:]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, path)
-    except OSError:
+    finally:
         # Never leave the temp behind for a later reader or a gc sweep to puzzle
-        # over.
+        # over. Serialization and write failures used to bypass this cleanup.
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        raise
 
 
 def read_json(path: str) -> Any:

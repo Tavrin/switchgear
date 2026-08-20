@@ -165,7 +165,24 @@ def release(root: StateRoot, ident: WorktreeIdentity, token_uuid: str, owner: st
                 "cannot release: a worker still holds this worktree. Wait for the "
                 "job to finish, or cancel it (`switchgear cancel <job>`)."
             ) from exc
-        existing = read_json(token_path)
+        invalid_remedy = (
+            f"Inspect and remove {token_path} only after confirming no worker is "
+            f"using {ident.realpath}, then acquire a new lease "
+            f"(`switchgear lease acquire --dir {ident.realpath} "
+            "--mode <readonly|bounded-write>`)."
+        )
+        try:
+            existing = read_json(token_path)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise Refuse(
+                f"cannot release: the lease token is not valid JSON. {invalid_remedy}"
+            ) from exc
+        try:
+            validate(existing, "lease.schema.json")
+        except Refuse as exc:
+            raise Refuse(
+                f"cannot release: the lease token is schema-invalid. {invalid_remedy}"
+            ) from exc
         if existing.get("lease_uuid") != token_uuid:
             raise Refuse("forged or mismatched lease token")
         if existing.get("owner") != owner:
@@ -313,6 +330,7 @@ class WorkerLock:
             if token.get("mode") and token["mode"] != self.mode:
                 raise Refuse("lease mode mismatch")
             token["job_id"] = self.job_id
+            validate(token, "lease.schema.json")
             atomic_write_json(os.path.join(d, "token.json"), token)
         except BaseException:
             self.__exit__(None, None, None)
