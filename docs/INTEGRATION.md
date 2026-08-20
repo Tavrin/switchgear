@@ -66,9 +66,9 @@ liveness fact to wait on. These derived states never appear in `result.json`.
 `cli._print_job` actually emits:
 
 ```
-schema_version, job_id, status, execution, integrity_outcome, change,
-acceptance, mode, role, model, harness, provider, started, finished, effort,
-queued_s, dir, exit, error, artifacts{events, events_normalized,
+schema_version, job_id, session_store_id, status, execution, integrity_outcome,
+change, acceptance, mode, role, model, harness, provider, started, finished,
+effort, queued_s, dir, exit, error, artifacts{events, events_normalized,
 events_normalized_version, stderr, handoff}, freeze, review, provider_calls,
 delegation, cost_usd, resumed, security, correlation
 ```
@@ -281,12 +281,27 @@ record rather than one shaped by inputs it never saw. The message is delivered a
 the prompt, so the role instructions — and the rail's authority over what the
 worker may do — are reapplied exactly as on a first run.
 
-**Conversation state is persisted per worktree per provider**, under
-`<state>/sessions/`. It has to be: providers keep history inside their HOME, and
-each job gets a fresh synthetic HOME that is reclaimed afterwards — without this
-a resume finds nothing and the CLI answers "No conversation found with session
-ID". Only the paths an adapter names are persisted, never the whole provider
-config directory, which is where credentials live.
+**Conversation state is persisted per controller-minted session lineage**, under
+`<state>/sessions/<session_store_id>/`. A fresh job always mints a uuid4 lineage
+and never adopts a store because its worktree path, device or inode happens to
+match. `runner.json`, `result.json`, and the `--json` projection carry that
+`session_store_id`; a resumed job follows the prior job's recorded lineage.
+
+Each lineage has a schema-validated `binding.json` recording its harness and the
+worktree/repository facts that constrain reuse. Before a resume mounts anything,
+the rail requires the binding to exist, validates it, and requires every fact to
+match the current workspace. Missing, invalid, or mismatched bindings fail
+closed with a remedy to start a new job: continuing could expose an unrelated
+conversation. Historical identity-key stores are migrated lazily on a verified
+resume, one harness subtree at a time; unverifiable legacy stores are quarantined
+and never mounted.
+
+The store has to live outside the per-job synthetic HOME because that HOME is
+reclaimed after the job. Only the paths an adapter names are persisted, never a
+broader credential directory. Stores are now per conversation rather than per
+worktree, so a state root holds more of them. OpenCode's declared store is its
+whole `~/.local/share/opencode` data directory, including the SQLite database and
+its companion files.
 
 All four providers are measured and resume live: Claude
 (`~/.claude/projects`), Codex (`~/.codex/sessions`), Grok (`~/.grok/sessions`),
@@ -432,9 +447,14 @@ selector, so `--older-than 1s` still does not mean "delete everything".
 
 Session stores need `--include-sessions` **in addition to** `--yes`: a job
 directory is reproducible by re-running the job, while a session store is the
-only durable copy of a conversation you may still want to `resume`. A store whose
-worktree cannot be stat'ed is reported as **skipped**, never deleted —
-unverifiable is not absent.
+only durable copy of a conversation you may still want to `resume`. GC reads
+both lineage `binding.json` records and historical `worktree.json` markers. It
+uses an explicit `stat`: only `FileNotFoundError` is treated as absence; every
+other `OSError` is reported as **skipped** with its errno. An unmounted mount
+point can itself look absent, so even ENOENT is not a perfect signal. The bound
+path and lease are checked again immediately before deletion. Quarantined stores
+are always skipped and require deliberate operator removal — unverifiable is not
+absent, and session retention is deliberately not coupled to job protection.
 
 `--compact-ledger` folds `spend.jsonl` history older than today into an
 append-only `spend-rollup.jsonl`. Only `assert_within_budget` reads the ledger in

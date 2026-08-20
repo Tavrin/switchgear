@@ -68,6 +68,29 @@ def main() -> int:
         emit({"type": "complete"})
         return 0
 
+    if beh == "session-probe":
+        # Exercise the real adapter-declared OpenCode store bind. The first turn
+        # records a conversation marker; a resume must see it, while an
+        # independent fresh job must not. Emitting the captured OpenCode event
+        # shape also gives cmd_resume the session id through the production
+        # extraction seam rather than a test-only shortcut.
+        store = os.path.join(home, ".local", "share", "opencode")
+        os.makedirs(store, exist_ok=True)
+        history = os.path.join(store, "conversation.txt")
+        prior = open(history, encoding="utf-8").read() if os.path.isfile(history) else ""
+        with open(history, "a", encoding="utf-8") as fh:
+            fh.write("turn\n")
+        sid = "ses_mock000000000000000000"
+        emit({"type": "step_start", "sessionID": sid,
+              "part": {"type": "step-start", "sessionID": sid}})
+        emit({"type": "text", "sessionID": sid,
+              "part": {"type": "text", "text": f"prior={prior!r}",
+                       "sessionID": sid}})
+        emit({"type": "step_finish", "sessionID": sid,
+              "part": {"type": "step-finish", "reason": "stop", "sessionID": sid,
+                       "tokens": {"total": 1}, "cost": 0.0}})
+        return 0
+
     if beh == "edit-tracked":
         r = try_write(os.path.join(directory, "README.md"), "\nmutated\n")
         emit({"type": "complete", "write": r})
