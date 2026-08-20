@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""`capabilities` must be DERIVED, not written down twice.
+"""`capabilities` must label what is derived and what is declared.
 
-A hand-maintained capability document is stale the day after it is written — not
-hypothetically, the model registry had already drifted to 18 hand-listed ids
-where the provider served 26. These tests are what keep this one honest: each
-asserts the reported surface equals the real one, so drift fails CI instead of
-producing a confident, incomplete answer to an agent that cannot check.
+A hand-maintained capability document is stale the day after it is written —
+not hypothetically, the model registry had already drifted to 18 hand-listed ids
+where the provider served 26. Commands and provider facts are therefore derived
+and tested against their sources. Refusal and explanatory contract text is
+necessarily declared, so its provenance is published instead of hidden.
 """
 from __future__ import annotations
 
@@ -92,6 +92,7 @@ class Honesty(unittest.TestCase):
         self.assertEqual(exit_code_for("provider_error"), 1)
         published = set(self.out["refusals"]["exit_codes"])
         self.assertEqual(published, {"0", "1", "2", "124"})
+        self.assertIn("argparse", self.out["refusals"]["exit_codes"]["2"])
 
         # The KEYS matching proved nothing about the sentences beside them: the
         # published description of 0 could have read "awaiting_external_review
@@ -105,6 +106,22 @@ class Honesty(unittest.TestCase):
         for status in ("dirty", "timeout", "provider_error"):
             self.assertNotIn(status, success,
                              f"{status} does not exit 0 but is named beside it")
+
+    def test_argparse_and_dirty_share_exit_two_but_not_output_shape(self):
+        """A typo is not evidence that a worker changed its worktree."""
+        p = run_cli(["capabilities", "--not-a-real-flag"])
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("usage:", p.stderr)
+        self.assertFalse(p.stderr.startswith(self.out["refusals"]["stderr_prefix"]))
+        self.assertEqual(p.stdout, "")
+
+    def test_declared_and_derived_parts_are_labeled(self):
+        """The old output called its literal refusal table wholly derived."""
+        provenance = self.out["provenance"]
+        self.assertIn("commands", provenance["derived"])
+        self.assertIn("providers", provenance["derived"])
+        self.assertIn("refusals", provenance["declared"])
+        self.assertIn("vocabulary", provenance["declared"])
 
     def test_the_refusal_prefix_is_the_one_actually_printed(self):
         """A caller parses stderr on this string; if it drifts, they break."""

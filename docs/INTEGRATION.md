@@ -25,18 +25,42 @@ switchgear --json [--profile P] [--state S] [--provider ABS] <command>
 
 | Command | Purpose | Terminal states |
 |---|---|---|
+| `state provision <dir>` | provision a state root | — |
+| `models` | list the models this profile allows, with family/vendor and reachability | — |
 | `scout <dir> "<prompt>"` | read-only inspection | `ok`, `provider_error`, `timeout`, `dirty` |
-| `review <dir> <role> [--envelope F]` | read-only review; attaches + may promote when the envelope names `parent_job` | `ok`, `provider_error` |
+| `review <dir> <role> [--envelope F]` | read-only review; attaches + may promote when the envelope names `parent_job` | `ok`, `provider_error`, `timeout`, `dirty` |
 | `write <dir> <role> --envelope F --token T` | bounded write in a leased worktree | `awaiting_review` (or `awaiting_external_review` under `acceptance=external`), `provider_error`, `timeout`, `dirty` |
-| `run --envelope F [--token T]` | dispatch by envelope `mode`/`role`/`cwd` | as above |
+| `run --envelope F [--token T]` | dispatch by envelope `mode`/`role`/`cwd` | as for the selected mode |
 | `promote --subject J --review R` | atomic promotion under the worktree lock | `ok` or refusal |
 | `lease acquire\|release\|show --dir D` | worktree lease lifecycle | — |
 | `<job cmd> --background` | launch detached; prints `job_id` at once and returns | — |
+| `providers [verify]` | report installed provider binaries and whether their build is verified | — |
+| `execution-profile` | report the launcher/package content digest used for pinning | — |
+| `capabilities` | describe the commands, providers, limits and refusal contract | — |
+| `gc` | plan or perform opt-in reclamation of old jobs | — |
+| `doctor` | check the installation and report remedies for failures | — |
+| `jobs` | list jobs in the state root with their live state | all persisted and derived states below |
+| `quota` | report measured spend, budget limits and published provider quota | — |
 | `resume <job-id> "<msg>"` | continue that job's provider session with a new message | as for the original mode |
-| `cancel <job-id>` | stop a backgrounded job (pid + starttime + boot_id checked) | — |
-| `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | — |
-| `status <job-id> --full` | the whole persisted record (exists only once finished) | — |
+| `wait <job-id>` | block until a job finishes, then answer like a foreground run | all persisted states; derived-state handling below |
+| `cancel <job-id>` | stop a backgrounded job (pid + starttime + boot_id checked) | `cancelled` or `not_running` |
+| `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | all persisted and derived states below |
+| `status <job-id> --full` | the whole persisted record (exists only once finished) | all persisted states below |
 | `logs <job-id> [--format digest\|normalized\|full]` | projections over the stream; **digest is the default and is byte-capped in code**. `normalized` is the same vocabulary uncapped; `full` is the raw provider stream | — |
+
+The complete persisted status vocabulary, from `result.schema.json`, is `ok`,
+`dirty`, `timeout`, `provider_error`, `awaiting_review` and
+`awaiting_external_review`. Readonly `scout` and `review` jobs produce the first
+four; bounded `write` jobs replace `ok` with one of the two awaiting states;
+`run` and `resume` follow their selected mode; and `promote` changes an
+`awaiting_review` subject to `ok` or refuses.
+
+Before `result.json` exists, `status` and `jobs` can instead report the
+liveness-derived states `running`, `queued`, `died`, `cancelled` and `unknown`.
+`wait` returns a persisted status when there is one, reports `died` or
+`cancelled` when a process ended without a result, reports `running` or `queued`
+if the waiter's own timeout expires, and refuses `unknown` because there is no
+liveness fact to wait on. These derived states never appear in `result.json`.
 
 `--json` prints a stable object: `schema_version, job_id, status, mode, role,
 model, dir, exit, error, artifacts{events, events_normalized,
@@ -53,9 +77,11 @@ against one real consumer, but nothing in it is specific to that consumer:
 - **Capabilities** the lane declares: `canResume: true` (sessionId-based),
   `commitsOwnWork: false` (the git dir is a read-only mount, so the orchestrator's
   finalizer commits), `liveInput: false` (no stdin into the sandbox; replies are
-  cold resumes), `liveStream: true` (the events file is tailable),
+  cold resumes), `liveStream: true` (the raw `evidence/events.jsonl` file is
+  tailable; the normalized view is recomputed from it while the job runs),
   `reportsCost: true`.
-- **`finished.status`** maps 1:1 onto the orchestrator's outcome states — except
+- **`finished.status`** is one of `completed`, `completed_empty`, `needs_input`
+  or `failed` and maps 1:1 onto the orchestrator's outcome states — except
   `sawTerminal: false`, which is **never** `completed`. A run that ended without
   the provider closing its stream reports `failed` with a truncation
   `exitSummary`, however much assistant text it emitted first. "Claims done,
@@ -590,17 +616,27 @@ ones are the defaults on purpose:
   with job length. It is for a human terminal, a TUI or a file tail — never for
   an agent's context. There is deliberately no default that lands here.
 
-The digest speaks a provider-neutral vocabulary (`status`/`tool`/`text`/
-`finished`), so it reads the same whichever provider ran the job. `finished`
-carries `status` ∈ `completed` | `completed_empty` | `needs_input`, plus `turns`,
+The digest speaks a provider-neutral vocabulary: every line carries an `event`
+discriminator and `v` contract version, and the five event values are `status`,
+`tool`, `text`, `progress` and `finished`. `finished` carries `status` ∈
+`completed` | `completed_empty` | `needs_input` | `failed`, plus `turns`,
 `tokens`, `costUSD` and a bounded `exitSummary`. `sessionId` is surfaced because
 without it a resume cannot exist.
+
+`completed_empty` means execution succeeded but the provider emitted no
+non-whitespace closing assistant text. It does **not** mean the worktree was
+unchanged: change presence comes from the controller-computed `change.state` and
+`freeze.changed_files`. The enum name remains unchanged until the later
+contract-v1-rc1 compatibility review.
 
 Counters and parsed facts are the load-bearing part; model prose appears only as
 a bounded `exitSummary` and is a self-report, not evidence.
 
-Exit codes: `0` success · `1` refusal or provider error · `2` dirty (integrity
-changed) · `124` timeout.
+Exit codes: `0` success · `1` refusal or provider error · `2` either dirty
+(integrity changed) **or an argparse usage error before a job starts** · `124`
+timeout. Tell the two meanings of 2 apart by output: a dirty outcome has a job
+record or a `switchgear: REFUSING — ` line, while an argv error prints argparse's
+`usage:` message and creates no job.
 
 Every refusal is a single line on stderr beginning `switchgear: REFUSING — `.
 Treat any refusal as fail-closed: no work was promoted.
@@ -617,15 +653,26 @@ Treat any refusal as fail-closed: no work was promoted.
   families come from the controller-owned registry, never the profile.
 - **A lease token** for bounded-write (`lease acquire` then pass `--token`).
 
+`lease acquire --dir D --json` emits this object:
+
+```json
+{"lease":"<uuid>","file":"<state>/leases/<worktree-id>/token.json"}
+```
+
+The value under the JSON key `lease` is the value the write command takes as
+`--token`. Without `--json`, the same mapping is printed as `lease=<uuid>` (with
+the token-record path on a separate `file=...` line).
+
 ## Evidence
 
 Each job writes `<state>/jobs/<job-id>/`:
 
 - `result.json` — the schema-validated record (the authoritative outcome)
 - `evidence/events.jsonl` — the provider's own stdout, byte for byte, capped.
-  Forensic evidence; **not** the integration contract
+  It is written as events arrive and is tailable, but is forensic evidence;
+  **not** the integration contract
 - `evidence/events.v1.jsonl` — the same run in Switchgear's vocabulary. This is
-  the one to consume
+  written once, atomically, after the run ends
 - `evidence/stderr` — provider stderr, capped
 - `evidence/handoff.json` — the worker's structured handoff (write jobs)
 
@@ -644,11 +691,13 @@ investigation is done.
 An adapter needs four things, all already available:
 
 1. **launch** — spawn `switchgear --json …`; the process is the job.
-2. **stream** — tail `artifacts.events_normalized`. It is newline-delimited JSON
-   in *Switchgear's* vocabulary — `status` / `tool` / `text` / `finished` — one
-   object per line, each carrying `v` for the contract version. The same shape
-   comes out of `logs --format normalized`, which recomputes it and therefore
-   works while the job is still running.
+2. **stream** — while the job runs, call `logs --format normalized`. It recomputes
+   the normalized view from the live raw stream and yields newline-delimited JSON
+   in *Switchgear's* vocabulary: `status`, `tool`, `text`, `progress` and
+   `finished`. Every object carries the `event` discriminator and `v` contract
+   version. After completion, `artifacts.events_normalized` names the same
+   projection written once as `evidence/events.v1.jsonl`; that file does not
+   exist while the job runs and is not a progress tail.
 3. **stop** — kill the controller process. The sandbox dies with it: verified
    that SIGKILL of the controller leaves zero surviving `bwrap` or provider
    processes (pid namespace + `--die-with-parent`).

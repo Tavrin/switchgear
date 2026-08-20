@@ -112,20 +112,27 @@ A convention that says "please don't pipe the full stream" will be violated. So:
 ### A provider-neutral vocabulary
 
 The digest and any UI are computed from **normalized** events, not raw provider
-output. Straw man:
+output. The normalized contract is:
 
 ```
-started  {job, provider, model, mode, role}
 status   {sessionId}                 # REQUIRED: without it resume cannot exist
                                      # NB: the SOURCE field is `sessionID` (capital
                                      # ID) and appears on EVERY provider event, not
                                      # on a dedicated status event -- see below
 tool     {name, target}              # rendered as text by the orchestrator; keep minimal
 text     {content}                   # truncate at write time (the orchestrator uses 400 chars)
-finished {status, exit, exitSummary, turns, costUSD, tokens}
-         # status: completed | completed_empty | needs_input
+progress {turns, costUSD, tokens}    # a running job has no finished event
+finished {status, exitSummary, turns, costUSD, tokens, sawTerminal}
+         # status: completed | completed_empty | needs_input | failed
          # needs_input parks the ticket back to the operator -- load-bearing
 ```
+
+Every line carries the `event` discriminator shown above and a `v` contract
+version. `completed_empty` means the execution succeeded without non-whitespace
+closing assistant text; it does not say whether files changed. Change presence
+comes from the controller-computed `change.state` and `freeze.changed_files`,
+and the enum name remains unchanged until the contract-v1-rc1 compatibility
+review.
 
 `changed_files` is deliberately absent: the orchestrator derives the result manifest from
 git itself and ignores agent-reported file lists. Keep it internally if useful.
@@ -180,16 +187,22 @@ what they had to pin away for codex.
 
 ### Event vocabulary — corrected
 
-The straw man was missing fields the orchestrator actually consumes
+The first draft was missing fields the orchestrator actually consumes
 (`claude.mjs:113-147`):
 
 | Field | Why |
 |---|---|
+| `event` ∈ `status` / `tool` / `text` / `progress` / `finished` | the discriminator for the complete normalized event vocabulary |
+| `v` | the contract version carried by every normalized event |
 | `sessionID` — see correction below | captured for resume; **without it, reply-by-restart cannot work at all** |
 | `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
-| terminal `status` ∈ `completed` / `completed_empty` / `needs_input` | `needs_input` is load-bearing: it parks the ticket back to the operator |
+| `finished.status` ∈ `completed` / `completed_empty` / `needs_input` / `failed` | `needs_input` parks the ticket back to the operator; `failed` records provider errors and streams that ended without a terminal event |
 | `exitSummary` text | shown on the record |
 | `text{content}` | mid-run display; the orchestrator truncates to 400 chars per line (measured in the consuming orchestrator) |
+
+Here too, `completed_empty` is transcript emptiness, not diff emptiness. Read
+`change.state` and `freeze.changed_files` for controller-measured change
+presence; the name is frozen until the contract-v1-rc1 compatibility review.
 
 **Drop `changed_files` from the orchestrator-facing contract.** The orchestrator never trusts
 agent-reported file lists: it derives the result manifest itself from git at

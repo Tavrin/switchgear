@@ -7,24 +7,34 @@ passes a raw format through and would need the digest written once per provider.
 
 The normalized vocabulary, from docs/OBSERVABILITY.md:
 
-    {"event": "status",   "sessionId": str}
-    {"event": "tool",     "name": str, "target": str}
-    {"event": "text",     "content": str}          # truncated at write time
-    {"event": "finished", "status": str, "turns": int,
-                          "costUSD": float, "tokens": int, "exitSummary": str}
+    {"event": "status",   "v": int, "sessionId": str}
+    {"event": "tool",     "v": int, "name": str, "target": str}
+    {"event": "text",     "v": int, "content": str}  # truncated at write time
+    {"event": "progress", "v": int, "turns": int,
+                            "costUSD": float, "tokens": int}
+    {"event": "finished", "v": int, "status": str, "turns": int,
+                            "costUSD": float, "tokens": int, "exitSummary": str}
 
-`status` is one of completed / completed_empty / needs_input. `needs_input` is
-load-bearing for a caller: it parks the work back to the operator rather than
-recording a failure.
+Every line carries the `event` discriminator and `v` contract version.
+`finished.status` is one of completed / completed_empty / needs_input / failed.
+`needs_input` is load-bearing for a caller: it parks the work back to the
+operator rather than recording a failure.
+
+`completed_empty` means successful execution with no non-whitespace closing
+assistant text. It does NOT mean no files changed: controller-computed
+`change.state` and `freeze.changed_files` are authoritative for change presence.
+The enum name stays unchanged until the contract-v1-rc1 compatibility review.
 
 `sessionId` is the single most load-bearing field: without a durable session
 identifier there is no resume, and a reply to a finished job cannot exist.
 
-`changed_files` is deliberately NOT part of this vocabulary. A caller derives the
-result manifest from git itself and validates the landed tree at merge; it never
-trusts an agent-reported file list. The rail keeps its own freeze delta for its
-own gates -- that is a different thing, computed by the controller from the
-worktree, not reported by the worker.
+`changed_files` is deliberately NOT an event field, and never comes from the
+worker. Within this contract, change presence is `change.state` and
+`freeze.changed_files` -- computed by the controller from the worktree, never
+inferred from worker text or from `finished.status`. That freeze delta is the
+rail's own evidence for its own gates; a caller still derives its result
+manifest from git itself and validates the landed tree at merge, and never
+trusts an agent-reported file list.
 
 ## Layout
 

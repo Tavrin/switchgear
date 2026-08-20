@@ -1,16 +1,25 @@
-"""What this tool can do, derived from the code that does it.
+"""What this tool can do, with the source of each claim made explicit.
 
 Part of this tool's audience is an AI agent that has never seen it before and
 cannot read the docs mid-task. Such a caller needs to find out what commands
 exist, which providers and models it may use, what `effort` values are real, and
 what a refusal will look like -- without guessing.
 
-**Everything here is DERIVED, never written down twice.** Commands and flags come
-from walking the argparse parser itself; providers from the adapter registry
-crossed with the version pins; effort from each adapter's own `effort_support()`;
-limits from the budget. A hand-maintained capability document is stale the day
-after it is written -- which is not a hypothetical here, the model registry had
-already drifted to listing 18 ids where the provider served 26.
+Commands and flags are DERIVED by walking the argparse parser. The provider
+roster comes from the adapter registry crossed with version pins, and each
+provider's effort entry comes from its adapter's `effort_support()`. Limit values
+come from the operator budget and the concurrency control; uid-boundary state is
+measured at call time; an optional profile block comes from the loaded profile.
+
+Other claims are DECLARED constants maintained by hand in this module: the
+refusal prefix, guarantee and exit-code descriptions; fixed tool, containment,
+vocabulary and deprecation descriptions; and explanatory notes. They cannot be
+made derived merely by living beside derived fields, so the emitted
+`provenance` block labels both classes for a caller.
+
+A hand-maintained capability document is stale the day after it is written --
+which is not a hypothetical here, the model registry had already drifted to
+listing 18 ids where the provider served 26.
 
 The honesty test lives in the test suite: the provider set this reports must
 equal `adapters._ADAPTERS`, so adding a fifth provider without wiring it in fails
@@ -34,8 +43,44 @@ REFUSAL_CONTRACT = {
         "0": ("the job did its work (ok, awaiting_review, "
               "awaiting_external_review), or an informational command answered"),
         "1": "refusal or provider error",
-        "2": "dirty — worktree integrity changed during the job",
+        "2": (
+            "dirty — worktree integrity changed during the job; also argparse "
+            "usage errors before any job starts. A dirty refusal/outcome has "
+            "this refusal prefix or a job record; argparse prints `usage:` and "
+            "creates no job"
+        ),
         "124": "timed out",
+    },
+}
+
+
+# Machine-readable labels for the mixed origin of the capability document.
+# The previous module docstring called every field derived while the refusal
+# contract directly above it was a literal. That made the self-description hide
+# the exact stale-copy hazard it warns callers about.
+CAPABILITY_PROVENANCE = {
+    "derived": {
+        "commands": "argparse parser, including each command's flags",
+        "providers": (
+            "adapter registry plus version pins; effort comes from each adapter"
+        ),
+        "limits.budget_file,daily_usd,max_provider_calls_per_job": (
+            "operator budget configuration"
+        ),
+        "limits.max_concurrent_jobs": "concurrency control",
+        "containment.uid_boundary": "runtime capability probe",
+        "profile": "loaded project profile, when available",
+    },
+    "declared": {
+        "tool": "constant maintained in capabilities.py",
+        "refusals": "REFUSAL_CONTRACT maintained in capabilities.py",
+        "limits.note": "explanatory contract text maintained in capabilities.py",
+        "containment.backend,platform,note,elsewhere": (
+            "platform contract text maintained in capabilities.py"
+        ),
+        "vocabulary": "contract text maintained in capabilities.py",
+        "deprecated": "compatibility contract maintained in capabilities.py",
+        "provenance": "these source labels are maintained in capabilities.py",
     },
 }
 
@@ -141,6 +186,7 @@ def describe(parser: argparse.ArgumentParser, profile: dict[str, Any] | None,
         "commands": _walk_parser(parser),
         "providers": _providers(),
         "refusals": REFUSAL_CONTRACT,
+        "provenance": CAPABILITY_PROVENANCE,
         "limits": {
             "budget_file": quotamod.budget_path(),
             "daily_usd": budget.get("daily_usd"),

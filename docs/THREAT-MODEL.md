@@ -21,6 +21,15 @@ Current as of 2026-08-18. Controls listed here are implemented, not planned;
 - **The provider credential**
 - Job results — the integrity of the evidence a promotion rests on
 
+## Assumptions and caller obligations
+
+The state root is a **single-user trust domain**. Any process that can read it
+can read a background job's recorded process-group identity and ask `cancel` to
+signal that job; there is no per-caller authorization layer by design. A caller
+must therefore never mount the state root into a worker sandbox. Doing so would
+let that worker cancel arbitrary jobs in the same root, including a job
+reviewing its work.
+
 ## Controls
 
 ### OS boundary (the authority)

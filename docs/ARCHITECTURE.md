@@ -4,12 +4,22 @@ Four sections, in the order they matter: what this is for, who decides what, how
 a job actually flows, and what is promised to callers.
 
 > **When this file and the running code disagree, the code is right and this file
-> is a bug.** `switchgear capabilities` is generated from the parser, the harness
-> registry and the runtime rather than maintained by hand, and the JSON schemas
-> are validated on every write. Those are the executable contract. This document
-> explains it; it does not define it. That rule exists because stale
-> documentation here has already caused real drift, including a security property
-> stated backwards in three places at once.
+> is a bug.** `switchgear capabilities` reports the commands, flags and provider
+> facts read off the parser, the harness registry and the runtime rather than
+> maintained by hand — its refusal contract and fixed explanatory text are
+> declared constants, and the emitted `provenance` block labels which is which.
+> `result.json` is schema-validated before every write of it, including the
+> promotion rewrite; the handoff, the review artifact, the profile and the lease
+> token are validated before they are first trusted. Those are the executable
+> contract. This document explains it; it does not define it. That rule exists
+> because stale documentation here has already caused real drift, including a
+> security property stated backwards in three places at once.
+>
+> The one write of a schema-covered record that is not re-validated at the write
+> is `lease.WorktreeLock.__enter__` stamping `job_id` onto a token it validated
+> on read (`lease.py`). Stated rather than glossed: an unqualified "validated on
+> every write" was false here for months, and a claim this file cannot back is
+> the defect this box exists to prevent.
 
 ## 1. Scope
 
@@ -128,7 +138,7 @@ Four, and only these:
 
 | contract | where | stability |
 |---|---|---|
-| the CLI's argv and exit codes | `switchgear capabilities` | 0 ok · 1 refusal/error · 2 dirty · 124 timeout |
+| the CLI's argv and exit codes | `switchgear capabilities` | 0 ok · 1 refusal/error · 2 dirty **or argparse usage error** · 124 timeout |
 | `result.json` | `data/schemas/result.schema.json` | additive keys; `schema_version` moves only on a breaking change |
 | the normalized event stream | `evidence/events.v1.jsonl`, `logs --format normalized` | versioned in the filename and on every line |
 | the task envelope | `data/schemas/task-envelope.schema.json` | closed; `correlation` is the caller's own space |
@@ -136,6 +146,10 @@ Four, and only these:
 `evidence/events.jsonl` is **not** a contract. It is the harness's own stdout,
 byte for byte — forensic evidence whose shape is whichever CLI ran. Consume the
 normalized stream instead.
+
+Exit 2 is necessarily disambiguated by output: a dirty refusal/outcome has the
+`switchgear: REFUSING — ` prefix or a job record, while argparse prints its own
+`usage:` message before any job starts and produces no job record.
 
 ## Language disposition
 
