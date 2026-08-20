@@ -27,7 +27,7 @@ switchgear --json [--profile P] [--state S] [--provider ABS] <command>
 |---|---|---|
 | `scout <dir> "<prompt>"` | read-only inspection | `ok`, `provider_error`, `timeout`, `dirty` |
 | `review <dir> <role> [--envelope F]` | read-only review; attaches + may promote when the envelope names `parent_job` | `ok`, `provider_error` |
-| `write <dir> <role> --envelope F --token T` | bounded write in a leased worktree | `awaiting_review`, `provider_error`, `timeout`, `dirty` |
+| `write <dir> <role> --envelope F --token T` | bounded write in a leased worktree | `awaiting_review` (or `awaiting_external_review` under `acceptance=external`), `provider_error`, `timeout`, `dirty` |
 | `run --envelope F [--token T]` | dispatch by envelope `mode`/`role`/`cwd` | as above |
 | `promote --subject J --review R` | atomic promotion under the worktree lock | `ok` or refusal |
 | `lease acquire\|release\|show --dir D` | worktree lease lifecycle | — |
@@ -509,6 +509,14 @@ facts and the listing keeps them apart; neither is ever rendered as `running`.
 A crashed job is still attributed from its start-time `runner.json`, including
 in a realpath-based `--worktree` query. Rows name both the `harness` (agent CLI)
 and `pool` (model service); the legacy row key `provider` remains the pool.
+
+On a row with **no result record**, that attribution says what the job was
+launched to run, not that it ran. The record is written when the job directory
+is created, which is before the lease check, so a write refused for a missing
+lease also carries it. Deliberately: the same record is the job's liveness
+marker, and writing it later would leave a job that died in that window with no
+record at all — `unknown` instead of `died`, which is strictly less honest. Read
+`state` for what happened; read `harness`/`model` for what it was going to use.
 `awaiting_review` is surfaced as its own boolean so a poller does not have to
 know how the status is spelled.
 

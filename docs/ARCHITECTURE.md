@@ -115,9 +115,12 @@ has produced a confident false failure report before.
    unchanged, in-tree edits expected, escapes fail the job.
 9. Normalize the stream into `evidence/events.v1.jsonl`, compute the four outcome
    facts, freeze the delta, write and validate `result.json`.
-10. Bounded writes finish `awaiting_review`. A later readonly review with
-    `parent_job` attaches an independence record; `promote` binds the change to
-    reviewer-attested evidence under the worktree lock.
+10. Bounded writes finish `awaiting_review`, or `awaiting_external_review` when
+    an operator has set `acceptance=external` -- same freeze, same evidence,
+    both exit 0; what differs is only who may declare the change acceptable. A
+    later readonly review with `parent_job` attaches an independence record;
+    `promote` binds the change to reviewer-attested evidence under the worktree
+    lock, and refuses outright under external acceptance.
 
 ## 5. Public contracts
 

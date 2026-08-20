@@ -86,6 +86,15 @@ def _runner_record(
 
     Keeping fixture construction on this path matters: a crashed job has no
     result record to correct an incomplete runner record after the fact.
+
+    What this record attests is what the job was LAUNCHED to run, not that it
+    ran. It is written when the job directory is created, which is before the
+    lease check, so a bounded write refused for a missing lease still leaves one
+    behind. That ordering is deliberate and should not be 'fixed' by moving the
+    write later: this is also the job's liveness marker, and a job that died
+    between directory creation and the lease check would then have no record at
+    all, reporting `unknown` where it can currently report `died`. A consumer
+    reads `state` for what happened and this for what it was configured with.
     """
     return {
         "pid": os.getpid(),

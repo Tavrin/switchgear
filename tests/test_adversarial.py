@@ -3423,6 +3423,30 @@ class CrashedJobAttribution(unittest.TestCase):
             self.assertEqual(rows[job_id]["state"], "unknown")
             self.assertIsNone(rows[job_id]["harness"])
 
+        # A wrong-typed FIELD, not just a wrong-typed record. `dir` is the one
+        # attributed value the listing computes with, and os.path.realpath
+        # raises TypeError on an int -- so this crashed only under --worktree,
+        # the query an operator runs to find a crash.
+        bad_dir = "00000000-0000-4000-8000-00000000c2f5"
+        jd = self.state / "jobs" / bad_dir
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 300))
+        (jd / "runner.json").write_text(json.dumps(
+            {"pid": 2 ** 22, "starttime": "1", "boot_id": "gone",
+             "dir": 7, "model": "not-an-object"}))
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--all",
+                     "--worktree", str(self.primary)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rows = {r["job_id"]: r for r in json.loads(p.stdout)["jobs"]}
+        self.assertNotIn(bad_dir, rows,
+                         "an unusable dir must not match a worktree filter")
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        row = next(r for r in json.loads(p.stdout)["jobs"]
+                   if r["job_id"] == bad_dir)
+        self.assertIsNone(row["dir"], "an unusable dir was echoed as attribution")
+        self.assertIsNone(row["model"])
+
         # The same rule for the result record, which had the identical shape
         # assumption before the attribution fallback existed.
         bad_result = "00000000-0000-4000-8000-00000000c2f4"
@@ -3434,6 +3458,37 @@ class CrashedJobAttribution(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(bad_result,
                       [r["job_id"] for r in json.loads(p.stdout)["jobs"]])
+
+    def test_a_launch_record_that_becomes_identifiable_survives_apply(self):
+        """gc re-checks liveness at delete time everywhere except here: the
+        orphan-launch sweep unlinked unconditionally, so a record classified as
+        unusable litter during the plan was still deleted if it became a live
+        launch before apply ran -- an id reused by a relaunch, or a record that
+        was simply mid-write when it was classified. It is the plan/apply race
+        the module documents protection against."""
+        from switchgear import gc as gcmod
+        from switchgear.lease import _boot_id, _starttime
+
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        job_id = "00000000-0000-4000-8000-00000000c2e1"
+        rec = launch / f"{job_id}.json"
+        rec.write_text("{ mid-write")
+
+        planned = gcmod.plan(str(self.state), older_than_s=3600)
+        self.assertIn(str(rec), planned["orphan_launch_records"],
+                      "unusable litter should be planned for sweeping")
+
+        # It becomes identifiable between plan and apply: this process is alive,
+        # so the triple resolves rather than being guessed at from a pattern.
+        rec.write_text(json.dumps({"pid": os.getpid(),
+                                   "starttime": _starttime(os.getpid()),
+                                   "boot_id": _boot_id()}))
+        out = gcmod.apply(str(self.state), planned)
+        self.assertTrue(rec.exists(), "a live launch record was deleted")
+        self.assertEqual(out["launch_records_removed"], 0,
+                         "the count reported a deletion that did not happen")
+        self.assertIn(job_id, [k["job_id"] for k in out["kept"]])
 
     def test_real_job_runner_carries_complete_start_attribution(self):
         # This test exercises record construction, not the separately tested

@@ -196,11 +196,20 @@ def plan(
 def _orphan_launch_records(root: StateRoot) -> tuple[list[str], list[dict[str, str]]]:
     """Classify launch records that have no job directory.
 
-    Only a record with no usable liveness triple is sweepable litter. A usable
-    dead triple is the sole identity left by a launch that crashed before its
-    job directory existed; deleting it previously erased exactly the crash
-    evidence an operator needed to reconstruct the failure. Live launch-only
-    records are protected for the same reason live jobs are.
+    Sweepable litter is only a record liveness cannot be DECIDED from at all --
+    unparseable, or with no convertible pid. Anything liveness can be decided
+    from is kept: a dead verdict is the sole identity left by a launch that
+    crashed before its job directory existed, and deleting it erased exactly the
+    crash evidence an operator needed to reconstruct the failure. Live
+    launch-only records are protected for the same reason live jobs are.
+
+    Stated as "decidable" rather than "a usable triple" because those are not
+    the same set and the difference is not academic: `_liveness` only requires a
+    convertible `pid`, so a record carrying a pid but no starttime or boot_id is
+    decided (dead) and protected. That errs toward keeping evidence, which is
+    this module's standing bias -- but the comment used to describe a stricter
+    rule than the code applies, and a comment that overstates the code is the
+    defect class this project grades most seriously.
     """
     out: list[str] = []
     protected: list[dict[str, str]] = []
@@ -334,11 +343,23 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
                 continue
             launch_artifacts_removed.append(path)
 
+    launch_records_removed = 0
     for path in planned.get("orphan_launch_records", []):
+        # The same re-check the job loop does, and for the same reason: planning
+        # walks a whole state root, and a record that was unusable litter at plan
+        # time can be a live launch by the time we get here -- the id is reused
+        # by a relaunch, or the record was mid-write when it was classified.
+        # This loop deleted unconditionally, so it was the one destructive path
+        # in gc with no delete-time recheck at all.
+        if jobstate._liveness(path) is not None:
+            kept.append({"job_id": os.path.basename(path)[: -len(".json")],
+                         "reason": "launch record became identifiable since the plan"})
+            continue
         try:
             os.unlink(path)
         except OSError:
             continue
+        launch_records_removed += 1
 
     sessions_removed = []
     sessions_root = os.path.join(root.path, "sessions")
@@ -356,7 +377,9 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
         "kept": kept,
         "protected": planned.get("protected", []),
         "sessions_removed": sessions_removed,
-        "launch_records_removed": len(planned.get("orphan_launch_records", [])),
+        # Counted from what was ACTUALLY unlinked. Reporting the planned length
+        # would over-report every record the recheck above just saved.
+        "launch_records_removed": launch_records_removed,
         "launch_artifacts_removed": launch_artifacts_removed,
         "bytes_freed": freed,
     }

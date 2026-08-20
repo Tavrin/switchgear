@@ -93,6 +93,19 @@ class Honesty(unittest.TestCase):
         published = set(self.out["refusals"]["exit_codes"])
         self.assertEqual(published, {"0", "1", "2", "124"})
 
+        # The KEYS matching proved nothing about the sentences beside them: the
+        # published description of 0 could have read "awaiting_external_review
+        # exits 1" and this test still passed, which was measured, not assumed.
+        # A caller reads the description, so it is part of the contract.
+        success = self.out["refusals"]["exit_codes"]["0"]
+        for status in ("ok", "awaiting_review", "awaiting_external_review"):
+            self.assertEqual(exit_code_for(status), 0, status)
+            self.assertIn(status, success,
+                          f"exit 0 is documented without naming {status}")
+        for status in ("dirty", "timeout", "provider_error"):
+            self.assertNotIn(status, success,
+                             f"{status} does not exit 0 but is named beside it")
+
     def test_the_refusal_prefix_is_the_one_actually_printed(self):
         """A caller parses stderr on this string; if it drifts, they break."""
         p = run_cli(["--state", "/nonexistent-abs-path", "jobs"])

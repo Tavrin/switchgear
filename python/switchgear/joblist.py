@@ -145,7 +145,16 @@ def enumerate_jobs(
         ref = now if state == "running" else _last_write(jd)
         attribution = rec or runner
         model = attribution.get("model") or {}
+        # `dir` is the one attributed value this function COMPUTES with rather
+        # than echoing, and os.path.realpath raises TypeError on anything that
+        # is not a path. A runner record holding `"dir": 7` therefore crashed
+        # `jobs --worktree` outright -- again taking the whole listing down, and
+        # again only on the filtered query, which is the one an operator runs to
+        # find a crash. Guarding the container type was not enough; the fields
+        # inside it are just as unvalidated.
         job_dir_value = attribution.get("dir")
+        if not isinstance(job_dir_value, str):
+            job_dir_value = None
         harness = (
             rec.get("harness") or rec.get("provider")
             or runner.get("harness") or runner.get("provider")
