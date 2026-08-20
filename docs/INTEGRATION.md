@@ -46,7 +46,7 @@ switchgear --json [--profile P] [--state S] [--provider ABS] <command>
 | `cancel <job-id>` | stop a backgrounded job (pid + starttime + boot_id checked) | `cancelled` or `not_running` |
 | `status <job-id>` | **cheap poll**, valid while the job runs: state, elapsed, turns, tool count, last tool, tokens, cost, sessionId (~30 tokens) | all persisted and derived states below |
 | `status <job-id> --full` | the whole persisted record (exists only once finished) | all persisted states below |
-| `logs <job-id> [--format digest\|normalized\|full]` | projections over the stream; **digest is the default and is byte-capped in code**. `normalized` is the same vocabulary uncapped; `full` is the raw provider stream | — |
+| `logs <job-id> [--format digest\|normalized\|full]` | projections over the stream; **digest is the default and its compact JSONL event payload is byte-capped in code**. `--json` adds an indented envelope around those same bounded events, so its serialized output is larger. `normalized` is the same vocabulary uncapped; `full` is the raw provider stream | — |
 
 The complete persisted status vocabulary, from `result.schema.json`, is `ok`,
 `dirty`, `timeout`, `provider_error`, `awaiting_review` and
@@ -293,8 +293,12 @@ the rail requires the binding to exist, validates it, and requires every fact to
 match the current workspace. Missing, invalid, or mismatched bindings fail
 closed with a remedy to start a new job: continuing could expose an unrelated
 conversation. Historical identity-key stores are migrated lazily on a verified
-resume, one harness subtree at a time; unverifiable legacy stores are quarantined
-and never mounted.
+resume, one harness subtree at a time. Because a legacy marker has no repository
+identity, migration additionally requires the prior job's recorded
+`integrity.git_identity_after` to equal the full identity of the current
+worktree. That deliberately refuses after even one commit: migration is a
+one-time convenience, while handing an unrelated repository the conversation is
+not. Unverifiable legacy stores are quarantined and never mounted.
 
 The store has to live outside the per-job synthetic HOME because that HOME is
 reclaimed after the job. Only the paths an adapter names are persisted, never a
@@ -652,14 +656,17 @@ ones are the defaults on purpose:
 
 - **poll `status`** in a loop. That is the spinner equivalent, roughly 30 tokens
   a call, and it is the intended way for a delegating agent to follow a job.
-- **read `logs` (digest)** only when something looks wrong. It is normalized,
-  structured, and capped at 8 KiB in code; every line carries `digest_v: 1`,
+- **read `logs` (digest)** only when something looks wrong. It is normalized and
+  structured; its event payload, measured as the compact JSONL emitted by plain
+  `--format digest`, is capped at 8 KiB in code. Every line carries `digest_v: 1`,
   including the final
   `{"event":"truncated","dropped_events":N,"digest_v":1}` sentinel.
-- **`logs --json`** wraps the digest in one object with `digest_v`, `events_v`,
-  `truncated` and `dropped_events` fields, rather than making the caller infer
-  those facts from event lines. `--format full` under `--json` is **refused**,
-  not wrapped.
+- **`logs --json`** wraps those same bounded events in one indented object with
+  `digest_v`, `events_v`, `truncated` and `dropped_events` fields, rather than
+  making the caller infer those facts from event lines. The envelope is larger
+  than the 8 KiB compact-JSONL event-payload cap, but remains bounded by that
+  payload plus fixed metadata and JSON formatting. `--format full` under
+  `--json` is **refused**, not wrapped.
 - **`logs --format full`** is the raw provider stream. It is unbounded and grows
   with job length. It is for a human terminal, a TUI or a file tail — never for
   an agent's context. There is deliberately no default that lands here.
@@ -790,7 +797,7 @@ Three views, and the difference between them is the one that matters:
 
 | | shape | bounded? | for |
 |---|---|---|---|
-| `logs --format digest` (default) | normalized | **yes**, hard byte cap | an agent's context |
+| `logs --format digest` (default) | normalized | **yes**, hard byte cap on the compact JSONL event payload; `--json` adds a larger indented envelope around the same events | an agent's context |
 | `logs --format normalized` | normalized | no | a UI, a tail, a consumer |
 | `logs --format full` | **raw provider** | no | a human debugging, forensics |
 

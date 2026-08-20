@@ -580,6 +580,9 @@ def cmd_resume(ns: argparse.Namespace) -> int:
         resume_session=session,
         resumed_from=ns.job,
         session_store_id=prior.get("session_store_id"),
+        legacy_git_identity_after=(prior.get("integrity") or {}).get(
+            "git_identity_after"
+        ),
     )
     _print_job(rec, getattr(ns, "json", False))
     return jobstate.exit_code_for(rec["status"])
@@ -1035,7 +1038,7 @@ def _provider_for_job(ns, jd: str, rec: dict | None = None) -> str:
     Order: result record, then the runner record (which exists from job start,
     so a RUNNING job resolves too), then the caller's profile, then refuse.
     """
-    provider = (rec or {}).get("provider")
+    provider = rec.get("provider") if isinstance(rec, dict) else None
     if not provider and os.path.isfile(os.path.join(jd, "result.json")):
         try:
             provider = read_json(os.path.join(jd, "result.json")).get("provider")
@@ -1058,6 +1061,31 @@ def _provider_for_job(ns, jd: str, rec: dict | None = None) -> str:
     return provider
 
 
+def _read_projection_result(path: str, job_id: str) -> dict[str, Any]:
+    """Read an existing result record without turning corruption into history.
+
+    Falling back from an unreadable CURRENT result made its missing version look
+    like a legitimate pre-version v1 record. A valid JSON array was worse: it
+    reached `.get()` and crashed. Existing-but-unusable evidence is neither
+    absence nor v1, so projections refuse until the operator repairs it.
+    """
+    try:
+        rec = read_json(path)
+    except Exception as exc:
+        _die(
+            f"job {job_id} has an unreadable result record at {path} "
+            f"({type(exc).__name__}: {exc}). Restore a valid result JSON object "
+            "from the job evidence before reading status or logs."
+        )
+    if not isinstance(rec, dict):
+        _die(
+            f"job {job_id} has a result record at {path} that is "
+            f"{type(rec).__name__}, not a JSON object. Restore a valid result "
+            "JSON object from the job evidence before reading status or logs."
+        )
+    return rec
+
+
 def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     """(record-or-{}, normalized events, vocabulary version) for any job.
 
@@ -1071,10 +1099,7 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     rec: dict[str, Any] = {}
     has_result = os.path.isfile(res_path)
     if has_result:
-        try:
-            rec = read_json(res_path)
-        except Exception:
-            rec = {}
+        rec = _read_projection_result(res_path, getattr(ns, "job", "?"))
     raw = ""
     if os.path.isfile(ev_path):
         with open(ev_path, encoding="utf-8", errors="replace") as fh:
@@ -1096,12 +1121,12 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     from .job import NORMALIZED_EVENTS_VERSION
     from .harnesses.normalization import down_project_v2_events_to_v1
 
-    # Resolve from the durable result before this binary's current version.
+    # Resolve from the durable result, then the start record, before this
+    # binary's current version.
     # Otherwise recomputing an old raw stream would silently label v2-shaped
     # events with its recorded v1 contract, or relabel history whenever this
-    # binary upgrades. A running job has no result yet and is necessarily being
-    # produced by this installed binary, so only that case uses the current
-    # version.
+    # binary upgrades. A running job can outlive the code its launcher symlink
+    # points at, so its runner.json owns the version until result.json exists.
     if has_result:
         recorded_version = (rec.get("artifacts") or {}).get(
             "events_normalized_version"
@@ -1121,7 +1146,42 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
                 "repair the result record rather than guessing its vocabulary"
             )
     else:
-        events_version = NORMALIZED_EVENTS_VERSION
+        runner_path = os.path.join(jd, "runner.json")
+        if os.path.isfile(runner_path):
+            try:
+                runner = read_json(runner_path)
+            except Exception as exc:
+                _die(
+                    f"job {getattr(ns, 'job', '?')} has an unreadable runner "
+                    f"record at {runner_path} ({type(exc).__name__}: {exc}). "
+                    "Restore the job's valid runner.json rather than guessing "
+                    "its event vocabulary."
+                )
+            if not isinstance(runner, dict):
+                _die(
+                    f"job {getattr(ns, 'job', '?')} has a runner record at "
+                    f"{runner_path} that is {type(runner).__name__}, not a JSON "
+                    "object. Restore the job's valid runner.json rather than "
+                    "guessing its event vocabulary."
+                )
+            recorded_version = runner.get("events_normalized_version")
+            if recorded_version is None:
+                # A runner with no version predates start-time version stamping.
+                events_version = 1
+            elif (
+                isinstance(recorded_version, int)
+                and not isinstance(recorded_version, bool)
+                and recorded_version >= 1
+            ):
+                events_version = recorded_version
+            else:
+                _die(
+                    f"job {getattr(ns, 'job', '?')} records invalid "
+                    f"runner.events_normalized_version={recorded_version!r}; "
+                    "repair the runner record rather than guessing its vocabulary"
+                )
+        else:
+            events_version = NORMALIZED_EVENTS_VERSION
 
     if events_version == 1:
         normalized = down_project_v2_events_to_v1(normalized)
@@ -1557,7 +1617,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
                 f"(state: {_live_state(ns)}). Use `switchgear status {ns.job}` "
                 "for the live view, or `wait` for the finished one."
             )
-        print(json.dumps(read_json(res_path), indent=2))
+        print(json.dumps(_read_projection_result(res_path, ns.job), indent=2))
         return 0
 
     jd, ev_path, res_path = _job_paths(ns)
@@ -1603,9 +1663,11 @@ def cmd_status(ns: argparse.Namespace) -> int:
     return 0
 
 
-# A hard ceiling, enforced here rather than requested politely. 8 KiB is roughly
-# 2k tokens: enough to diagnose a failed job, small enough that reading one by
-# reflex cannot wreck a parent agent's context.
+# A hard ceiling on the compact JSONL event payload, enforced here rather than
+# requested politely. 8 KiB is roughly 2k tokens: enough to diagnose a failed
+# job, small enough that reading the plain digest by reflex cannot wreck a
+# parent agent's context. --json preserves the same bounded events but adds an
+# indented envelope, so its serialized output is larger than this payload cap.
 DIGEST_MAX_BYTES = 8192
 DIGEST_VERSION = 1
 
@@ -1940,9 +2002,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--format",
         choices=["digest", "normalized", "full"],
         default="digest",
-        help="digest (bounded, default), normalized (unbounded, provider-neutral; "
-             "for a UI or a tail), or full (unbounded RAW provider stream; never "
-             "for agent context)",
+        help="digest (default; compact JSONL event payload bounded to 8 KiB; "
+             "--json adds a larger indented envelope around the same events), "
+             "normalized (unbounded, provider-neutral; for a UI or a tail), or "
+             "full (unbounded RAW provider stream; never for agent context)",
     )
     lg.set_defaults(func=cmd_logs)
 

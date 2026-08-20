@@ -66,8 +66,54 @@ VOLATILE_NOTE = (
 
 CREDENTIAL_SHAPED = re.compile(
     r"(auth\.json|credentials?/|\.pem\b|BEGIN [A-Z ]*PRIVATE KEY|"
-    r"sk-[A-Za-z0-9]{16,}|ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.)",
+    r"sk-[A-Za-z0-9]{16,}|ey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.|"
+    r"[\"']?(?:access_token|refresh_token|api_key|secret)[\"']?\s*[:=]|"
+    r"Authorization\s*:\s*\S+)",
+    re.I,
 )
+
+# A slash after whitespace/punctuation starts a POSIX absolute path. Slashes in
+# model ids such as `pool/model` are preceded by a word character and do not.
+# The placeholder's `>` is excluded so its preserved suffix stays admissible.
+ABSOLUTE_PATH_SHAPED = re.compile(
+    r"(?<![A-Za-z0-9_.<>/-])/(?!/)(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?"
+)
+
+COMPLETE_JOB_FILES = frozenset({
+    "result.json", "runner.json", "events.v2.jsonl", "jobs-row.json",
+    "logs-digest.json", "logs-normalized.json",
+})
+
+# This is the one declaration shared by capture and verification. Letting the
+# generator and pack test each carry their own list would allow the same missing
+# scenario to disappear from both and make the fixture gate vacuous again.
+EXPECTED_SCENARIO_FILES = {
+    scenario: COMPLETE_JOB_FILES
+    for scenario in (
+        "ok", "empty_final_text_with_change", "awaiting_external_review",
+        "provider_error", "needs_input", "dirty",
+    )
+}
+EXPECTED_SCENARIO_FILES["crashed_launch_only"] = frozenset({
+    "runner.json", "jobs-row.json",
+})
+EXPECTED_ROOT_FILES = frozenset({
+    "MANIFEST.json", "gc_plan.json", "gc_applied.json",
+})
+EXPECTED_MANIFEST_SCENARIOS = frozenset(EXPECTED_SCENARIO_FILES) | frozenset(
+    name for name in EXPECTED_ROOT_FILES if name != "MANIFEST.json"
+)
+
+
+def capture_safety_findings(text: str) -> list[str]:
+    """Machine-path and credential shapes forbidden in a published pack."""
+    findings = [f"absolute path {match.group(0)!r}"
+                for match in ABSOLUTE_PATH_SHAPED.finditer(text)]
+    findings.extend(
+        f"credential-shaped {match.group(0)!r}"
+        for match in CREDENTIAL_SHAPED.finditer(text)
+    )
+    return findings
 
 
 class Capture:
@@ -162,14 +208,34 @@ class Capture:
     # ---- one job -> one scenario directory ---------------------------------
 
     def _capture_job(self, scenario: str, job_id: str, *, worktree: Path) -> None:
+        expected = EXPECTED_SCENARIO_FILES[scenario]
         jd = self.state / "jobs" / job_id
         res = jd / "result.json"
-        if res.is_file():
+        if "result.json" in expected:
+            if not res.is_file():
+                raise RuntimeError(
+                    f"scenario {scenario} produced no required result.json"
+                )
             self._write(scenario, "result.json", json.loads(res.read_text()))
+        elif res.is_file():
+            raise RuntimeError(
+                f"scenario {scenario} unexpectedly produced result.json"
+            )
         runner = jd / "runner.json"
-        if runner.is_file():
-            self._write(scenario, "runner.json", json.loads(runner.read_text()))
-        for norm in sorted(jd.glob("evidence/events.v*.jsonl")):
+        if not runner.is_file():
+            raise RuntimeError(
+                f"scenario {scenario} produced no required runner.json"
+            )
+        self._write(scenario, "runner.json", json.loads(runner.read_text()))
+        norms = sorted(jd.glob("evidence/events.v*.jsonl"))
+        expected_norms = {name for name in expected if name.startswith("events.v")}
+        if {norm.name for norm in norms} != expected_norms:
+            raise RuntimeError(
+                f"scenario {scenario} normalized artifacts were "
+                f"{sorted(norm.name for norm in norms)}, expected "
+                f"{sorted(expected_norms)}"
+            )
+        for norm in norms:
             self._write_jsonl(scenario, norm.name, [
                 json.loads(line) for line in norm.read_text().splitlines()
                 if line.strip()
@@ -177,18 +243,36 @@ class Capture:
         rows = json.loads(self._run("--json", "jobs", "--worktree",
                                     str(worktree), "--all").stdout)
         row = next((r for r in rows["jobs"] if r["job_id"] == job_id), None)
-        if row is not None:
-            self._write(scenario, "jobs-row.json", row)
-        if res.is_file():
+        if row is None:
+            raise RuntimeError(
+                f"scenario {scenario} produced no required jobs --json row"
+            )
+        self._write(scenario, "jobs-row.json", row)
+        if "logs-digest.json" in expected:
             digest = self._run("--json", "logs", job_id)
-            if digest.returncode == 0:
-                self._write(scenario, "logs-digest.json",
-                            json.loads(digest.stdout))
+            if digest.returncode != 0:
+                raise RuntimeError(
+                    f"scenario {scenario} digest projection failed: "
+                    f"{digest.stderr.strip()}"
+                )
+            self._write(scenario, "logs-digest.json", json.loads(digest.stdout))
             normalized = self._run("--json", "logs", job_id,
                                    "--format", "normalized")
-            if normalized.returncode == 0:
-                self._write(scenario, "logs-normalized.json",
-                            json.loads(normalized.stdout))
+            if normalized.returncode != 0:
+                raise RuntimeError(
+                    f"scenario {scenario} normalized projection failed: "
+                    f"{normalized.stderr.strip()}"
+                )
+            self._write(scenario, "logs-normalized.json",
+                        json.loads(normalized.stdout))
+
+        actual = {path.name for path in (self.out / scenario).iterdir()
+                  if path.is_file()}
+        if actual != set(expected):
+            raise RuntimeError(
+                f"scenario {scenario} captured {sorted(actual)}, expected "
+                f"{sorted(expected)}"
+            )
 
     # ---- the scenarios -----------------------------------------------------
 
@@ -316,6 +400,12 @@ class Capture:
         from switchgear.job import NORMALIZED_EVENTS_VERSION
         from switchgear.cli import DIGEST_VERSION
 
+        if set(scenarios) != set(EXPECTED_MANIFEST_SCENARIOS):
+            raise RuntimeError(
+                f"manifest scenario set {sorted(scenarios)}, expected the "
+                f"declared set {sorted(EXPECTED_MANIFEST_SCENARIOS)}"
+            )
+
         commit = subprocess.run(
             [GIT, "-C", str(ROOT), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True).stdout.strip()
@@ -354,12 +444,28 @@ class Capture:
             if not path.is_file():
                 continue
             text = path.read_text()
-            for match in re.finditer(r"(^|[^A-Za-z0-9_])/(home|Users|tmp)/[A-Za-z0-9._-]", text):
-                bad.append(f"{path.relative_to(self.out)}: machine path near {match.group(0)!r}")
-            for match in CREDENTIAL_SHAPED.finditer(text):
-                bad.append(f"{path.relative_to(self.out)}: credential-shaped {match.group(0)!r}")
+            bad.extend(
+                f"{path.relative_to(self.out)}: {finding}"
+                for finding in capture_safety_findings(text)
+            )
         if bad:
             raise SystemExit("refusing to write the pack:\n  " + "\n  ".join(bad))
+
+    def assert_complete(self) -> None:
+        actual_dirs = {path.name for path in self.out.iterdir() if path.is_dir()}
+        if actual_dirs != set(EXPECTED_SCENARIO_FILES):
+            raise RuntimeError(
+                f"captured scenario set {sorted(actual_dirs)}, expected "
+                f"{sorted(EXPECTED_SCENARIO_FILES)}"
+            )
+        actual_root_files = {
+            path.name for path in self.out.iterdir() if path.is_file()
+        }
+        if actual_root_files != set(EXPECTED_ROOT_FILES):
+            raise RuntimeError(
+                f"captured root files {sorted(actual_root_files)}, expected "
+                f"{sorted(EXPECTED_ROOT_FILES)}"
+            )
 
     def close(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -417,6 +523,7 @@ def main() -> int:
                 "launch_artifacts_removed, which gc.plan() cannot produce"
             ),
         })
+        cap.assert_complete()
         cap.assert_clean()
     finally:
         cap.close()

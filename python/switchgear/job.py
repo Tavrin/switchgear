@@ -12,7 +12,7 @@ from . import delegate as delegatemod
 from . import events, identity, jobstate, lease, process, provider, review, sandbox, sessions, state
 from .digest import sha256_json
 from .errors import DirtyWorktree, ProviderError, Refuse
-from .paths import require_disjoint
+from .paths import require_disjoint, safe_rmtree
 from .policy import CompiledPolicy, compile_policy
 from .profile import load_profile
 from .registry import model_record, provider_record as registry_provider, registry_digest, wire_model_names
@@ -110,6 +110,11 @@ def _runner_record(
         # Kept as the legacy harness key because projections of running jobs
         # resolve their adapter from it. It does not name the model pool here.
         "provider": harness,
+        # A result-less job must keep the vocabulary chosen by the binary that
+        # launched it. Without this start-time fact, upgrading the installed
+        # package underneath a running job relabelled its live projection and
+        # could later disagree with the events.v<N>.jsonl it persisted.
+        "events_normalized_version": NORMALIZED_EVENTS_VERSION,
     }
 
 
@@ -390,6 +395,7 @@ def run_job(
     resume_session: Optional[str] = None,
     resumed_from: Optional[str] = None,
     session_store_id: Optional[str] = None,
+    legacy_git_identity_after: Optional[str] = None,
 ) -> dict[str, Any]:
     profile = load_profile(profile_path)
     profile_digest = sha256_json(profile)
@@ -489,9 +495,20 @@ def run_job(
             ),
         )
     except Exception:
-        # Attribution failure now refuses the launch, but it must not strand the
-        # concurrency slot while doing so.
+        # Attribution failure now refuses the launch. create_job_dirs has
+        # already made a job that gc must protect as unknown, so leaving it here
+        # would strand permanent litter on every refused launch.
         concurrency.release(root.path, job_id)
+        try:
+            safe_rmtree(
+                dirs["job"], must_be_under=root.jobs,
+                label=f"job {job_id} after runner attribution failure",
+            )
+        except Exception:
+            # Cleanup must not replace the attribution error: that is the cause
+            # the caller can remedy, while the leftover directory is visible
+            # evidence an operator can remove deliberately.
+            pass
         raise
     lock_cm = None
     token_uuid = None
@@ -1156,7 +1173,8 @@ def run_job(
         if resume_session:
             if legacy_resume:
                 sessions.migrate_legacy(
-                    root, session_store_id, adapter.name, job_id, ident
+                    root, session_store_id, adapter.name, job_id, ident,
+                    legacy_git_identity_after,
                 )
             else:
                 sessions.verify_lineage(root, session_store_id, adapter.name, ident)

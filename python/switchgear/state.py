@@ -122,13 +122,15 @@ def atomic_write_json(path: str, obj: Any) -> None:
         finally:
             os.close(fd)
         os.replace(tmp, path)
-    finally:
-        # Never leave the temp behind for a later reader or a gc sweep to puzzle
-        # over. Serialization and write failures used to bypass this cleanup.
+    except Exception:
+        # Best-effort cleanup on failure only. Serialization and write failures
+        # used to bypass it; doing this after a successful replace instead can
+        # unlink a different writer's file if that path is reused in the gap.
         try:
             os.unlink(tmp)
         except OSError:
             pass
+        raise
 
 
 def read_json(path: str) -> Any:

@@ -114,7 +114,8 @@ has produced a confident false failure report before.
    effort values, cost/trust slots). Effort is validated per **model**, not per
    harness.
 3. Validate cwd as a git worktree; require `$STATE` disjoint from it.
-4. Admission: budget, disk headroom, concurrency slot, exclusive lease.
+4. Admission: budget, concurrency slot, job directory and `runner.json`, disk
+   headroom, exclusive lease.
 5. Snapshot tree + git identity (+ sibling worktrees, canaries if provided).
 6. Start the credential broker; build the bwrap argv; spawn the harness in its
    own session and process group.
@@ -141,7 +142,7 @@ Four, and only these:
 |---|---|---|
 | the CLI's argv and exit codes | `switchgear capabilities` | 0 ok · 1 refusal/error · 2 dirty **or argparse usage error** · 124 timeout |
 | `result.json` | `data/schemas/result.schema.json` | additive keys; `schema_version` moves only on a breaking change |
-| the normalized event stream | `evidence/events.v<N>.jsonl` (`v2` now), `logs --format normalized` | versioned in the filename and on every line; a job is read back in the version its own record names, so v1 artifacts stay v1 |
+| the normalized event stream | `evidence/events.v<N>.jsonl` (`v2` now), `logs --format normalized` | versioned in the filename and on every line; read-back uses the result's recorded version, or the start-time `runner.json` version before a result exists. Records predating both stamps default to v1; only a job with neither record uses the installed version. An existing corrupt/non-object result is refused, never guessed. |
 | the task envelope | `data/schemas/task-envelope.schema.json` | closed; `correlation` is the caller's own space |
 
 `evidence/events.jsonl` is **not** a contract. It is the harness's own stdout,

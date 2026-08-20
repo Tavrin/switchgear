@@ -4,7 +4,7 @@
   "dir": "<ABSOLUTE_PATH>/syn/wt2",
   "elapsed_s": 6.2,
   "harness": "opencode",
-  "job_id": "cc981b7c-1522-4de5-a4b3-3a928fb5c8cf",
+  "job_id": "e9b7e356-2abe-4a32-8520-de960b63adea",
   "mode": "readonly",
   "model": "opencode-go/deepseek-v4-flash",
   "pool": "opencode-go",
@@ -12,6 +12,6 @@
   "resumed_from": null,
   "review_of": null,
   "role": "scout",
-  "started_at": 1787246747.126,
+  "started_at": 1787249301.997,
   "state": "dirty"
 }

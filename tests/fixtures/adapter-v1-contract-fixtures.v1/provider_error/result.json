@@ -13,11 +13,11 @@
     }
   ],
   "artifacts": {
-    "events": "<ABSOLUTE_PATH>/state/jobs/75485713-fc0b-40a9-92fb-3452a28ab1a8/evidence/events.jsonl",
-    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/75485713-fc0b-40a9-92fb-3452a28ab1a8/evidence/events.v2.jsonl",
+    "events": "<ABSOLUTE_PATH>/state/jobs/28211dfc-298b-44d5-bd6f-434e73970407/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/28211dfc-298b-44d5-bd6f-434e73970407/evidence/events.v2.jsonl",
     "events_normalized_version": 2,
     "handoff": null,
-    "stderr": "<ABSOLUTE_PATH>/state/jobs/75485713-fc0b-40a9-92fb-3452a28ab1a8/evidence/stderr"
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/28211dfc-298b-44d5-bd6f-434e73970407/evidence/stderr"
   },
   "attempt": 1,
   "change": {
@@ -32,19 +32,19 @@
     "outcome": "provider_error"
   },
   "exit": 7,
-  "finished": "20260820T172546Z",
+  "finished": "20260820T180821Z",
   "freeze": null,
   "generation": 0,
   "harness": "opencode",
   "integrity": {
-    "git_identity_after": "995445bc19460c7f452e38a239ed40206e55fe32410df4eaf91591cde0be09b2",
-    "git_identity_before": "995445bc19460c7f452e38a239ed40206e55fe32410df4eaf91591cde0be09b2",
+    "git_identity_after": "3bd249739d465e355a65a2112763c8d1cbf4768a6275713ff21c855313b73437",
+    "git_identity_before": "3bd249739d465e355a65a2112763c8d1cbf4768a6275713ff21c855313b73437",
     "identity_changed": false,
     "outcome": "clean",
-    "tree_after": "394e3a56ced6d8abf5c1f63caf239e8cc018a13d9b06a5ad33b413405a563a63",
-    "tree_before": "394e3a56ced6d8abf5c1f63caf239e8cc018a13d9b06a5ad33b413405a563a63"
+    "tree_after": "2312311d0d39764a9f009625eb556ff6872fd76a92c194d61a13d5b85874b459",
+    "tree_before": "2312311d0d39764a9f009625eb556ff6872fd76a92c194d61a13d5b85874b459"
   },
-  "job_id": "75485713-fc0b-40a9-92fb-3452a28ab1a8",
+  "job_id": "28211dfc-298b-44d5-bd6f-434e73970407",
   "lease_uuid": null,
   "mode": "readonly",
   "model": {
@@ -56,7 +56,7 @@
   },
   "policy_digest": "3554bd49e1b1fa30a4dcd48e722c61ab2ccd0bb572f4957cc144b9f0221d06ac",
   "process": {
-    "pid": 3382001,
+    "pid": 259,
     "timed_out": false
   },
   "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
@@ -79,15 +79,15 @@
       "posture": "none"
     },
     "identity": {
-      "payload_uid": 1,
-      "uid_boundary": "subuid"
+      "payload_uid": null,
+      "uid_boundary": "same-user"
     },
     "network": {
       "broker_only": false,
       "direct": true
     }
   },
-  "session_store_id": "0fdc1083-6231-4ce6-9c81-cc5d9a5ca62b",
-  "started": "20260820T172546Z",
+  "session_store_id": "16888a38-3ebf-43b6-852e-7af6f956e12b",
+  "started": "20260820T180821Z",
   "status": "provider_error"
 }

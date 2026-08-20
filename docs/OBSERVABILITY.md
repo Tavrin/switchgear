@@ -49,10 +49,12 @@ Measured on a real multi-file write job (17 events, a small change):
 | digest | 452 | ~113 | **40× smaller** |
 | summary (`--json` record) | 225 | ~56 | **80× smaller** |
 
-The full stream scales with job length; digest and summary are **bounded** and
-stay roughly flat. On a long job the gap is one to two further orders of
-magnitude. This is why the default must be summary and the full stream must
-never reach a parent agent's context by accident.
+The full stream scales with job length; the digest's compact JSONL event payload
+and the summary are **bounded** and stay roughly flat. The indented digest
+`--json` envelope is larger than that event-payload cap but contains the same
+bounded events. On a long job the gap is one to two further orders of magnitude.
+This is why the default must be summary and the full stream must never reach a
+parent agent's context by accident.
 
 ---
 
@@ -94,7 +96,7 @@ enabling change: nothing else here is possible without it.
 | Projection | Who it's for | Guarantee |
 |---|---|---|
 | **summary** — the existing `--json` record | a delegating agent, always | bounded, ~50-100 tokens |
-| **digest** — STRUCTURED: state, counters, tokens/cost, parsed failures | an agent that needs to know *what happened*, or is debugging a failure | **hard byte cap**, states when it truncated. Not prose — see the orchestrator section for why |
+| **digest** — STRUCTURED: state, counters, tokens/cost, parsed failures | an agent that needs to know *what happened*, or is debugging a failure | **hard byte cap on its compact JSONL event payload**, states when it truncated. `--json` adds a larger indented envelope around the same bounded events. Not prose — see the orchestrator section for why |
 | **full** — the raw stream | a human terminal, a TUI, the orchestrator's UI, a file tail | unbounded — never for agent context |
 
 ### Enforcement, not advice
@@ -103,7 +105,10 @@ A convention that says "please don't pipe the full stream" will be violated. So:
 
 - job-running commands emit the **summary only**; that stays the default forever.
 - `logs --format` has no default that is `full`; choosing it is explicit.
-- `--digest` enforces a byte cap in code and appends a truncation marker.
+- `--digest` enforces a byte cap on the compact JSONL event payload in code and
+  appends a truncation marker. `--json` carries the same events in an indented
+  envelope, so its serialization is larger but remains bounded by that payload
+  plus fixed metadata and formatting.
 - `status` is the *polling* answer: state, elapsed, tool-call count, last tool,
   tokens and cost so far — roughly 30 tokens per poll. That is the equivalent of
   watching a spinner, and it is what a parent agent should call in a loop, never
@@ -323,7 +328,8 @@ full stream, clearly marked as a self-report.
    it. Keep the size cap and truncation reporting intact.
 2. **Normalize the event vocabulary** behind an adapter `parse()`. Do this before
    adding providers, or you will write the digest three times.
-3. **`switchgear logs <job> [--follow] [--format digest|full]`**, digest capped.
+3. **`switchgear logs <job> [--follow] [--format digest|full]`**, digest compact
+   JSONL event payload capped; the indented `--json` envelope is larger.
 4. **Make `status` cheap and informative** — the polling answer for a parent
    agent.
 5. **Background jobs** (`--background` returning a job id and log path). Then a

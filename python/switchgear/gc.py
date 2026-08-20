@@ -310,13 +310,38 @@ def _session_descriptor(path: str, key: str) -> tuple[dict[str, Any] | None, str
             marker = read_json(legacy_path)
         except Exception as exc:
             return None, f"legacy worktree marker unreadable: {exc}"
-        if not isinstance(marker, dict) or not marker.get("worktree"):
-            return None, "legacy worktree marker names no path"
+        if (
+            not isinstance(marker, dict)
+            or not isinstance(marker.get("worktree"), str)
+            or not os.path.isabs(marker["worktree"])
+            or not isinstance(marker.get("st_dev"), int)
+            or isinstance(marker.get("st_dev"), bool)
+            or not isinstance(marker.get("st_ino"), int)
+            or isinstance(marker.get("st_ino"), bool)
+        ):
+            return None, (
+                "legacy worktree marker is UNVERIFIABLE: it must carry "
+                "an absolute worktree path and integer st_dev and st_ino"
+            )
+        facts = {
+            "realpath": marker["worktree"],
+            "st_dev": marker["st_dev"],
+            "st_ino": marker["st_ino"],
+        }
+        try:
+            marker_key = lease.identity_key_from_facts(facts)
+        except (KeyError, TypeError, ValueError) as exc:
+            return None, f"legacy worktree marker is UNVERIFIABLE: {exc}"
+        if marker_key != key:
+            return None, (
+                "legacy worktree marker is UNVERIFIABLE: its worktree, st_dev "
+                "and st_ino do not produce the session directory name"
+            )
         return ({
             "kind": "legacy",
             "worktree": marker["worktree"],
             # Legacy directories and leases use the same identity key.
-            "lease_key": key,
+            "lease_key": marker_key,
             "marker_digest": sha256_json(marker),
         }, None)
     return None, "no binding.json or legacy worktree.json; cannot identify it"
