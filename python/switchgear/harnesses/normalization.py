@@ -11,6 +11,8 @@ import json
 from typing import Any
 
 from .base import (
+    FINAL_TEXT_EMPTY,
+    FINAL_TEXT_PRESENT,
     TERMINAL_COMPLETED,
     TERMINAL_EMPTY,
     TERMINAL_FAILED,
@@ -146,11 +148,15 @@ def _finish_events(
     adapter tailing for `finished` never transitions early. Once it is over:
     errors first; then truncation (`sawTerminal` false is never `completed` --
     "claims done, evidence truncated" is the case the orchestrator tripwires on); then a
-    provider-declared abnormal stop (`failure`); then empty-vs-completed by
-    whether the model actually said anything.
+    provider-declared abnormal stop (`failure`); then empty-vs-present closing
+    text. Execution outcome and closing-text presence are separate facts: a
+    failed run may still have emitted an explanation, while a successful run
+    may have changed files without emitting closing text.
     """
     if not (saw_terminal or run_ended):
         return [{"event": "progress", **counters}]
+
+    final_text_state = FINAL_TEXT_PRESENT if last_text.strip() else FINAL_TEXT_EMPTY
 
     if errored is not None:
         status = TERMINAL_NEEDS_INPUT if _is_input_request(errored) else TERMINAL_FAILED
@@ -165,7 +171,7 @@ def _finish_events(
         status = TERMINAL_FAILED
         summary = failure
     elif not last_text.strip():
-        status = TERMINAL_EMPTY
+        status = TERMINAL_COMPLETED
         summary = ""
     else:
         status = TERMINAL_COMPLETED
@@ -175,11 +181,39 @@ def _finish_events(
         {
             "event": "finished",
             "status": status,
+            "final_text_state": final_text_state,
             **counters,
             "exitSummary": summary,
             "sawTerminal": saw_terminal,
         }
     ]
+
+
+def down_project_v2_events_to_v1(
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Spell normalized v2 events in the exact historical v1 vocabulary.
+
+    Switchgear recomputes projections from raw evidence, including for old
+    jobs. Without this conversion, a historical artifact recorded as v1 would
+    be labelled v1 while actually carrying v2's orthogonal terminal fields.
+    """
+    terminal_status = {
+        (TERMINAL_COMPLETED, FINAL_TEXT_PRESENT): TERMINAL_COMPLETED,
+        (TERMINAL_COMPLETED, FINAL_TEXT_EMPTY): TERMINAL_EMPTY,
+        (TERMINAL_NEEDS_INPUT, FINAL_TEXT_PRESENT): TERMINAL_NEEDS_INPUT,
+        (TERMINAL_NEEDS_INPUT, FINAL_TEXT_EMPTY): TERMINAL_NEEDS_INPUT,
+        (TERMINAL_FAILED, FINAL_TEXT_PRESENT): TERMINAL_FAILED,
+        (TERMINAL_FAILED, FINAL_TEXT_EMPTY): TERMINAL_FAILED,
+    }
+    projected: list[dict[str, Any]] = []
+    for event in events:
+        item = dict(event, v=1)
+        final_text_state = item.pop("final_text_state", None)
+        if item.get("event") == "finished":
+            item["status"] = terminal_status[(item.get("status"), final_text_state)]
+        projected.append(item)
+    return projected
 
 
 def _tool_target(part: dict[str, Any]) -> str:
@@ -218,5 +252,3 @@ def _error_message(ev: dict[str, Any]) -> str:
 def _is_input_request(message: str) -> bool:
     low = message.lower()
     return "permission" in low or "needs input" in low or "awaiting input" in low
-
-

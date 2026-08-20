@@ -263,7 +263,7 @@ def _assert_no_credentials(store: str) -> None:
 #: written under. The version is in the NAME as well as in every line: a
 #: consumer that finds the file it knows how to read does not have to open it to
 #: discover whether it can.
-NORMALIZED_EVENTS_VERSION = 1
+NORMALIZED_EVENTS_VERSION = 2
 NORMALIZED_EVENTS_NAME = f"events.v{NORMALIZED_EVENTS_VERSION}.jsonl"
 
 

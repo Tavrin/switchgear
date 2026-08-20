@@ -12,22 +12,31 @@ The normalized vocabulary, from docs/OBSERVABILITY.md:
     {"event": "text",     "v": int, "content": str}  # truncated at write time
     {"event": "progress", "v": int, "turns": int,
                             "costUSD": float, "tokens": int}
-    {"event": "finished", "v": int, "status": str, "turns": int,
+    {"event": "finished", "v": int, "status": str,
+                            "final_text_state": str, "turns": int,
                             "costUSD": float, "tokens": int, "exitSummary": str}
 
 Every event carries the `event` discriminator. `v` is stamped on by whoever
 writes the stream out -- `job._write_normalized_events` into
-`evidence/events.v1.jsonl`, and `logs --format normalized` -- not by an adapter,
-which returns the events themselves. The byte-capped `logs` digest is a
-projection over the same events and does not carry `v`.
-`finished.status` is one of completed / completed_empty / needs_input / failed.
-`needs_input` is load-bearing for a caller: it parks the work back to the
-operator rather than recording a failure.
+`evidence/events.v2.jsonl`, and `logs --format normalized` -- not by an adapter,
+which returns the events themselves. Historical `events.v1.jsonl` artifacts are
+never rewritten, and recomputed logs use the version recorded by that job, so v1
+remains readable. The byte-capped `logs` digest is a projection over the same
+events: each line carries `digest_v`, not normalized-stream `v`.
 
-`completed_empty` means successful execution with no non-whitespace closing
-assistant text. It does NOT mean no files changed: controller-computed
-`change.state` and `freeze.changed_files` are authoritative for change presence.
-The enum name stays unchanged until the contract-v1-rc1 compatibility review.
+In v2, `finished.status` is completed / needs_input / failed, while the separate
+`final_text_state` is present / empty / unknown. A live v2 run always emits
+present or empty; unknown is only the honest consumer-side upgrade of a v1
+needs_input or failed event, because v1 discarded text presence for those
+outcomes.
+
+The exact v2 -> v1 terminal mapping is (completed,present) -> completed;
+(completed,empty) -> completed_empty; (needs_input,present) and
+(needs_input,empty) -> needs_input; (failed,present) and (failed,empty) ->
+failed. The exact consumer-side v1 -> v2 mapping is completed ->
+(completed,present), completed_empty -> (completed,empty), needs_input ->
+(needs_input,unknown), and failed -> (failed,unknown). Non-terminal events are
+unchanged apart from `v`.
 
 `sessionId` is the single most load-bearing field: without a durable session
 identifier there is no resume, and a reply to a finished job cannot exist.
@@ -64,6 +73,9 @@ from .base import (  # noqa: F401  (re-exported: this is the package's surface)
     EFFORT_SUPPORTED,
     EFFORT_UNMEASURED,
     EFFORT_UNSUPPORTED,
+    FINAL_TEXT_EMPTY,
+    FINAL_TEXT_PRESENT,
+    FINAL_TEXT_UNKNOWN,
     REQUIRED_METHODS,
     TERMINAL_COMPLETED,
     TERMINAL_EMPTY,

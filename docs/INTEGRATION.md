@@ -80,8 +80,11 @@ against one real consumer, but nothing in it is specific to that consumer:
   cold resumes), `liveStream: true` (the raw `evidence/events.jsonl` file is
   tailable; the normalized view is recomputed from it while the job runs),
   `reportsCost: true`.
-- **`finished.status`** is one of `completed`, `completed_empty`, `needs_input`
-  or `failed` and maps 1:1 onto the orchestrator's outcome states — except
+- **`finished.status`** is one of `completed`, `needs_input` or `failed`.
+  **`finished.final_text_state`** independently records `present`, `empty` or
+  `unknown`. A live v2 run emits only `present` or `empty`; `unknown` exists for
+  honest consumer upgrades of historical v1 `needs_input`/`failed` events. The
+  outcome maps onto the orchestrator's outcome states — except
   `sawTerminal: false`, which is **never** `completed`. A run that ended without
   the provider closing its stream reports `failed` with a truncation
   `exitSummary`, however much assistant text it emitted first. "Claims done,
@@ -612,34 +615,49 @@ ones are the defaults on purpose:
 - **poll `status`** in a loop. That is the spinner equivalent, roughly 30 tokens
   a call, and it is the intended way for a delegating agent to follow a job.
 - **read `logs` (digest)** only when something looks wrong. It is normalized,
-  structured, and capped at 8 KiB in code; on truncation it emits a final
-  `{"event":"truncated","dropped_events":N}` rather than trimming silently.
-- **`logs --json`** wraps the digest in one object with `truncated` and
-  `dropped_events` as fields, rather than as a sentinel line the caller has to
-  notice. `--format full` under `--json` is **refused**, not wrapped.
+  structured, and capped at 8 KiB in code; every line carries `digest_v: 1`,
+  including the final
+  `{"event":"truncated","dropped_events":N,"digest_v":1}` sentinel.
+- **`logs --json`** wraps the digest in one object with `digest_v`, `events_v`,
+  `truncated` and `dropped_events` fields, rather than making the caller infer
+  those facts from event lines. `--format full` under `--json` is **refused**,
+  not wrapped.
 - **`logs --format full`** is the raw provider stream. It is unbounded and grows
   with job length. It is for a human terminal, a TUI or a file tail — never for
   an agent's context. There is deliberately no default that lands here.
 
 The digest speaks a provider-neutral vocabulary: every line carries an `event`
-discriminator, and the five event values are `status`, `tool`, `text`,
-`progress` and `finished`. **`v` is not on a digest line.** The version is
-carried by the normalized stream — `evidence/events.v1.jsonl` and
-`logs --format normalized`, which is the contract, and where every line has it.
-The digest is a bounded projection over that stream for an agent's context, and
-it can also emit one line the normalized stream never does: a final
-`{"event":"truncated","dropped_events":N,"cap_bytes":N}` when it hit the cap.
-Consume `logs --format normalized` if you branch on the version.
-`finished` carries `status` ∈
-`completed` | `completed_empty` | `needs_input` | `failed`, plus `turns`,
-`tokens`, `costUSD` and a bounded `exitSummary`. `sessionId` is surfaced because
-without it a resume cannot exist.
+discriminator plus `digest_v: 1`; its five normalized event values are `status`,
+`tool`, `text`, `progress` and `finished`. **Normalized-stream `v` and `events_v`
+are not on plain digest lines.** The normalized vocabulary version is carried by
+the version-dependent `evidence/events.v*.jsonl` and by
+`logs --format normalized`, where every line has `v`. The JSON digest envelope
+adds `events_v`, while `digest_v` versions the bounded projection format itself.
+If `digest_v` is unrecognised, do not decode the digest; fall back to
+`logs --format normalized`. Continue to consume the normalized format directly
+when branching on the event vocabulary version.
 
-`completed_empty` means execution succeeded but the provider emitted no
-non-whitespace closing assistant text. It does **not** mean the worktree was
-unchanged: change presence comes from the controller-computed `change.state` and
-`freeze.changed_files`. The enum name remains unchanged until the later
-contract-v1-rc1 compatibility review.
+The digest can also emit one line the normalized stream never does: a final
+`{"event":"truncated","dropped_events":N,"cap_bytes":N,"digest_v":1}` when it
+hit the cap. The new key and sentinel are serialized before measuring, so the
+reported cap includes them.
+
+Normalized v2 `finished` carries `status` ∈ `completed` | `needs_input` |
+`failed` and the orthogonal `final_text_state` ∈ `present` | `empty` | `unknown`,
+plus `turns`, `tokens`, `costUSD` and a bounded `exitSummary`. A live v2 run
+never emits `unknown`; only a consumer upgrading historical v1 evidence needs
+it. `sessionId` is surfaced because without it a resume cannot exist.
+
+The exact v2 -> v1 mapping is `(completed,present) -> completed`,
+`(completed,empty) -> completed_empty`, both `needs_input` pairs ->
+`needs_input`, and both `failed` pairs -> `failed`; the v1 line drops
+`final_text_state` and carries `v: 1`. The exact consumer-side v1 -> v2 mapping
+is `completed -> (completed,present)`, `completed_empty -> (completed,empty)`,
+`needs_input -> (needs_input,unknown)`, and `failed -> (failed,unknown)`.
+Non-terminal events are unchanged apart from `v`. Switchgear keeps v1 readable
+by recomputing in the version recorded in each finished job; pre-version result
+records default to v1, running jobs use this binary's current version, and no
+historical artifact is rewritten.
 
 Counters and parsed facts are the load-bearing part; model prose appears only as
 a bounded `exitSummary` and is a self-report, not evidence.
@@ -683,8 +701,9 @@ Each job writes `<state>/jobs/<job-id>/`:
 - `evidence/events.jsonl` — the provider's own stdout, byte for byte, capped.
   It is written as events arrive and is tailable, but is forensic evidence;
   **not** the integration contract
-- `evidence/events.v1.jsonl` — the same run in Switchgear's vocabulary. This is
-  written once, atomically, after the run ends
+- `evidence/events.v2.jsonl` for a new job — the same run in Switchgear's
+  current vocabulary, written once atomically after the run ends. Historical
+  jobs retain their `events.v1.jsonl`; filenames and contents are never migrated
 - `evidence/stderr` — provider stderr, capped
 - `evidence/handoff.json` — the worker's structured handoff (write jobs)
 
@@ -708,8 +727,10 @@ An adapter needs four things, all already available:
    in *Switchgear's* vocabulary: `status`, `tool`, `text`, `progress` and
    `finished`. Every object carries the `event` discriminator and `v` contract
    version. After completion, `artifacts.events_normalized` names the same
-   projection written once as `evidence/events.v1.jsonl`; that file does not
-   exist while the job runs and is not a progress tail.
+   projection written once under the versioned `evidence/events.v*.jsonl`
+   filename; that file does not exist while the job runs and is not a progress
+   tail. After completion, recomputation continues to speak the version recorded
+   in that job's result.
 3. **stop** — kill the controller process. The sandbox dies with it: verified
    that SIGKILL of the controller leaves zero surviving `bwrap` or provider
    processes (pid namespace + `--die-with-parent`).

@@ -1056,8 +1056,8 @@ def _provider_for_job(ns, jd: str, rec: dict | None = None) -> str:
     return provider
 
 
-def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """(record-or-{}, normalized events) -- works on a RUNNING job.
+def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    """(record-or-{}, normalized events, vocabulary version) for any job.
 
     Reads whatever the stream holds right now. result.json does not exist until
     the job finishes, so anything that insists on it cannot answer the question
@@ -1067,7 +1067,8 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
     jd, ev_path, res_path = _job_paths(ns)
     rec: dict[str, Any] = {}
-    if os.path.isfile(res_path):
+    has_result = os.path.isfile(res_path)
+    if has_result:
         try:
             rec = read_json(res_path)
         except Exception:
@@ -1090,6 +1091,41 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     parsed, _ = parse_lenient(raw)
     normalized = adapter.normalize(parsed, run_ended=bool(rec))
 
+    from .job import NORMALIZED_EVENTS_VERSION
+    from .harnesses.normalization import down_project_v2_events_to_v1
+
+    # Resolve from the durable result before this binary's current version.
+    # Otherwise recomputing an old raw stream would silently label v2-shaped
+    # events with its recorded v1 contract, or relabel history whenever this
+    # binary upgrades. A running job has no result yet and is necessarily being
+    # produced by this installed binary, so only that case uses the current
+    # version.
+    if has_result:
+        recorded_version = (rec.get("artifacts") or {}).get(
+            "events_normalized_version"
+        )
+        if recorded_version is None:
+            events_version = 1
+        elif (
+            isinstance(recorded_version, int)
+            and not isinstance(recorded_version, bool)
+            and recorded_version >= 1
+        ):
+            events_version = recorded_version
+        else:
+            _die(
+                f"job {getattr(ns, 'job', '?')} records invalid "
+                f"artifacts.events_normalized_version={recorded_version!r}; "
+                "repair the result record rather than guessing its vocabulary"
+            )
+    else:
+        events_version = NORMALIZED_EVENTS_VERSION
+
+    if events_version == 1:
+        normalized = down_project_v2_events_to_v1(normalized)
+    else:
+        normalized = [dict(event, v=events_version) for event in normalized]
+
     # A non-empty stream that yields nothing recognisable is the signature of the
     # wrong adapter, not of a truncated run. Say so rather than reporting a
     # confident falsehood.
@@ -1100,7 +1136,7 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             "produced by a different provider; check --profile.",
             file=sys.stderr,
         )
-    return rec, normalized
+    return rec, normalized, events_version
 
 
 def cmd_providers(ns: argparse.Namespace) -> int:
@@ -1522,7 +1558,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
 
     jd, ev_path, res_path = _job_paths(ns)
     _require_known_job(ns, jd)
-    rec, norm = _projection(ns)
+    rec, norm, _events_version = _projection(ns)
     # Counters come from whichever summary event is present: `progress` while the
     # job runs, `finished` once it is over.
     fin = next((n for n in norm if n["event"] in ("finished", "progress")), {})
@@ -1567,6 +1603,7 @@ def cmd_status(ns: argparse.Namespace) -> int:
 # 2k tokens: enough to diagnose a failed job, small enough that reading one by
 # reflex cannot wreck a parent agent's context.
 DIGEST_MAX_BYTES = 8192
+DIGEST_VERSION = 1
 
 
 def cmd_logs(ns: argparse.Namespace) -> int:
@@ -1594,18 +1631,15 @@ def cmd_logs(ns: argparse.Namespace) -> int:
         # Unbounded, but provider-NEUTRAL -- which is the difference that
         # matters. `full` is unbounded and provider-shaped, so consuming it
         # means learning four event vocabularies; this is the same stream a
-        # persisted evidence/events.v1.jsonl holds, recomputed, so a caller can
+        # persisted evidence/events.v*.jsonl holds, recomputed, so a caller can
         # read it while the job is still running or if the projection could not
         # be written. Still not for an agent's context: use the digest.
-        from .job import NORMALIZED_EVENTS_VERSION
-
-        _rec, norm = _projection(ns)
-        out = [dict(n, v=NORMALIZED_EVENTS_VERSION) for n in norm]
+        _rec, out, events_version = _projection(ns)
         if ns.json:
             print(json.dumps({
                 "job_id": ns.job,
                 "format": "normalized",
-                "v": NORMALIZED_EVENTS_VERSION,
+                "v": events_version,
                 "events": out,
                 # Stated rather than implied: the digest can truncate and this
                 # deliberately cannot, so a caller reading both sees the same
@@ -1617,22 +1651,47 @@ def cmd_logs(ns: argparse.Namespace) -> int:
             print(json.dumps(ev, separators=(",", ":")))
         return 0
 
-    _rec, norm = _projection(ns)
+    _rec, norm, events_version = _projection(ns)
+    norm = [
+        {**{key: value for key, value in event.items() if key != "v"},
+         "digest_v": DIGEST_VERSION}
+        for event in norm
+    ]
     lines = [json.dumps(n, separators=(",", ":")) for n in norm]
     blob = "\n".join(lines)
-    if len(blob.encode("utf-8")) > DIGEST_MAX_BYTES:
+    if sum(len(line.encode("utf-8")) + 1 for line in lines) > DIGEST_MAX_BYTES:
         kept: list[str] = []
         used = 0
+        # Reserve the largest sentinel this digest can need. Its dropped count
+        # only decreases as lines are kept, so the final sentinel cannot be
+        # larger. Reserving a candidate with one fewer dropped event could miss
+        # a digit boundary and overrun the cap by one byte.
+        sentinel_reserve = len(json.dumps(
+            {
+                "event": "truncated",
+                "dropped_events": len(lines),
+                "cap_bytes": DIGEST_MAX_BYTES,
+                "digest_v": DIGEST_VERSION,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")) + 1
         for line in lines:
             size = len(line.encode("utf-8")) + 1
-            if used + size > DIGEST_MAX_BYTES:
+            if used + size + sentinel_reserve > DIGEST_MAX_BYTES:
                 break
             kept.append(line)
             used += size
         dropped = len(lines) - len(kept)
         kept.append(
-            json.dumps({"event": "truncated", "dropped_events": dropped,
-                        "cap_bytes": DIGEST_MAX_BYTES})
+            json.dumps(
+                {
+                    "event": "truncated",
+                    "dropped_events": dropped,
+                    "cap_bytes": DIGEST_MAX_BYTES,
+                    "digest_v": DIGEST_VERSION,
+                },
+                separators=(",", ":"),
+            )
         )
         blob = "\n".join(kept)
         norm = [json.loads(line) for line in kept]
@@ -1646,6 +1705,8 @@ def cmd_logs(ns: argparse.Namespace) -> int:
         print(json.dumps({
             "job_id": ns.job,
             "format": "digest",
+            "digest_v": DIGEST_VERSION,
+            "events_v": events_version,
             "events": norm[:-1] if truncated else norm,
             "truncated": bool(truncated),
             "dropped_events": norm[-1].get("dropped_events", 0) if truncated else 0,

@@ -294,22 +294,15 @@ class RailTests(unittest.TestCase):
         st = json.loads((self.state / "jobs" / job / "result.json").read_text())
         self.assertEqual(st["status"], "ok")
 
-    def test_completed_empty_can_carry_a_frozen_change(self):
+    def test_empty_closing_text_can_carry_a_frozen_change(self):
         """Transcript emptiness and change presence are independent facts.
 
         A worker can edit tracked.txt and emit no closing assistant text, so
-        `finished.status=completed_empty` is legal beside a frozen change. The
-        controller-computed `change.state` and `freeze.changed_files`, never the
-        transcript status, are authoritative for whether files changed.
-
-        This is a CHARACTERIZATION test, and deliberately passes against the
-        revision before the vocabulary was documented: the three fields were
-        always individually correct, and the defect was that four documents
-        published a name that invites the diff reading without ever saying which
-        sense was meant. What it pins is that the combination stays legal -- a
-        later change that "fixed" the apparent contradiction by making
-        `completed_empty` mean an empty diff would break here, which is the
-        regression actually worth guarding.
+        `finished.status=completed` and `final_text_state=empty` are legal beside
+        a frozen change. The controller-computed `change.state` and
+        `freeze.changed_files`, never transcript presence, are authoritative for
+        whether files changed. Fusing those facts again would silently refuse
+        mergeable work that really landed.
         """
         token = self._acquire()
         envf = self.tmp / "completed-empty-envelope.json"
@@ -344,10 +337,12 @@ class RailTests(unittest.TestCase):
         self.assertEqual(
             (
                 finished["status"],
+                finished["final_text_state"],
                 record["change"]["state"],
                 record["freeze"]["changed_files"],
             ),
-            ("completed_empty", "frozen", ["tracked.txt"]),
+            ("completed", "empty", "frozen", ["tracked.txt"]),
+            "v2 fused transcript emptiness with the frozen worktree change",
         )
 
     def test_standalone_review_persists_its_verdict_on_its_own_record(self):
@@ -1144,8 +1139,13 @@ class RailTests(unittest.TestCase):
 
         digest = run_cli(self.args("logs", job_id))
         self.assertEqual(digest.returncode, 0, digest.stderr)
-        self.assertLessEqual(len(digest.stdout.encode()), DIGEST_MAX_BYTES + 200)
+        self.assertLessEqual(len(digest.stdout.encode()), DIGEST_MAX_BYTES)
         self.assertIn('"event":"finished"', digest.stdout)
+        for line in digest.stdout.splitlines():
+            event = json.loads(line)
+            self.assertEqual(event["digest_v"], 1)
+            self.assertNotIn("v", event)
+            self.assertNotIn("events_v", event)
 
         full = run_cli(self.args("logs", job_id, "--format", "full"))
         self.assertEqual(full.returncode, 0, full.stderr)
@@ -1154,12 +1154,33 @@ class RailTests(unittest.TestCase):
         self.assertNotEqual(full.stdout, digest.stdout)
         self.assertGreater(len(full.stdout), len(digest.stdout))
 
-    def test_logs_digest_truncates_loudly_rather_than_silently(self):
+    def test_logs_digest_truncates_loudly_with_version_inside_the_cap(self):
         sys.path.insert(0, str(ROOT / "python"))
         from switchgear.cli import DIGEST_MAX_BYTES
 
         self.assertGreater(DIGEST_MAX_BYTES, 1024)
         self.assertLess(DIGEST_MAX_BYTES, 65536)
+
+        p = run_cli(
+            self.args("scout", str(self.primary), "look"),
+            env={"SWITCHGEAR_MOCK_BEHAVIOR": "many-text"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = [d.name for d in (self.state / "jobs").glob("*") if d.is_dir()][0]
+        digest = run_cli(self.args("logs", job_id))
+        self.assertEqual(digest.returncode, 0, digest.stderr)
+        self.assertLessEqual(
+            len(digest.stdout.encode()), DIGEST_MAX_BYTES,
+            "digest_v or its truncation sentinel escaped the enforced byte cap",
+        )
+        events = [json.loads(line) for line in digest.stdout.splitlines()]
+        self.assertGreater(len(events), 1, "the truncation test kept no real event")
+        self.assertTrue(
+            all(event.get("digest_v") == 1 for event in events),
+            "digest_v is not present and equal to 1 on every digest line",
+        )
+        self.assertEqual(events[-1]["event"], "truncated")
+        self.assertGreater(events[-1]["dropped_events"], 0)
 
     def test_evidence_is_readable_while_the_job_is_still_running(self):
         """The enabling property for observing a delegated agent mid-run.
@@ -2110,7 +2131,20 @@ class RailTests(unittest.TestCase):
         out = json.loads(p2.stdout)
         self.assertEqual(out["job_id"], job_id)
         self.assertEqual(out["format"], "digest")
+        self.assertIn(
+            "digest_v", out,
+            "digest JSON envelope omitted its projection format version",
+        )
+        self.assertIn(
+            "events_v", out,
+            "digest JSON envelope omitted the normalized vocabulary version",
+        )
+        self.assertEqual(
+            (out["digest_v"], out["events_v"]), (1, 2),
+            "digest envelope does not distinguish projection and event versions",
+        )
         self.assertIsInstance(out["events"], list)
+        self.assertTrue(all(event.get("digest_v") == 1 for event in out["events"]))
         self.assertIn("truncated", out)
         self.assertIn("dropped_events", out)
 
@@ -3198,15 +3232,18 @@ class NormalizedStream(unittest.TestCase):
         arts = rec["artifacts"]
         path = arts["events_normalized"]
         self.assertTrue(path, "no normalized stream was written")
-        self.assertTrue(path.endswith("events.v1.jsonl"), path)
-        self.assertEqual(arts["events_normalized_version"], 1)
+        self.assertTrue(
+            path.endswith("events.v2.jsonl"),
+            f"fresh normalized artifact did not move to v2: {path}",
+        )
+        self.assertEqual(arts["events_normalized_version"], 2)
 
         events = [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
         self.assertTrue(events)
         # Every line self-describes its contract version, so a consumer holding
         # one line out of context still knows how to read it.
         for ev in events:
-            self.assertEqual(ev["v"], 1, ev)
+            self.assertEqual(ev["v"], 2, ev)
         kinds = {e["event"] for e in events}
         self.assertIn("finished", kinds)
         # The vocabulary is ours, not the provider's: the mock emits step_start /
@@ -3239,6 +3276,58 @@ class NormalizedStream(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.strip(), on_disk)
 
+    def test_recorded_v1_job_recomputes_in_the_v1_vocabulary(self):
+        """Recomputation must not silently relabel historical evidence as v2."""
+        rec = self._scout()
+        job = rec["job_id"]
+        result_path = self.state / "jobs" / job / "result.json"
+        durable = json.loads(result_path.read_text())
+        durable["artifacts"]["events_normalized_version"] = 1
+        result_path.write_text(json.dumps(durable))
+
+        p = run_cli(self.args("logs", job, "--format", "normalized"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        events = [json.loads(line) for line in p.stdout.splitlines()]
+        self.assertTrue(events)
+        self.assertTrue(
+            all(event["v"] == 1 for event in events),
+            "historical job was relabelled with this binary's current version",
+        )
+        finished = next(event for event in events if event["event"] == "finished")
+        self.assertNotIn(
+            "final_text_state", finished,
+            "historical v1 recomputation leaked the v2 terminal vocabulary",
+        )
+        self.assertEqual(finished["status"], "completed")
+
+        digest = run_cli(self.args("--json", "logs", job))
+        self.assertEqual(digest.returncode, 0, digest.stderr)
+        envelope = json.loads(digest.stdout)
+        self.assertEqual(
+            envelope["events_v"], 1,
+            "digest envelope ignored the historical job's resolved events version",
+        )
+        self.assertEqual(envelope["digest_v"], 1)
+
+    def test_pre_version_result_records_default_to_v1(self):
+        rec = self._scout()
+        job = rec["job_id"]
+        result_path = self.state / "jobs" / job / "result.json"
+        durable = json.loads(result_path.read_text())
+        for old_value in (None, "absent"):
+            with self.subTest(old_value=old_value):
+                if old_value == "absent":
+                    durable["artifacts"].pop("events_normalized_version", None)
+                else:
+                    durable["artifacts"]["events_normalized_version"] = None
+                result_path.write_text(json.dumps(durable))
+                p = run_cli(self.args("--json", "logs", job,
+                                      "--format", "normalized"))
+                self.assertEqual(p.returncode, 0, p.stderr)
+                out = json.loads(p.stdout)
+                self.assertEqual(out["v"], 1)
+                self.assertTrue(all(event["v"] == 1 for event in out["events"]))
+
     def test_normalized_is_not_capped_but_the_digest_is(self):
         """Two different jobs: the digest is bounded for an agent's context, the
         normalized stream is complete for a UI. Conflating them would either
@@ -3250,7 +3339,7 @@ class NormalizedStream(unittest.TestCase):
         out = json.loads(p.stdout)
         self.assertEqual(out["format"], "normalized")
         self.assertFalse(out["truncated"])
-        self.assertEqual(out["v"], 1)
+        self.assertEqual(out["v"], 2)
 
 
 class AcceptanceAuthority(unittest.TestCase):

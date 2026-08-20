@@ -23,6 +23,10 @@ TERMINAL_NEEDS_INPUT = "needs_input"
 # default, so this never reports as completed.
 TERMINAL_FAILED = "failed"
 
+FINAL_TEXT_PRESENT = "present"
+FINAL_TEXT_EMPTY = "empty"
+FINAL_TEXT_UNKNOWN = "unknown"
+
 
 EFFORT_SUPPORTED = "supported"
 EFFORT_UNMEASURED = "unmeasured"
@@ -243,5 +247,4 @@ def validate_adapter(name: str, adapter: Any) -> None:
             f"adapter {name!r} is incomplete: {', '.join(missing)} not implemented. "
             "See docs/ADDING-A-PROVIDER.md."
         )
-
 
