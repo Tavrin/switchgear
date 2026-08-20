@@ -2305,10 +2305,21 @@ class RailTests(unittest.TestCase):
     def test_orphaned_launch_records_are_swept(self):
         launch = self.state / "launch"
         launch.mkdir(exist_ok=True)
-        orphan = launch / "00000000-0000-4000-8000-00000000ac01.json"
-        orphan.write_text(json.dumps({"pid": 2 ** 22, "starttime": "1", "boot_id": "x"}))
+        litter_id = "00000000-0000-4000-8000-00000000ac01"
+        crash_id = "00000000-0000-4000-8000-00000000ac05"
+        litter = launch / f"{litter_id}.json"
+        crash = launch / f"{crash_id}.json"
+        litter.write_text(json.dumps({"starttime": "1", "boot_id": "x"}))
+        crash.write_text(json.dumps(
+            {"pid": 2 ** 22, "starttime": "1", "boot_id": "x"}))
         p, out = self._gc("--older-than", "1h", "--yes")
-        self.assertFalse(orphan.exists())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(litter.exists(), "a record with no usable triple survived")
+        self.assertTrue(crash.exists(), "the sole identity of a crashed launch was deleted")
+        reasons = {entry["job_id"]: entry["reason"]
+                   for entry in out.get("protected", [])}
+        self.assertIn(crash_id, reasons)
+        self.assertIn("crash evidence", reasons[crash_id])
 
     def test_protected_entries_explain_themselves(self):
         """A caller who expected a job to go must be able to see which rule kept
@@ -3180,6 +3191,172 @@ class CorrelationUnit(unittest.TestCase):
         )
         offenders = [f"{i}: {ln.strip()}" for i, ln in lines if not allowed.search(ln)]
         self.assertEqual(offenders, [], "correlation reached the job path:\n" + "\n".join(offenders))
+
+
+class CrashedJobAttribution(unittest.TestCase):
+    """C-SG-P2P4 regressions kept in one append-only merge block."""
+
+    def setUp(self):
+        RailTests.setUp(self)
+        sys.path.insert(0, str(ROOT / "python"))
+
+    def tearDown(self):
+        RailTests.tearDown(self)
+
+    args = RailTests.args
+    _aged_job = RailTests._aged_job
+    _gc = RailTests._gc
+
+    def test_recordless_crash_is_attributed_and_filtered_by_worktree(self):
+        """A result-less crash must not disappear from the operator's worktree
+        query, and attribution must not manufacture its terminal state."""
+        from switchgear.job import _runner_record
+
+        job_id = "00000000-0000-4000-8000-00000000c201"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 300))
+        runner = _runner_record(
+            job_id=job_id,
+            worktree=str(self.primary.resolve()),
+            harness="fixture-harness",
+            mode="readonly",
+            role="scout",
+            model={"id": "crash-pool/model", "provider": "crash-pool"},
+        )
+        # Keep production construction for every attribution key; replace only
+        # the liveness identity so this fixture is deterministically dead.
+        runner.update({"pid": 2 ** 22, "starttime": "1", "boot_id": "gone"})
+        (jd / "runner.json").write_text(json.dumps(runner))
+
+        worktree_alias = self.tmp / "worktree-alias"
+        worktree_alias.symlink_to(self.primary, target_is_directory=True)
+        p = run_cli(["--state", str(self.state), "--json", "jobs",
+                     "--worktree", str(worktree_alias)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        row = next(r for r in json.loads(p.stdout)["jobs"]
+                   if r["job_id"] == job_id)
+        self.assertEqual(row["state"], "died")
+        self.assertEqual(row["harness"], "fixture-harness")
+        self.assertEqual(row["pool"], "crash-pool")
+        self.assertEqual(row["provider"], "crash-pool")
+        self.assertEqual(row["model"], "crash-pool/model")
+        self.assertEqual(row["dir"], str(self.primary.resolve()))
+
+        # An unreadable result is absence of a usable result, not a reason to
+        # discard the canonical start record's attribution.
+        (jd / "result.json").write_text("{not json")
+        p = run_cli(["--state", str(self.state), "--json", "jobs",
+                     "--worktree", str(worktree_alias)])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        row = next(r for r in json.loads(p.stdout)["jobs"]
+                   if r["job_id"] == job_id)
+        self.assertEqual((row["state"], row["harness"]),
+                         ("died", "fixture-harness"))
+
+    def test_recordless_job_without_runner_stays_unknown_and_unattributed(self):
+        job_id = "00000000-0000-4000-8000-00000000c202"
+        jd = self.state / "jobs" / job_id
+        (jd / "evidence").mkdir(parents=True)
+        (jd / "started_at").write_text(str(time.time() - 300))
+
+        p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        row = next(r for r in json.loads(p.stdout)["jobs"]
+                   if r["job_id"] == job_id)
+        self.assertEqual(row["state"], "unknown")
+        for key in ("mode", "role", "model", "provider", "harness", "pool", "dir"):
+            self.assertIsNone(row[key], f"unknown job gained {key} attribution")
+
+    def test_real_job_runner_carries_complete_start_attribution(self):
+        # This test exercises record construction, not the separately tested
+        # subuid boundary; some hermetic containers advertise subids while
+        # refusing newuidmap at execution time.
+        p = run_cli(
+            self.args("--json", "scout", str(self.primary), "hello"),
+            env={"SWITCHGEAR_NO_UID_BOUNDARY": "1"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        job_id = json.loads(p.stdout)["job_id"]
+        jd = self.state / "jobs" / job_id
+        runner = json.loads((jd / "runner.json").read_text())
+        result = json.loads((jd / "result.json").read_text())
+
+        self.assertEqual(runner["job_id"], job_id)
+        self.assertEqual(runner["dir"], str(self.primary.resolve()))
+        self.assertEqual(runner["harness"], "opencode")
+        self.assertEqual(runner["provider"], "opencode")
+        self.assertEqual(runner["mode"], "readonly")
+        self.assertEqual(runner["role"], "scout")
+        self.assertEqual(runner["model"], result["model"])
+        jobs_p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertEqual(jobs_p.returncode, 0, jobs_p.stderr)
+        jobs = json.loads(jobs_p.stdout)["jobs"]
+        row = next(entry for entry in jobs if entry["job_id"] == job_id)
+        self.assertEqual(row["harness"], result["harness"])
+        self.assertEqual(row["pool"], result["model"]["provider"])
+        self.assertEqual(row["provider"], row["pool"])
+
+        # A legacy result may have neither settled nor legacy harness stamp;
+        # its start record remains the last attribution source.
+        result.pop("harness")
+        result.pop("provider")
+        (jd / "result.json").write_text(json.dumps(result))
+        jobs_p = run_cli(["--state", str(self.state), "--json", "jobs", "--all"])
+        self.assertEqual(jobs_p.returncode, 0, jobs_p.stderr)
+        row = next(entry for entry in json.loads(jobs_p.stdout)["jobs"]
+                   if entry["job_id"] == job_id)
+        self.assertEqual(row["harness"], "opencode")
+
+    def test_awaiting_external_review_is_never_removed(self):
+        job_id = "00000000-0000-4000-8000-00000000c204"
+        jd = self._aged_job(job_id, 900000, status="awaiting_external_review")
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(jd.exists(), "external acceptance evidence was deleted")
+        reasons = {entry["job_id"]: entry["reason"]
+                   for entry in out.get("protected", [])}
+        self.assertEqual(reasons.get(job_id), "awaiting external review")
+
+    def test_external_review_written_after_plan_survives_apply(self):
+        from switchgear import gc as gcmod
+
+        job_id = "00000000-0000-4000-8000-00000000c205"
+        jd = self._aged_job(job_id, 900000)
+        planned = gcmod.plan(str(self.state), older_than_s=3600)
+        rec = json.loads((jd / "result.json").read_text())
+        rec["status"] = "awaiting_external_review"
+        (jd / "result.json").write_text(json.dumps(rec))
+
+        out = gcmod.apply(str(self.state), planned)
+        self.assertTrue(jd.exists(), "delete-time external decision was ignored")
+        kept = {entry["job_id"]: entry["reason"] for entry in out["kept"]}
+        self.assertEqual(kept.get(job_id), "now awaiting external review")
+
+    def test_collecting_job_reclaims_planned_launch_artifacts(self):
+        job_id = "00000000-0000-4000-8000-00000000c206"
+        jd = self._aged_job(job_id, 900000)
+        launch = self.state / "launch"
+        launch.mkdir(exist_ok=True)
+        artifacts = [launch / f"{job_id}{suffix}"
+                     for suffix in (".json", ".out", ".err")]
+        for artifact in artifacts:
+            artifact.write_text("launch evidence")
+
+        p, dry = self._gc("--older-than", "1h")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        candidate = next(c for c in dry["jobs"] if c["job_id"] == job_id)
+        self.assertEqual(set(candidate["launch_artifacts"]),
+                         {str(path) for path in artifacts})
+        self.assertTrue(all(path.exists() for path in artifacts),
+                        "dry run removed a launch artifact")
+
+        p, out = self._gc("--older-than", "1h", "--yes")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(jd.exists())
+        self.assertTrue(all(not path.exists() for path in artifacts))
+        self.assertEqual(set(out["launch_artifacts_removed"]),
+                         {str(path) for path in artifacts})
 
 
 if __name__ == "__main__":

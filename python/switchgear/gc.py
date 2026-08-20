@@ -67,6 +67,14 @@ def _alive(state_path: str, job_id: str, jd: str) -> bool:
     return jobstate.live_state(state_path, job_id, {}, jd) in ("running", "queued")
 
 
+def _launch_artifacts(root: StateRoot, job_id: str) -> list[str]:
+    """Existing launch files tied to a job, computed for the dry-run plan."""
+    launch = os.path.join(root.path, "launch")
+    paths = [os.path.join(launch, f"{job_id}{suffix}")
+             for suffix in (".json", ".out", ".err")]
+    return [path for path in paths if os.path.lexists(path)]
+
+
 def plan(
     state_path: str,
     *,
@@ -114,8 +122,21 @@ def plan(
         def keep(reason: str) -> None:
             protected.append({"job_id": job_id, "state": row["state"], "reason": reason})
 
+        # Launch-only records are classified below from their liveness triple.
+        # Running them through job-directory retention rules would report a
+        # malformed record as protected and then sweep it in the same plan.
+        if not os.path.isdir(jd):
+            continue
+
         if row["state"] == "awaiting_review":
             keep("awaiting review")
+            continue
+        if row["state"] == "awaiting_external_review":
+            # This is an outstanding decision the tool does not own and cannot
+            # observe. It can therefore never learn that the job is finished
+            # with, so collecting its evidence would silently decide for the
+            # external acceptance authority.
+            keep("awaiting external review")
             continue
         if row.get("review_of") in awaiting:
             keep(f"review of {row['review_of']}, which still awaits review")
@@ -153,9 +174,13 @@ def plan(
             "age_s": round(age),
             "bytes": _dir_bytes(jd) if os.path.isdir(jd) else 0,
             "path": jd,
+            # Additive and planned: dry-run callers see every side effect before
+            # --yes can remove the files.
+            "launch_artifacts": _launch_artifacts(root, job_id),
         })
 
-    orphan_launches = _orphan_launch_records(root, {r["job_id"] for r in rows})
+    orphan_launches, protected_launches = _orphan_launch_records(root)
+    protected.extend(protected_launches)
     sessions = _session_candidates(root, rows) if include_sessions else {"remove": [], "skipped": []}
 
     return {
@@ -168,23 +193,44 @@ def plan(
     }
 
 
-def _orphan_launch_records(root: StateRoot, known_jobs: set[str]) -> list[str]:
-    """Launch records whose job directory was never created and whose pid is
-    dead. Pure litter, always eligible -- there is nothing to preserve."""
-    out = []
+def _orphan_launch_records(root: StateRoot) -> tuple[list[str], list[dict[str, str]]]:
+    """Classify launch records that have no job directory.
+
+    Only a record with no usable liveness triple is sweepable litter. A usable
+    dead triple is the sole identity left by a launch that crashed before its
+    job directory existed; deleting it previously erased exactly the crash
+    evidence an operator needed to reconstruct the failure. Live launch-only
+    records are protected for the same reason live jobs are.
+    """
+    out: list[str] = []
+    protected: list[dict[str, str]] = []
     launch = os.path.join(root.path, "launch")
     if not os.path.isdir(launch):
-        return out
+        return out, protected
     for name in sorted(os.listdir(launch)):
         if not name.endswith(".json"):
             continue
         job_id = name[: -len(".json")]
         if os.path.isdir(os.path.join(root.jobs, job_id)):
             continue
-        if jobstate.live_state(root.path, job_id, {}, os.path.join(root.jobs, job_id)) in ("running", "queued"):
+        path = os.path.join(launch, name)
+        liveness = jobstate._liveness(path)
+        if liveness is None:
+            out.append(path)
             continue
-        out.append(os.path.join(launch, name))
-    return out
+        state = jobstate.live_state(
+            root.path, job_id, {}, os.path.join(root.jobs, job_id)
+        )
+        if liveness is False:
+            reason = (
+                "cancelled launch-only record is terminal evidence"
+                if state == "cancelled"
+                else "dead launch-only record is crash evidence"
+            )
+        else:
+            reason = "launch process is still alive"
+        protected.append({"job_id": job_id, "state": state, "reason": reason})
+    return out, protected
 
 
 def _session_candidates(root: StateRoot, rows: list[dict[str, Any]]) -> dict[str, list]:
@@ -243,6 +289,7 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
     """
     root = StateRoot(state_path)
     removed, kept = [], []
+    launch_artifacts_removed: list[str] = []
     freed = 0
     for cand in planned.get("jobs", []):
         job_id = cand["job_id"]
@@ -254,8 +301,15 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
         # protected, so re-read rather than trusting the snapshot.
         try:
             rec = read_json(os.path.join(jd, "result.json"))
-            if rec.get("status") == "awaiting_review":
+            status = rec.get("status")
+            if status == "awaiting_review":
                 kept.append({"job_id": job_id, "reason": "now awaiting review"})
+                continue
+            if status == "awaiting_external_review":
+                # The external authority's outstanding decision is not
+                # observable here, including during the delete-time recheck.
+                kept.append({"job_id": job_id,
+                             "reason": "now awaiting external review"})
                 continue
         except Exception:
             pass
@@ -268,6 +322,17 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
             continue
         freed += cand.get("bytes", 0)
         removed.append(job_id)
+        # The plan named these exact files, and they are reclaimed only after
+        # the corresponding job directory was actually removed.
+        expected = set(_launch_artifacts(root, job_id))
+        for path in cand.get("launch_artifacts", []):
+            if path not in expected:
+                continue
+            try:
+                os.unlink(path)
+            except OSError:
+                continue
+            launch_artifacts_removed.append(path)
 
     for path in planned.get("orphan_launch_records", []):
         try:
@@ -289,7 +354,9 @@ def apply(state_path: str, planned: dict[str, Any]) -> dict[str, Any]:
     return {
         "removed": removed,
         "kept": kept,
+        "protected": planned.get("protected", []),
         "sessions_removed": sessions_removed,
         "launch_records_removed": len(planned.get("orphan_launch_records", [])),
+        "launch_artifacts_removed": launch_artifacts_removed,
         "bytes_freed": freed,
     }

@@ -78,6 +78,31 @@ def _now() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
 
+def _runner_record(
+    *, job_id: str, worktree: str, harness: str, mode: str, role: str,
+    model: dict[str, Any],
+) -> dict[str, Any]:
+    """Launch identity and attribution persisted before provider execution.
+
+    Keeping fixture construction on this path matters: a crashed job has no
+    result record to correct an incomplete runner record after the fact.
+    """
+    return {
+        "pid": os.getpid(),
+        "starttime": lease._starttime(os.getpid()),
+        "boot_id": lease._boot_id(),
+        "job_id": job_id,
+        "dir": worktree,
+        "harness": harness,
+        "mode": mode,
+        "role": role,
+        "model": model,
+        # Kept as the legacy harness key because projections of running jobs
+        # resolve their adapter from it. It does not name the model pool here.
+        "provider": harness,
+    }
+
+
 def _timeout(policy: CompiledPolicy) -> int:
     env = os.environ.get("AI_OPENCODE_TIMEOUT")
     if env is not None and env != "":
@@ -433,14 +458,14 @@ def run_job(
     try:
         atomic_write_json(
             os.path.join(dirs["job"], "runner.json"),
-            {
-                "pid": os.getpid(),
-                "starttime": lease._starttime(os.getpid()),
-                "boot_id": lease._boot_id(),
-                # Written at START so a projection over a RUNNING job resolves
-                # the right adapter -- which is when logs/status are used most.
-                "provider": adapter.name,
-            },
+            _runner_record(
+                job_id=job_id,
+                worktree=ident.realpath,
+                harness=adapter.name,
+                mode=mode,
+                role=role,
+                model=model,
+            ),
         )
     except Exception:
         # Never fail a job because its liveness marker could not be written; the

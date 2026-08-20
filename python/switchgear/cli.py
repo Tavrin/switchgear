@@ -1220,6 +1220,8 @@ def cmd_gc(ns: argparse.Namespace) -> int:
             print(f"would remove {len(planned['jobs'])} job(s), {mb:.1f}MB")
             for c in planned["jobs"]:
                 print(f"  {c['job_id'][:8]}  {c['state']:16} age {c['age_s']}s")
+                for artifact in c.get("launch_artifacts", []):
+                    print(f"    launch artifact {artifact}")
             if planned["orphan_launch_records"]:
                 print(f"  + {len(planned['orphan_launch_records'])} orphaned launch record(s)")
             for sess in planned["sessions"]:
@@ -1242,6 +1244,8 @@ def cmd_gc(ns: argparse.Namespace) -> int:
         print(f"removed {len(result['removed'])} job(s), freed {mb:.1f}MB")
         for k in result["kept"]:
             print(f"  kept {k['job_id'][:8]}: {k['reason']}")
+        for pr in result.get("protected", []):
+            print(f"  protected {pr['job_id'][:8]}: {pr['reason']}")
     return 0
 
 
