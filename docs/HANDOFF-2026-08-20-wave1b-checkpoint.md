@@ -115,6 +115,11 @@ Open, evidence recorded, none blocking:
    re-validating it.** Named explicitly in `docs/ARCHITECTURE.md` rather than
    glossed, so the "validated before every write" claim is true as written.
    Correcting the write is a separate decision.
+   **Correction (2026-08-20, pre-rc1):** the symbol above is wrong.
+   `WorktreeLock.__enter__` only takes an flock and returns `{}`; it writes no
+   token at all. The mutate-then-write was `lease.WorkerLock.__enter__`. The
+   write now re-validates, so the exception this residual recorded no longer
+   exists, and `docs/ARCHITECTURE.md` no longer claims it does.
 2. **`gc._session_candidates` takes job rows it never reads**, and implements its
    documented skip-the-unverifiable rule with `os.path.exists`, which returns
    `False` for a permission error instead of raising. See

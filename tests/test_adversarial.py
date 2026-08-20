@@ -1642,6 +1642,48 @@ class RailTests(unittest.TestCase):
         self.assertNotIn('tmp = path + ".tmp"', body)
         self.assertIn("uuid", body)
 
+    def test_atomic_write_cleans_up_when_serialization_fails(self):
+        """The cleanup covered only `os.replace`, so json.dumps failures left
+        unique temp files behind even though the comment promised otherwise."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear.state import atomic_write_json
+
+        target = self.tmp / "serialization.json"
+        before = b'{"original": true}\n'
+        target.write_bytes(before)
+        with self.assertRaises(TypeError):
+            atomic_write_json(str(target), {"not_json": object()})
+        self.assertEqual(target.read_bytes(), before, "the destination changed")
+        strays = list(self.tmp.glob(f"{target.name}.*.tmp"))
+        self.assertEqual(
+            strays, [], "serialization failure left its temp file behind"
+        )
+
+    def test_atomic_write_drains_short_writes(self):
+        """A single os.write can legally write only a prefix. Installing that
+        prefix made the atomic rename preserve truncated JSON."""
+        from unittest.mock import patch
+
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear.state import atomic_write_json
+
+        target = self.tmp / "short-write.json"
+        obj = {"payload": "long enough to require several writes"}
+        expected = json.dumps(obj, indent=2, sort_keys=True).encode() + b"\n"
+        real_write = os.write
+
+        def short_write(fd, data):
+            return real_write(fd, data[:7])
+
+        with patch("switchgear.state.os.write", side_effect=short_write) as mocked:
+            atomic_write_json(str(target), obj)
+
+        self.assertGreater(mocked.call_count, 1, "short write was not retried")
+        self.assertEqual(
+            target.read_bytes(), expected,
+            "atomic_write_json stopped after a short os.write",
+        )
+
     # --- wait: one call instead of a polling loop -----------------------------
 
     def test_wait_blocks_and_answers_like_a_foreground_run(self):
@@ -1778,6 +1820,108 @@ class RailTests(unittest.TestCase):
         self.assertNotIn("Traceback", rel.stderr)
         self.assertNotIn("Bad file descriptor", rel.stderr)
         run_cli(self.args("cancel", job_id))
+
+    def test_worker_lock_validates_the_mutated_token_before_writing(self):
+        """`load_token` validated the token, then WorkerLock stamped `job_id`
+        and wrote the mutation without proving the durable record was valid."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear import identity, lease
+        from switchgear.errors import Refuse
+        from switchgear.schema import validate
+        from switchgear.state import StateRoot
+
+        acquired = run_cli(self.args("--json", "lease", "acquire", "--dir",
+                                     str(self.wt), "--mode", "bounded-write"))
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        lease_info = json.loads(acquired.stdout)
+        token_path = Path(lease_info["file"])
+        before = token_path.read_bytes()
+        token = json.loads(before)
+
+        # Prove the mutation constructed by this test violates the real schema.
+        with self.assertRaises(Refuse):
+            validate({**token, "job_id": 7}, "lease.schema.json")
+
+        root = StateRoot(str(self.state))
+        ident = identity.inspect_worktree(str(self.wt))
+        with self.assertRaises(
+            Refuse, msg="WorkerLock wrote a token made invalid by its job_id mutation"
+        ):
+            with lease.WorkerLock(root, ident, lease_info["lease"], 7,
+                                  "bounded-write"):
+                pass
+        self.assertEqual(
+            token_path.read_bytes(), before,
+            "WorkerLock changed the on-disk token after validation failed",
+        )
+        with lease.WorkerLock(root, ident, lease_info["lease"], "valid-job",
+                              "bounded-write") as locked:
+            self.assertEqual(locked["job_id"], "valid-job",
+                             "validation failure left the worker lock held")
+
+    def test_release_refuses_a_schema_invalid_token_with_a_remedy(self):
+        """Release authorized deletion from two fields in raw JSON, so a token
+        missing every other required field was accepted and deleted."""
+        sys.path.insert(0, str(ROOT / "python"))
+        from switchgear import identity, lease
+        from switchgear.errors import Refuse
+        from switchgear.state import StateRoot
+
+        acquired = run_cli(self.args("--json", "lease", "acquire", "--dir",
+                                     str(self.wt), "--mode", "bounded-write"))
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        lease_info = json.loads(acquired.stdout)
+        token_path = Path(lease_info["file"])
+        poisoned = {
+            "lease_uuid": lease_info["lease"],
+            "owner": "controller",
+        }
+        token_path.write_text(json.dumps(poisoned) + "\n")
+
+        root = StateRoot(str(self.state))
+        ident = identity.inspect_worktree(str(self.wt))
+        with self.assertRaises(
+            Refuse, msg="release trusted and deleted a schema-invalid token"
+        ) as ctx:
+            lease.release(root, ident, lease_info["lease"], "controller")
+        refusal = str(ctx.exception)
+        self.assertIn("schema-invalid", refusal)
+        self.assertIn(str(token_path), refusal)
+        self.assertIn("switchgear lease acquire", refusal)
+        self.assertTrue(token_path.is_file(), "release deleted the invalid token")
+
+        token_path.write_text("{not valid JSON\n")
+        with self.assertRaises(Refuse) as malformed_ctx:
+            lease.release(root, ident, lease_info["lease"], "controller")
+        malformed_refusal = str(malformed_ctx.exception)
+        self.assertIn("not valid JSON", malformed_refusal)
+        self.assertIn(str(token_path), malformed_refusal)
+        self.assertIn("switchgear lease acquire", malformed_refusal)
+        self.assertTrue(token_path.is_file(), "release deleted the malformed token")
+
+    def test_lease_validation_docs_name_the_real_write_path(self):
+        """The architecture attributed the token mutation to WorktreeLock,
+        whose __enter__ takes only an flock and never writes a token."""
+        architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text()
+        contract_box = architecture.split("## 1. Scope", 1)[0]
+        self.assertNotIn(
+            "`lease.WorktreeLock.__enter__` stamping `job_id`", contract_box,
+            "architecture still attributes the token write to WorktreeLock",
+        )
+        self.assertIn(
+            "after `WorkerLock.__enter__`", contract_box,
+            "architecture does not name the actual mutation boundary",
+        )
+        checkpoint = (
+            ROOT / "docs" / "HANDOFF-2026-08-20-wave1b-checkpoint.md"
+        ).read_text()
+        # Loose on purpose: the checkpoint is a dated record and its wording may
+        # be revised, but it must not be left asserting the wrong symbol with no
+        # correction beside it.
+        self.assertIn(
+            "WorkerLock.__enter__", checkpoint,
+            "the historical checkpoint has no correction for its wrong symbol",
+        )
 
     def test_no_lock_path_closes_a_descriptor_twice(self):
         """Structural, because this bug is invisible until the contended path
