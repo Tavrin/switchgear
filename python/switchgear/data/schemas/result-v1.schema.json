@@ -1,9 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "title": "Job result v2",
+  "title": "Job result v1 (historical)",
   "type": "object",
   "required": [
-    "schema_version",
     "job_id",
     "status",
     "mode",
@@ -18,20 +17,12 @@
   "properties": {
     "schema_version": {
       "type": "integer",
-      "const": 2,
-      "description": "Version 2 of the closed result record, which adds session_store_id. Historical v1 records are validated against result-v1.schema.json."
+      "const": 1,
+      "description": "Historical v1 record. The field may be absent on records that predate explicit versioning."
     },
     "job_id": {
       "type": "string",
       "minLength": 1
-    },
-    "session_store_id": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-      "description": "Controller-minted provider conversation lineage. Null or absent only on historical records."
     },
     "correlation": {
       "type": "object",

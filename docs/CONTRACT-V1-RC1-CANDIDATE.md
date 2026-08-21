@@ -31,15 +31,17 @@ from a clean worktree:
 
 | contract | version | where it is declared |
 |---|---|---|
-| `result.json` record | `schema_version: 1` | `data/schemas/result.schema.json` |
+| `result.json` record | `schema_version: 2` for new records; absent/`1` remains readable | `data/schemas/result.schema.json` (v2), `data/schemas/result-v1.schema.json` (historical v1) |
 | normalized event stream | **`2`** | `evidence/events.v2.jsonl`, `v: 2` on every line, `artifacts.events_normalized_version`, and `runner.json` for a job with no result yet |
 | `logs` digest projection | **`1`** | `digest_v` on every digest line and in the `--json` envelope |
 | session store binding | **`1`** | `binding.json` `binding_version`, `data/schemas/session-binding.schema.json` |
 | contract fixture pack | **`1`** | `tests/fixtures/adapter-v1-contract-fixtures.v1/MANIFEST.json` |
 | task envelope | unchanged | `data/schemas/task-envelope.schema.json`, closed |
 
-`schema_version` did **not** move. Every record change in this wave is additive:
-`session_store_id` is a new key, and no existing key changed meaning.
+`schema_version` moved to **2** because both result schemas are closed and
+`session_store_id` breaks a strict reader pinned to the historical v1 shape.
+The frozen v1 schema omits that field and accepts `schema_version` absent or 1;
+the v2 schema includes it and is pinned to 2. Both remain closed.
 
 ## 2. Lifecycle and state semantics
 
@@ -82,7 +84,7 @@ and creates no job.
 Five events, discriminated by `event`: `status`, `tool`, `text`, `progress`,
 `finished`. Every line carries `v`.
 
-On `finished`, execution outcome and closing-text presence are now
+On `finished`, transcript status and closing-text presence are now
 **orthogonal**:
 
 ```
@@ -111,6 +113,13 @@ however much assistant text preceded it.
 **Change presence never comes from the terminal status.** It comes from
 `change.state` and `freeze.changed_files`, computed by the controller from the
 worktree.
+
+**`finished.status` is a transcript interpretation, not the job outcome.** It
+normalizes what the provider's event stream says. `result.execution.outcome` is
+authoritative for provider execution, while projected `result.status` is the job
+outcome. The committed `provider_error` fixture proves the distinction: its
+transcript finishes `completed` with `final_text_state=empty`, but the provider
+exits 7 and both result fields say `provider_error`.
 
 ## 5. Legacy compatibility
 
@@ -241,7 +250,8 @@ worker sandbox**.
 code paths. Never hand-authored.
 
 Scenarios: `ok`, `empty_final_text_with_change`, `awaiting_external_review`,
-`provider_error`, `needs_input`, `dirty`, `crashed_launch_only`, plus
+`provider_error`, `legacy_v1` (explicitly derived through the real projection),
+`needs_input`, `dirty`, `crashed_launch_only`, plus
 `gc_plan.json` and `gc_applied.json`.
 
 A consumer needs none of this repository to use the pack: it is decodable JSON,
@@ -266,12 +276,14 @@ conversation.
 
 ### Architectural residual
 
-- **`gc` and an active resume can race on a session lineage.** `gc` re-verifies
+- **`gc` and active session use can race on a session lineage.** `gc` re-verifies
   the binding, its digest, the bound worktree's absence and the lease at delete
-  time, but holds no lock across the delete, and a resumed job's verification is
-  not held through mounting. To lose a conversation the worktree must be absent
-  at plan AND at the delete-time recheck, then reappear and be resumed in the
-  window before `rmtree` — with `--include-sessions --yes` explicitly given.
+  time, but holds no lock across the delete or across a job's use of the store.
+  A currently running read-only or otherwise session-using job can lose its
+  lineage when its bound worktree disappears while the job is running and
+  destructive `gc --include-sessions --yes` executes: gc sees the path as absent
+  and deletes the store underneath the live job. No later reappearance and no
+  resume is required.
   Closing it properly needs a lock held across session use, which is a design
   change and was deliberately not made at a freeze. **Accepted by the owner as
   an rc1 residual; recorded, not fixed.**
@@ -297,7 +309,7 @@ conversation.
   paid** — a test now asserts the documented key set equals what `_print_job`
   emits, because that list was found wrong by twelve keys.
 - Everything in `ROADMAP.md` §§1–5 and 9–10, plus correlation persisted
-  pre-result and a `schema_version` bump-guard test.
+  pre-result. The `schema_version` bump guard is now implemented.
 
 ### Unsupported / unknown
 
@@ -330,7 +342,8 @@ conversation.
 - `evidence/events.jsonl` — the provider's raw stdout, forensic evidence whose
   shape is whichever CLI ran. It is explicitly not a contract;
 - the record's `exit` as though it were the CLI's exit code;
-- `finished.status` for whether files changed;
+- `finished.status` for whether files changed, whether the provider process
+  succeeded, or the overall job outcome; it describes only the transcript;
 - `final_text_state == unknown` appearing from a live run — it will not;
 - the digest as a versionless stable shape: branch on `digest_v`, and on an
   unrecognised value fall back to `logs --format normalized` rather than

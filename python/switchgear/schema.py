@@ -46,3 +46,27 @@ def validate(instance: Any, schema_name: str) -> None:
         jsonschema.Draft7Validator(schema, resolver=resolver).validate(instance)
     except jsonschema.ValidationError as exc:
         raise Refuse(f"{schema_name} validation failed: {exc.message}") from exc
+
+
+def validate_result(record: Any) -> None:
+    """Validate a result against the version the record itself declares.
+
+    Dispatch must fail closed. Treating an unknown version as today's schema
+    would repeat the normalized-event bug: accepting a shape under a contract
+    number this build cannot actually honour.
+    """
+    version = record.get("schema_version") if isinstance(record, dict) else None
+    if version is None or (isinstance(version, int)
+                           and not isinstance(version, bool)
+                           and version == 1):
+        validate(record, "result-v1.schema.json")
+        return
+    if isinstance(version, int) and not isinstance(version, bool) and version == 2:
+        validate(record, "result.schema.json")
+        return
+    raise Refuse(
+        f"unsupported result schema_version={version!r}; this build reads "
+        "historical version 1 and current version 2. Use a Switchgear build "
+        "that supports the record's version, or restore the correct result "
+        "record from its evidence."
+    )

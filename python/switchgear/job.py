@@ -16,12 +16,12 @@ from .paths import require_disjoint, safe_rmtree
 from .policy import CompiledPolicy, compile_policy
 from .profile import load_profile
 from .registry import model_record, provider_record as registry_provider, registry_digest, wire_model_names
-from .schema import validate
+from .schema import validate, validate_result
 from .state import StateRoot, atomic_write_json, new_job_id, read_json
 
 
 # Contract version of the durable job record. See the note where it is written.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # A caller's own identifiers, carried through and handed back. Bounded so a
 # record cannot be used as a side-channel store, and NEVER read for policy,
@@ -270,6 +270,10 @@ def _assert_no_credentials(store: str) -> None:
 #: consumer that finds the file it knows how to read does not have to open it to
 #: discover whether it can.
 NORMALIZED_EVENTS_VERSION = 2
+# Recomputed projections may spell the historical v1 vocabulary or native v2.
+# Keeping this explicit prevents a future record from making this build stamp
+# today's vocabulary with a version number whose meaning it does not know.
+SUPPORTED_NORMALIZED_EVENTS_VERSIONS = frozenset({1, NORMALIZED_EVENTS_VERSION})
 NORMALIZED_EVENTS_NAME = f"events.v{NORMALIZED_EVENTS_VERSION}.jsonl"
 
 
@@ -494,7 +498,7 @@ def run_job(
                 session_store_id=session_store_id,
             ),
         )
-    except Exception:
+    except Exception as exc:
         # Attribution failure now refuses the launch. create_job_dirs has
         # already made a job that gc must protect as unknown, so leaving it here
         # would strand permanent litter on every refused launch.
@@ -509,7 +513,12 @@ def run_job(
             # the caller can remedy, while the leftover directory is visible
             # evidence an operator can remove deliberately.
             pass
-        raise
+        raise Refuse(
+            f"could not write launch attribution runner.json for job {job_id} "
+            f"({type(exc).__name__}: {exc}), so the provider launch was refused "
+            "before it could start. Check the state root's permissions and free "
+            "space, then retry the job."
+        ) from exc
     lock_cm = None
     token_uuid = None
     if mode == "bounded-write":
@@ -945,11 +954,10 @@ def run_job(
         )
 
         record = {
-            # Bumped only for a CHANGE THAT BREAKS A READER. Additive keys do not
-            # move it -- the CLI already promises additive-only JSON, and a
-            # version that increments on every addition tells a consumer nothing.
-            # Absent means 1: records written before this existed are still valid
-            # and must stay readable.
+            # Bumped for a CHANGE THAT BREAKS A READER. session_store_id was
+            # additive to our projection but broke strict readers because the
+            # durable schema is closed, so new records are v2. Absent/1 remains
+            # the frozen historical shape and is dispatched to its own schema.
             "schema_version": SCHEMA_VERSION,
             "job_id": job_id,
             "session_store_id": session_store_id,
@@ -1161,7 +1169,7 @@ def run_job(
         # strip None error for schema
         if record.get("error") is None:
             record.pop("error", None)
-        validate(record, "result.schema.json")
+        validate_result(record)
         atomic_write_json(os.path.join(dirs["job"], "result.json"), record)
         _reclaim_sandbox_home(dirs["home"], root.path)
         return record
@@ -1207,8 +1215,8 @@ def attach_review(
     root = StateRoot(state_path)
     subject_path = os.path.join(root.job_dir(subject_job), "result.json")
     subject = read_json(subject_path)
-    validate(subject, "result.schema.json")
-    validate(reviewer_record, "result.schema.json")
+    validate_result(subject)
+    validate_result(reviewer_record)
     freeze = subject.get("freeze") or {}
     smodel = freeze.get("model") or subject["model"]
     rmodel = reviewer_record["model"]

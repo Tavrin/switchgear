@@ -220,7 +220,7 @@ The first draft was missing fields the orchestrator actually consumes
 | `v` | the contract version carried by every normalized event |
 | `sessionID` — see correction below | captured for resume; **without it, reply-by-restart cannot work at all** |
 | `turns`, `costUSD` (deltas or totals; both handled at `:123-127`) | cumulative usage for the record |
-| `finished.status` ∈ `completed` / `needs_input` / `failed` | execution outcome; `needs_input` parks the ticket back to the operator, while `failed` records provider errors and streams that ended without a terminal event |
+| `finished.status` ∈ `completed` / `needs_input` / `failed` | normalized interpretation of the provider transcript; `needs_input` marks an event-stream input request, while `failed` marks an interpreted error or a stream that ended without a terminal event |
 | `finished.final_text_state` ∈ `present` / `empty` / `unknown` | closing assistant text presence, independent of outcome; live v2 emits only `present`/`empty`, while consumer-upgraded v1 failures and input requests use `unknown` |
 | `exitSummary` text | shown on the record |
 | `text{content}` | mid-run display; the orchestrator truncates to 400 chars per line (measured in the consuming orchestrator) |
@@ -228,6 +228,12 @@ The first draft was missing fields the orchestrator actually consumes
 The v2/v1 mapping above is exact in both directions; do not infer a text state
 for v1 `needs_input` or `failed`. Read `change.state` and `freeze.changed_files`
 for controller-measured change presence rather than any transcript field.
+
+`finished.status` is not the authoritative process or job outcome. Read
+`result.execution.outcome` for provider execution and projected `result.status`
+for the job outcome. The committed `provider_error` fixture pins the deliberate
+divergence: its transcript finishes `completed` with empty final text, while the
+provider exits 7 and both result fields report `provider_error`.
 
 **Drop `changed_files` from the orchestrator-facing contract.** The orchestrator never trusts
 agent-reported file lists: it derives the result manifest itself from git at

@@ -83,6 +83,10 @@ COMPLETE_JOB_FILES = frozenset({
     "result.json", "runner.json", "events.v2.jsonl", "jobs-row.json",
     "logs-digest.json", "logs-normalized.json",
 })
+LEGACY_V1_FILES = frozenset({
+    "result.json", "runner.json", "events.v1.jsonl", "jobs-row.json",
+    "logs-digest.json", "logs-normalized.json",
+})
 
 # This is the one declaration shared by capture and verification. Letting the
 # generator and pack test each carry their own list would allow the same missing
@@ -97,6 +101,7 @@ EXPECTED_SCENARIO_FILES = {
 EXPECTED_SCENARIO_FILES["crashed_launch_only"] = frozenset({
     "runner.json", "jobs-row.json",
 })
+EXPECTED_SCENARIO_FILES["legacy_v1"] = LEGACY_V1_FILES
 EXPECTED_ROOT_FILES = frozenset({
     "MANIFEST.json", "gc_plan.json", "gc_applied.json",
 })
@@ -327,6 +332,80 @@ class Capture:
         assert rec["status"] == "provider_error", rec["status"]
         self._capture_job("provider_error", rec["job_id"], worktree=self.primary)
 
+    def scenario_legacy_v1(self) -> None:
+        """Derive historical v1 only through the real projection and v1 rule.
+
+        This build emits v2 records, so claiming a directly captured v1 record
+        would be false. The run itself is real; only the documented historical
+        transformations are applied and declared in the manifest.
+        """
+        proc = self._run(
+            "--json", "scout", str(self.primary), "probe",
+            env={"SWITCHGEAR_MOCK_BEHAVIOR": "ok"},
+        )
+        rec = json.loads(proc.stdout)
+        assert rec["status"] == "ok", rec["status"]
+        job_id = rec["job_id"]
+        jd = self.state / "jobs" / job_id
+        result_path = jd / "result.json"
+        captured = json.loads(result_path.read_text())
+
+        # Projection precedence reads this durable fact. Asking the real CLI
+        # after changing it is what proves events.v1.jsonl is genuine v2 -> v1
+        # output rather than a hand-authored imitation.
+        captured["artifacts"]["events_normalized_version"] = 1
+        result_path.write_text(json.dumps(captured, indent=2) + "\n")
+        normalized = self._run(
+            "--json", "logs", job_id, "--format", "normalized"
+        )
+        if normalized.returncode != 0:
+            raise RuntimeError(
+                "legacy_v1 real normalized projection failed: "
+                f"{normalized.stderr.strip()}"
+            )
+        normalized_payload = json.loads(normalized.stdout)
+        assert normalized_payload["v"] == 1, normalized_payload
+        self._write_jsonl(
+            "legacy_v1", "events.v1.jsonl", normalized_payload["events"]
+        )
+        self._write("legacy_v1", "logs-normalized.json", normalized_payload)
+
+        # The exact documented v1 record rule. Do not invent a historical run:
+        # derive it from the real captured record, and declare that provenance.
+        legacy_result = dict(captured)
+        legacy_result.pop("session_store_id", None)
+        legacy_result["schema_version"] = 1
+        self._write("legacy_v1", "result.json", legacy_result)
+        self._write(
+            "legacy_v1", "runner.json",
+            json.loads((jd / "runner.json").read_text()),
+        )
+
+        rows = json.loads(self._run(
+            "--json", "jobs", "--worktree", str(self.primary), "--all"
+        ).stdout)
+        row = next((item for item in rows["jobs"] if item["job_id"] == job_id), None)
+        if row is None:
+            raise RuntimeError("legacy_v1 produced no required jobs --json row")
+        self._write("legacy_v1", "jobs-row.json", row)
+
+        digest = self._run("--json", "logs", job_id)
+        if digest.returncode != 0:
+            raise RuntimeError(
+                f"legacy_v1 digest projection failed: {digest.stderr.strip()}"
+            )
+        self._write("legacy_v1", "logs-digest.json", json.loads(digest.stdout))
+
+        actual = {
+            path.name for path in (self.out / "legacy_v1").iterdir()
+            if path.is_file()
+        }
+        if actual != set(EXPECTED_SCENARIO_FILES["legacy_v1"]):
+            raise RuntimeError(
+                f"scenario legacy_v1 captured {sorted(actual)}, expected "
+                f"{sorted(EXPECTED_SCENARIO_FILES['legacy_v1'])}"
+            )
+
     def scenario_needs_input(self) -> None:
         """Event vocabulary and record vocabulary disagree, both correctly."""
         proc = self._run("--json", "scout", str(self.primary), "probe",
@@ -397,7 +476,7 @@ class Capture:
     # ---- pack metadata -----------------------------------------------------
 
     def manifest(self, scenarios: dict[str, str]) -> None:
-        from switchgear.job import NORMALIZED_EVENTS_VERSION
+        from switchgear.job import NORMALIZED_EVENTS_VERSION, SCHEMA_VERSION
         from switchgear.cli import DIGEST_VERSION
 
         if set(scenarios) != set(EXPECTED_MANIFEST_SCENARIOS):
@@ -413,14 +492,15 @@ class Capture:
             "pack": PACK_NAME,
             "pack_version": PACK_VERSION,
             "_what": (
-                "Durable records exactly as the rail wrote them, captured from "
-                "real hermetic runs of the committed mock provider through the "
-                "real code paths. Never hand-authored."
+                "Current-version durable records exactly as the rail wrote them, "
+                "captured from real hermetic runs of the committed mock provider "
+                "through the real code paths. legacy_v1 is the declared derived "
+                "exception and is never hand-authored."
             ),
             "_regenerate": "python3 tests/helpers/capture_contract_fixtures.py",
             "captured_from_commit": commit,
             "contract_versions": {
-                "result_schema_version": 1,
+                "result_schema_version": SCHEMA_VERSION,
                 "normalized_events_version": NORMALIZED_EVENTS_VERSION,
                 "digest_version": DIGEST_VERSION,
             },
@@ -434,6 +514,14 @@ class Capture:
                 "semantic_fields": "preserved verbatim; never reconciled by hand",
             },
             "volatile_values": VOLATILE_NOTE,
+            "derivations": {
+                "legacy_v1": (
+                    "DERIVED_BY_REAL_PROJECTION: captured a real v2 run, set its "
+                    "recorded events_normalized_version to 1, captured the real "
+                    "logs --format normalized output, then derived result v1 by "
+                    "dropping session_store_id and setting schema_version to 1"
+                )
+            },
             "scenarios": scenarios,
         })
 
@@ -487,6 +575,7 @@ def main() -> int:
         cap.scenario_completed_empty_with_change()
         external = cap.scenario_external()
         cap.scenario_provider_error()
+        cap.scenario_legacy_v1()
         cap.scenario_needs_input()
         cap.scenario_dirty()
         cap.scenario_crashed_launch_only()
@@ -504,6 +593,11 @@ def main() -> int:
                 "exit 0, promote refused, the caller's gate decides"
             ),
             "provider_error": "the provider exited non-zero after a well-formed handoff",
+            "legacy_v1": (
+                "DERIVED_BY_REAL_PROJECTION historical v1: a real run projected "
+                "through logs --format normalized, with the result transformed "
+                "only by dropping session_store_id and setting schema_version=1"
+            ),
             "needs_input": (
                 "the normalized terminal event says needs_input while "
                 "result.json says provider_error -- two vocabularies "

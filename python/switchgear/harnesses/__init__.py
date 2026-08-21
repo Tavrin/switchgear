@@ -30,6 +30,12 @@ present or empty; unknown is only the honest consumer-side upgrade of a v1
 needs_input or failed event, because v1 discarded text presence for those
 outcomes.
 
+`finished.status` interprets what the PROVIDER'S EVENT STREAM says; it is not
+the authoritative process or job outcome. `result.execution.outcome` records
+provider execution, and the projected `result.status` records the job outcome.
+A transcript can therefore finish `completed` even when the provider process
+later exits non-zero and the result records `provider_error`.
+
 The exact v2 -> v1 terminal mapping is (completed,present) -> completed;
 (completed,empty) -> completed_empty; (needs_input,present) and
 (needs_input,empty) -> needs_input; (failed,present) and (failed,empty) ->

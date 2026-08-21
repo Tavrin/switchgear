@@ -19,7 +19,7 @@ from .base import (
     TERMINAL_NEEDS_INPUT,
     TEXT_LIMIT,
 )
-from ..errors import ProviderError
+from ..errors import ProviderError, Refuse
 
 
 def parse_lenient(text: str) -> tuple[list[dict[str, Any]], int]:
@@ -211,7 +211,17 @@ def down_project_v2_events_to_v1(
         item = dict(event, v=1)
         final_text_state = item.pop("final_text_state", None)
         if item.get("event") == "finished":
-            item["status"] = terminal_status[(item.get("status"), final_text_state)]
+            pair = (item.get("status"), final_text_state)
+            try:
+                item["status"] = terminal_status[pair]
+            except KeyError as exc:
+                # This is a public projection path. A new or corrupt pair must
+                # name the contract mismatch, not escape as a bare mapping error.
+                raise Refuse(
+                    "cannot down-project normalized v2 finished event with "
+                    f"(status, final_text_state)={pair!r}; restore one of the "
+                    "documented v2 terminal pairs before requesting v1 output"
+                ) from exc
         projected.append(item)
     return projected
 

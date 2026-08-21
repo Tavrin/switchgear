@@ -67,7 +67,7 @@ liveness fact to wait on. These derived states never appear in `result.json`.
 
 ```
 schema_version, job_id, session_store_id, status, execution, integrity_outcome,
-change, acceptance, mode, role, model, harness, provider, started, finished,
+change, acceptance, mode, role, model, harness, pool, provider, started, finished,
 effort, queued_s, dir, exit, error, artifacts{events, events_normalized,
 events_normalized_version, stderr, handoff}, freeze, review, provider_calls,
 delegation, cost_usd, resumed, security, correlation
@@ -75,6 +75,22 @@ delegation, cost_usd, resumed, security, correlation
 
 Those keys are **additive-only**; new keys may appear, existing ones will not
 change meaning. Without `--json` the output is `key=value` lines for humans.
+
+The canonical nouns and compatibility aliases are intentionally explicit:
+
+| surface | canonical `harness` | canonical `pool` | compatibility `provider` |
+|---|---|---|---|
+| `jobs --json` row | agent CLI/executable family | model-serving provider/pool | alias of **`pool`** |
+| single-job `--json` projection / durable `result.json` | agent CLI/executable family | projection: `pool`; durable record: `model.provider` | alias of **`harness`** |
+
+Bare `provider` is surface-specific historical compatibility, not a canonical
+cross-surface field. Consumers must read `harness` for the executable family and
+`pool` (or durable `model.provider`) for the model-serving pool.
+
+New durable results carry `schema_version: 2`. Historical results with the
+field absent or equal to `1` remain readable under the closed v1 schema; v2 is
+also closed and adds `session_store_id`. Result schema versions are independent
+of the separately named `contract-v1` interface.
 
 > **`exit` on the record is the PROVIDER's exit code, not this CLI's.** The two
 > are different numbers with different meanings and the difference is not
@@ -101,8 +117,13 @@ against one real consumer, but nothing in it is specific to that consumer:
 - **`finished.status`** is one of `completed`, `needs_input` or `failed`.
   **`finished.final_text_state`** independently records `present`, `empty` or
   `unknown`. A live v2 run emits only `present` or `empty`; `unknown` exists for
-  honest consumer upgrades of historical v1 `needs_input`/`failed` events. The
-  outcome maps onto the orchestrator's outcome states — except
+  honest consumer upgrades of historical v1 `needs_input`/`failed` events.
+  `finished.status` is the normalized interpretation of the **provider's transcript**, not the
+  authoritative process or job outcome. Read `result.execution.outcome` for
+  provider execution and projected `result.status` for the job outcome. The
+  committed `provider_error` fixture deliberately has `finished.status=completed`
+  while both result fields report `provider_error`. The transcript interpretation
+  maps onto the orchestrator's event states — except
   `sawTerminal: false`, which is **never** `completed`. A run that ended without
   the provider closing its stream reports `failed` with a truncation
   `exitSummary`, however much assistant text it emitted first. "Claims done,
@@ -479,9 +500,11 @@ absent, and session retention is deliberately not coupled to job protection.
 > **`gc --include-sessions --yes` is destructive and is NOT concurrent-safe with
 > `resume` or with a running job's session use.** The bound path, the binding
 > digest and the lease are all re-checked immediately before deletion, but no
-> lock is held across the delete, and a resumed job's binding verification is
-> not held through mounting. If a bound worktree reappears and is resumed inside
-> that window, a conversation can be removed underneath it. Run destructive
+> lock is held across the delete or across a job's session use. A currently
+> running read-only or otherwise session-using job can lose its lineage when its
+> bound worktree disappears while it is running: gc sees the path as absent and
+> can delete the store already mounted by that live job. No later reappearance
+> and no resume is required. Run destructive
 > session collection when nothing is resuming or running — an idle window, or a
 > maintenance step — and do not build a caller that treats it as safe to run
 > concurrently with dispatch. This is a recorded rc1 residual rather than a

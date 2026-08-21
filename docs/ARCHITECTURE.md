@@ -141,7 +141,7 @@ Four, and only these:
 | contract | where | stability |
 |---|---|---|
 | the CLI's argv and exit codes | `switchgear capabilities` | 0 ok · 1 refusal/error · 2 dirty **or argparse usage error** · 124 timeout |
-| `result.json` | `data/schemas/result.schema.json` | additive keys; `schema_version` moves only on a breaking change |
+| `result.json` | `data/schemas/result.schema.json` (v2), `result-v1.schema.json` (historical) | both closed; absent/1 dispatches to v1, 2 to v2, and unknown versions refuse |
 | the normalized event stream | `evidence/events.v<N>.jsonl` (`v2` now), `logs --format normalized` | versioned in the filename and on every line; read-back uses the result's recorded version, or the start-time `runner.json` version before a result exists. Records predating both stamps default to v1; only a job with neither record uses the installed version. An existing corrupt/non-object result is refused, never guessed. |
 | the task envelope | `data/schemas/task-envelope.schema.json` | closed; `correlation` is the caller's own space |
 

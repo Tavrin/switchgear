@@ -1,11 +1,14 @@
 {
   "_regenerate": "python3 tests/helpers/capture_contract_fixtures.py",
-  "_what": "Durable records exactly as the rail wrote them, captured from real hermetic runs of the committed mock provider through the real code paths. Never hand-authored.",
-  "captured_from_commit": "8caeae58f0c4217947f49fe8ed1ccee6c21706dd",
+  "_what": "Current-version durable records exactly as the rail wrote them, captured from real hermetic runs of the committed mock provider through the real code paths. legacy_v1 is the declared derived exception and is never hand-authored.",
+  "captured_from_commit": "04fd1a4dc10545b2828d68a92f9b38c7ad85835b",
   "contract_versions": {
     "digest_version": 1,
     "normalized_events_version": 2,
-    "result_schema_version": 1
+    "result_schema_version": 2
+  },
+  "derivations": {
+    "legacy_v1": "DERIVED_BY_REAL_PROJECTION: captured a real v2 run, set its recorded events_normalized_version to 1, captured the real logs --format normalized output, then derived result v1 by dropping session_store_id and setting schema_version to 1"
   },
   "normalization": {
     "absolute_paths": "every absolute prefix replaced by the single placeholder <ABSOLUTE_PATH>, preserving the path structure after it so a decoder still sees the version-bearing artifact filename",
@@ -21,6 +24,7 @@
     "empty_final_text_with_change": "successful completion with NO closing assistant text beside a real frozen change: finished.status=completed, final_text_state=empty, change.state=frozen. Change presence comes from change/freeze, never from the terminal status.",
     "gc_applied.json": "the same selection applied -- the only shape carrying launch_artifacts_removed, which gc.plan() cannot produce",
     "gc_plan.json": "dry run; protected entries each carry their reason",
+    "legacy_v1": "DERIVED_BY_REAL_PROJECTION historical v1: a real run projected through logs --format normalized, with the result transformed only by dropping session_store_id and setting schema_version=1",
     "needs_input": "the normalized terminal event says needs_input while result.json says provider_error -- two vocabularies disagreeing legitimately, captured rather than reconciled",
     "ok": "clean bounded write, closing text present -> awaiting_review",
     "provider_error": "the provider exited non-zero after a well-formed handoff"

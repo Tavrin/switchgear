@@ -5,7 +5,7 @@ from typing import Any
 
 from . import jobstate, quota
 from .errors import Refuse
-from .schema import validate
+from .schema import validate, validate_result
 from .state import atomic_write_json, read_json
 
 
@@ -181,7 +181,7 @@ def promote(
     # decision into a record no reader could trust; validate the complete mutation
     # before the atomic write so a failure leaves the on-disk subject untouched.
     try:
-        validate(subject, "result.schema.json")
+        validate_result(subject)
     except Refuse as exc:
         raise Refuse(
             "promotion would produce an invalid result record that no reader can "
