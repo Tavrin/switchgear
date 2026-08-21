@@ -292,13 +292,29 @@ worktree/repository facts that constrain reuse. Before a resume mounts anything,
 the rail requires the binding to exist, validates it, and requires every fact to
 match the current workspace. Missing, invalid, or mismatched bindings fail
 closed with a remedy to start a new job: continuing could expose an unrelated
-conversation. Historical identity-key stores are migrated lazily on a verified
-resume, one harness subtree at a time. Because a legacy marker has no repository
-identity, migration additionally requires the prior job's recorded
-`integrity.git_identity_after` to equal the full identity of the current
-worktree. That deliberately refuses after even one commit: migration is a
-one-time convenience, while handing an unrelated repository the conversation is
-not. Unverifiable legacy stores are quarantined and never mounted.
+conversation.
+
+**A lineage is not bound to a commit.** The facts a binding constrains are the
+stable workspace ones — `realpath`, `st_dev`, `st_ino`, `git_dir`,
+`common_git_dir`, `common_dev`, `common_ino`. `head`, `branch` and
+`linked_worktree` are deliberately excluded, so **ordinary commits, branch
+changes and checkouts do not invalidate a lineage**, and `resume` keeps working
+across normal development. What still fails closed is a workspace that was
+destroyed and recreated, or one whose binding cannot be verified; there is no
+rebind mechanism today, and adding one would be an explicit caller-controlled
+operation with its own evidence rather than something inferred.
+
+Historical identity-key stores predate lineages and are a separate, deliberately
+stricter case. They are migrated lazily on a resume, one harness subtree at a
+time. A legacy marker recorded only path, device and inode — exactly the facts a
+recreated worktree reuses — so it carries no repository identity of its own, and
+migration additionally requires the prior job's recorded
+`integrity.git_identity_after` to equal the current worktree's full git identity.
+That digest covers HEAD, so a legacy migration refuses once the branch has moved
+on. **That strictness applies to legacy migration only and is not the rule for
+lineages**; migration is a one-time convenience, while handing an unrelated
+repository someone else's conversation is not a trade worth making. Unverifiable
+legacy stores are quarantined and never mounted.
 
 The store has to live outside the per-job synthetic HOME because that HOME is
 reclaimed after the job. Only the paths an adapter names are persisted, never a
@@ -459,6 +475,19 @@ point can itself look absent, so even ENOENT is not a perfect signal. The bound
 path and lease are checked again immediately before deletion. Quarantined stores
 are always skipped and require deliberate operator removal — unverifiable is not
 absent, and session retention is deliberately not coupled to job protection.
+
+> **`gc --include-sessions --yes` is destructive and is NOT concurrent-safe with
+> `resume` or with a running job's session use.** The bound path, the binding
+> digest and the lease are all re-checked immediately before deletion, but no
+> lock is held across the delete, and a resumed job's binding verification is
+> not held through mounting. If a bound worktree reappears and is resumed inside
+> that window, a conversation can be removed underneath it. Run destructive
+> session collection when nothing is resuming or running — an idle window, or a
+> maintenance step — and do not build a caller that treats it as safe to run
+> concurrently with dispatch. This is a recorded rc1 residual rather than a
+> defect being worked around: closing it properly needs a lock held across
+> session use, which is a design change and not something to introduce at a
+> contract freeze.
 
 `--compact-ledger` folds `spend.jsonl` history older than today into an
 append-only `spend-rollup.jsonl`. Only `assert_within_budget` reads the ledger in

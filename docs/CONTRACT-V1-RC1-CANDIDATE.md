@@ -1,9 +1,19 @@
 # contract-v1-rc1 — CANDIDATE, not accepted
 
-**Status: awaiting owner review. Nothing here is declared, tagged or
-published.** This file describes what a first externally consumable contract
-candidate would freeze, so the decision to freeze it can be made against
-measurement rather than against a summary.
+**Status: owner-reviewed, still NOT accepted. Nothing here is declared,
+tagged or published.** This file describes what a first externally consumable
+contract candidate would freeze, so the decision to freeze it can be made
+against measurement rather than against a summary.
+
+The owner ruled on four questions on 2026-08-21, and this document records the
+rulings rather than re-opening them:
+
+| # | question | ruling |
+|---|---|---|
+| 1 | consumer re-pin for normalized event v2 | **approved.** v2 may be used; historical v1 must stay readable and reproducible; the consumer reviews and re-pins independently before rc1 is declared |
+| 2 | HEAD-sensitive resume | **approved for LEGACY MIGRATION ONLY.** It must never become the rule for minted lineages — see §6, which now states and tests each required property |
+| 3 | failed durable launch attribution | **approved fail-closed.** Refuse before provider execution and clean up the partial job directory |
+| 4 | `gc`/resume race | **accepted as an rc1 residual.** No broad session-locking subsystem in this freeze wave; the concurrency constraint is documented instead — see §9 |
 
 Candidate commit: see the handoff accompanying this file. Proven on that tree,
 from a clean worktree:
@@ -167,10 +177,36 @@ Now:
   probe or the provider;
 - a pre-lineage store migrates lazily on resume only when its marker matches AND
   the prior job's recorded `integrity.git_identity_after` equals the current
-  worktree's git identity. That covers HEAD, so a legacy resume after even one
-  commit refuses — deliberately. Migration is a one-time convenience; mounting
-  an unrelated conversation is not a trade worth making. An unverifiable legacy
-  store is quarantined, never mounted, and the refusal says where it went.
+  worktree's git identity. That covers HEAD, so a legacy migration refuses once
+  the branch has moved on — deliberately. Migration is a one-time convenience;
+  mounting an unrelated conversation is not a trade worth making. An
+  unverifiable legacy store is quarantined, never mounted, and the refusal says
+  where it went.
+
+### A lineage is NOT HEAD-sensitive
+
+Legacy migration's strictness is scoped to legacy migration. Per the owner's
+ruling it must never become the rule for minted lineages, so each required
+property is stated here and pinned by a test:
+
+| property | how it holds | proof |
+|---|---|---|
+| a lineage is identified by its durable store id | `session_store_id`, a controller-minted uuid4, on `runner.json`, `result.json` and the `--json` projection | `test_fresh_result_runner_projection_and_binding_name_one_lineage` |
+| `resume(prior_job)` explicitly requests that lineage | `cmd_resume` reads the prior record's `session_store_id` and passes it through; worktree coincidence never selects one | `test_ordinary_head_movement_never_invalidates_a_new_lineage` |
+| stable workspace identity constrains where it may resume | the binding stores `identity.identity_core` — `realpath`, `st_dev`, `st_ino`, `git_dir`, `common_git_dir`, `common_dev`, `common_ino` | `test_resume_refuses_repository_and_worktree_admin_slot_reuse` |
+| **ordinary commits and HEAD movement do not invalidate it** | `identity_core` excludes `head`, `branch` and `linked_worktree` by construction | `test_ordinary_head_movement_never_invalidates_a_new_lineage` |
+| a destroyed/recreated or unverifiable workspace still fails closed | `sessions.verify_lineage` refuses before anything is mounted; there is no rebind mechanism, and adding one would be an explicit caller-controlled operation with its own evidence | `test_resume_refuses_missing_invalid_and_unknown_binding_records` |
+
+The HEAD-movement test moves HEAD the way ordinary work does — a branch and a
+real commit — then asserts the resume rejoins the **same** lineage and that the
+resumed worker still sees the earlier conversation, so it cannot pass by merely
+failing to refuse. It was proved non-vacuous by making `verify_lineage`
+HEAD-sensitive, which is exactly the regression it guards.
+
+The legacy refusal says which case it applies to. An unscoped "a later commit
+refuses" would teach a caller that this rail cannot resume across ordinary work
+— false, and the opposite of what the lineage model provides — so a test asserts
+the refusal scopes itself to legacy migration.
 
 Consequence a caller should know: stores are per conversation rather than per
 worktree, so a state root holds more of them, and OpenCode's store is a whole
@@ -237,7 +273,15 @@ conversation.
   at plan AND at the delete-time recheck, then reappear and be resumed in the
   window before `rmtree` — with `--include-sessions --yes` explicitly given.
   Closing it properly needs a lock held across session use, which is a design
-  change and was deliberately not made at a freeze. **Recorded, not fixed.**
+  change and was deliberately not made at a freeze. **Accepted by the owner as
+  an rc1 residual; recorded, not fixed.**
+
+  The operational constraint that follows, now stated in `docs/INTEGRATION.md`
+  beside the `gc` contract: **`gc --include-sessions --yes` is destructive and is
+  not concurrent-safe with `resume` or with a running job's session use.** Run
+  destructive session collection in an idle or maintenance window. An external
+  consumer must not build a caller that treats it as safe to run concurrently
+  with dispatch.
 - **`gc` treats `ENOENT` as absence.** An unmounted mount point can also present
   as `ENOENT`, so absence is not a perfect signal. Every other errno is reported
   as unverifiable and skipped. The limit is stated rather than papered over.
@@ -296,7 +340,10 @@ conversation.
   the same bounded events in an indented envelope and is larger;
 - a session store being shared between independent jobs on one worktree — it no
   longer is;
-- resuming across a destroyed-and-recreated workspace, or a legacy resume after
-  a commit. Both now fail closed;
+- resuming across a destroyed-and-recreated workspace, or a legacy migration
+  after the branch has moved on. Both fail closed. **Ordinary commits and branch
+  changes do NOT invalidate a minted lineage** — that strictness is legacy-only;
+- `gc --include-sessions --yes` being safe to run concurrently with `resume` or
+  a running job's session use. It is not; see §9;
 - job ids, timestamps, digests, durations or costs in the fixture pack. They are
   real values from a real run and change on every re-capture.

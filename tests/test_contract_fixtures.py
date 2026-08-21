@@ -366,5 +366,30 @@ class PublishedBehaviorClaims(unittest.TestCase):
             )
 
 
+class CandidateDocumentConformance(unittest.TestCase):
+    """The rc1 candidate cites tests by name as proof of its claims.
+
+    A proof table naming tests that do not exist is worse than no table: it
+    reads as evidence while proving nothing. This is the same defect class as a
+    comment describing a check that does not exist, which this repository grades
+    hardest.
+    """
+
+    def test_every_test_the_candidate_cites_actually_exists(self):
+        candidate = (ROOT / "docs" / "CONTRACT-V1-RC1-CANDIDATE.md").read_text()
+        cited = set(re.findall(r"`(test_[a-z0-9_]+)`", candidate))
+        self.assertTrue(cited, "the candidate cites no tests; the table vanished")
+
+        defined = set()
+        for path in sorted((ROOT / "tests").rglob("test_*.py")):
+            defined.update(re.findall(r"^\s*def (test_[a-z0-9_]+)\(",
+                                      path.read_text(), re.M))
+        missing = sorted(cited - defined)
+        self.assertEqual(
+            missing, [],
+            "docs/CONTRACT-V1-RC1-CANDIDATE.md cites tests that do not exist",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

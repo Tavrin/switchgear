@@ -4486,6 +4486,86 @@ class SessionLineageTests(unittest.TestCase):
         self.assertEqual(binding["created_by_job"], projected["job_id"])
         self.assertEqual(binding["harness"], "opencode")
 
+    def test_ordinary_head_movement_never_invalidates_a_new_lineage(self):
+        """A minted lineage is bound to workspace identity, NOT to a commit.
+
+        Legacy migration is deliberately HEAD-sensitive, because a legacy marker
+        recorded only path/device/inode and the prior job's git identity digest
+        is the only corroboration available for it. That conservatism must never
+        leak into the lineage model: a lineage is identified by its own id, the
+        resume names it explicitly, and `identity_core` -- which excludes `head`,
+        `branch` and `linked_worktree` -- is what constrains where it may resume.
+
+        So this makes HEAD move the way ordinary work moves it, on a branch, and
+        asserts the resume still rejoins the SAME lineage and still sees the
+        earlier conversation. Without it, someone "hardening" resume by reusing
+        the legacy check would break every real resume and no test would notice.
+        """
+        first = self._fresh()
+        lineage = first["session_store_id"]
+        before = self._head(self.primary)
+
+        subprocess.run(["/usr/bin/git", "-C", str(self.primary), "checkout", "-q",
+                        "-b", "ordinary-work"], check=True, capture_output=True)
+        (self.primary / "tracked.txt").write_text("moved by ordinary work\n")
+        subprocess.run(["/usr/bin/git", "-C", str(self.primary), "commit", "-aqm",
+                        "ordinary work after the first turn"], check=True,
+                       capture_output=True)
+        after = self._head(self.primary)
+        self.assertNotEqual(before, after, "the fixture did not move HEAD")
+
+        resumed = self._resume(first["job_id"])
+        self.assertEqual(
+            resumed.returncode, 0,
+            "a new lineage refused a resume after ordinary HEAD movement:\n"
+            + resumed.stderr,
+        )
+        record = json.loads(resumed.stdout)
+        self.assertEqual(
+            record["session_store_id"], lineage,
+            "the resume minted a new lineage instead of rejoining its own",
+        )
+        self.assertEqual((record.get("resumed") or {}).get("from_job"),
+                         first["job_id"])
+        # Non-vacuity: prove the conversation was really carried, not merely
+        # that nothing refused.
+        self.assertIn(
+            "prior='turn", Path(record["artifacts"]["events"]).read_text(),
+            "the resumed worker did not see the earlier conversation",
+        )
+
+    def test_the_legacy_refusal_does_not_claim_all_resumes_need_a_stable_head(self):
+        """The refusal is read by a caller deciding what to do next.
+
+        Saying "even one later commit refuses" without saying WHICH resumes it
+        applies to would teach a caller that this rail cannot resume across
+        ordinary work -- false, and the opposite of what the lineage model
+        provides. A refusal that misdescribes the contract is the same defect as
+        a comment describing a check that does not exist.
+        """
+        first = self._fresh()
+        self._convert_to_legacy(first, self.primary)
+        subprocess.run(["/usr/bin/git", "-C", str(self.primary), "commit", "-q",
+                        "--allow-empty", "-m", "moves HEAD past the legacy record"],
+                       check=True, capture_output=True)
+
+        resumed = self._resume(first["job_id"])
+        self.assertNotEqual(resumed.returncode, 0,
+                            "legacy migration stopped being conservative")
+        refusal = resumed.stderr
+        self.assertIn("legacy", refusal.lower(),
+                      "the refusal does not say the LEGACY binding is the problem")
+        for misleading in ("even one later commit intentionally refuses this",):
+            self.assertNotIn(
+                misleading, refusal,
+                "the refusal implies every resume needs an unchanged HEAD",
+            )
+
+    def _head(self, worktree):
+        return subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+
     def test_resume_refuses_repository_and_worktree_admin_slot_reuse(self):
         first = self._fresh()
         lineage = self.state / "sessions" / first["session_store_id"]
@@ -4582,8 +4662,12 @@ class SessionLineageTests(unittest.TestCase):
             p.returncode, 0,
             "legacy resume trusted reused path/device/inode without repository identity",
         )
-        self.assertIn("prior job's full git identity", p.stderr)
-        self.assertIn("even one later commit intentionally refuses", p.stderr)
+        self.assertIn("prior job's recorded git identity", p.stderr)
+        # The strictness must be scoped to legacy migration in the refusal
+        # itself: an unscoped "a later commit refuses" would teach a caller that
+        # this rail cannot resume across ordinary work, which is false.
+        self.assertIn("LEGACY migration only", p.stderr)
+        self.assertIn("do NOT invalidate it", p.stderr)
         self.assertIn("Start a new job instead", p.stderr)
         self.assertFalse(legacy.exists(), "unverified legacy store was not quarantined")
         quarantined = list((self.state / "sessions" / ".quarantine").iterdir())
@@ -4689,7 +4773,9 @@ class SessionLineageTests(unittest.TestCase):
         legacy = self._convert_to_legacy(first, self.primary, mismatch=True)
         p = self._resume(first["job_id"])
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("could not be safely bound", p.stderr)
+        self.assertIn("could not be verified", p.stderr)
+        self.assertIn("LEGACY migration only", p.stderr,
+                      "the refusal must not imply every resume needs a stable HEAD")
         self.assertIn("set aside", p.stderr)
         self.assertIn("Start a new job instead", p.stderr)
         self.assertFalse(legacy.exists())

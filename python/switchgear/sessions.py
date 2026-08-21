@@ -223,12 +223,19 @@ def migrate_legacy(
         else:
             detail = f"no legacy store existed at {legacy}, so nothing could be set aside"
         raise Refuse(
-            "the legacy conversation could not be safely bound; " + detail + ". "
-            "Its path marker and the prior job's full git identity must both "
-            "match the current worktree; even one later commit intentionally "
-            "refuses this one-time migration rather than risk handing an "
-            "unrelated repository the conversation. It was not mounted into "
-            "the worker. Start a new job instead."
+            "this job predates session lineages, so its conversation could "
+            "only be adopted by migrating a LEGACY store, and that migration "
+            "could not be verified; " + detail + ". A legacy store recorded "
+            "only path, device and inode -- exactly the facts a recreated "
+            "worktree reuses -- so migrating it additionally requires the prior "
+            "job's recorded git identity to still match this worktree, and it "
+            "does not. It was not mounted into the worker. Start a new job "
+            "instead.\n"
+            "This strictness applies to LEGACY migration only. A session "
+            "lineage minted by a current job is identified by its own store id, "
+            "is requested explicitly by `resume`, and is constrained by stable "
+            "workspace identity -- so ordinary commits and branch changes do "
+            "NOT invalidate it."
         )
 
     target = os.path.join(sessions, require_session_store_id(session_store_id))
