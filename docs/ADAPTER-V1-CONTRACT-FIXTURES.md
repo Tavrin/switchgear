@@ -54,6 +54,7 @@ normalized projection.
 | `empty_final_text_with_change` | successful completion with **no** closing assistant text beside a real frozen change |
 | `awaiting_external_review` | operator `acceptance=external`: identical freeze and evidence, exit 0, `promote` refused |
 | `provider_error` | the provider exited non-zero after a well-formed handoff |
+| `legacy_v1` | a real current run down-projected by the real `logs --format normalized` path; its v1 result is explicitly derived by dropping `session_store_id` and setting `schema_version: 1` |
 | `needs_input` | terminal event vocabulary and record vocabulary disagreeing correctly |
 | `dirty` | worktree git identity moved **on the host** during a readonly job; CLI exit 2, nothing promoted |
 | `crashed_launch_only` | `runner.json` with no `result.json`; the row reads `state=died` and still carries launch attribution |
@@ -97,6 +98,8 @@ about the transcript and says nothing about the tree.
 - `MANIFEST.json` records the commit captured from and the exact contract
   versions frozen: `result` schema version, normalized events version and digest
   version.
+- `MANIFEST.json` labels `legacy_v1` as `DERIVED_BY_REAL_PROJECTION`; it never
+  implies this v2-writing build directly emitted a historical v1 result.
 
 **Do not pin volatile values.** Job ids, timestamps, digests, durations and
 costs are real values from the capture run and change on every re-capture — and

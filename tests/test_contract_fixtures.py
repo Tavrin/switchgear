@@ -48,13 +48,48 @@ class ContractFixturePack(unittest.TestCase):
         """A consumer pins a pack; it must say which contract it froze."""
         versions = self.manifest["contract_versions"]
         from switchgear.cli import DIGEST_VERSION
-        from switchgear.job import NORMALIZED_EVENTS_VERSION
+        from switchgear.job import NORMALIZED_EVENTS_VERSION, SCHEMA_VERSION
 
         self.assertEqual(versions["normalized_events_version"],
                          NORMALIZED_EVENTS_VERSION,
                          "the pack was captured against a different event vocabulary")
+        self.assertEqual(versions["result_schema_version"], SCHEMA_VERSION,
+                         "the pack was captured against a different result schema")
         self.assertEqual(versions["digest_version"], DIGEST_VERSION,
                          "the pack was captured against a different digest format")
+
+    def test_generator_records_current_head_as_the_only_capture_commit_fact(self):
+        from unittest import mock
+
+        cap = Capture.__new__(Capture)
+        written = {}
+        cap._write = lambda scenario, name, payload: written.update({name: payload})
+        current = "00000000000000000000000000000000000000aa"
+        with mock.patch(
+            "capture_contract_fixtures.subprocess.run",
+            return_value=types.SimpleNamespace(stdout=current + "\n"),
+        ) as run:
+            cap.manifest({name: "scenario" for name in EXPECTED_MANIFEST_SCENARIOS})
+        self.assertIsNotNone(
+            run.call_args, "fixture generator did not resolve the current HEAD"
+        )
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            "fixture generator did not resolve the current HEAD",
+        )
+        self.assertEqual(
+            written["MANIFEST.json"]["captured_from_commit"], current,
+            "fixture generator did not record rev-parse HEAD",
+        )
+        occurrences = []
+        for path in PACK.rglob("*.json"):
+            if "captured_from_commit" in path.read_text():
+                occurrences.append(path.relative_to(PACK).as_posix())
+        self.assertEqual(
+            occurrences, ["MANIFEST.json"],
+            "fixture pack pins captured_from_commit outside its manifest",
+        )
 
     def test_no_machine_path_or_credential_survived_capture(self):
         """The pack ships. `tests/fixtures/` is exempt from the machine-path
@@ -185,7 +220,7 @@ class ContractFixturePack(unittest.TestCase):
     def test_every_captured_result_validates_against_the_shipped_schema(self):
         """Captured records are the contract. If one no longer validates, either
         the capture is stale or the schema moved under it."""
-        from switchgear.schema import validate
+        from switchgear.schema import validate_result
 
         expected_results = {
             PACK / scenario / "result.json"
@@ -199,7 +234,56 @@ class ContractFixturePack(unittest.TestCase):
         )
         for result in sorted(actual_results):
             record = json.loads(result.read_text())
-            validate(record, "result.schema.json")
+            validate_result(record)
+
+    def test_v1_and_v2_results_conform_only_to_their_own_closed_schema(self):
+        """The v1/v2 split must not be cosmetic or relaxed open."""
+        from switchgear.errors import Refuse
+        from switchgear.schema import validate, validate_result
+
+        v1 = json.loads((PACK / "legacy_v1" / "result.json").read_text())
+        v2 = json.loads((PACK / "ok" / "result.json").read_text())
+
+        validate(v1, "result-v1.schema.json")
+        validate(v2, "result.schema.json")
+        validate_result(v1)
+        validate_result(v2)
+        with self.assertRaises(
+            Refuse, msg="strict v2 schema accepted the historical v1 fixture"
+        ):
+            validate(v1, "result.schema.json")
+        with self.assertRaises(
+            Refuse, msg="strict v1 schema accepted the current v2 fixture"
+        ):
+            validate(v2, "result-v1.schema.json")
+
+        absent = dict(v1)
+        absent.pop("schema_version")
+        validate_result(absent)
+        invalid = dict(v2, schema_version=3)
+        with self.assertRaises(Refuse) as ctx:
+            validate_result(invalid)
+        self.assertIn("unsupported result schema_version=3", str(ctx.exception))
+
+    def test_legacy_v1_uses_the_real_down_projection_vocabulary(self):
+        scenario = PACK / "legacy_v1"
+        events = [
+            json.loads(line) for line in (scenario / "events.v1.jsonl")
+            .read_text().splitlines() if line.strip()
+        ]
+        self.assertTrue(events, "legacy_v1 captured no projected events")
+        self.assertTrue(
+            all(event["v"] == 1 for event in events),
+            "legacy_v1 events were not stamped with v1",
+        )
+        finished = next(event for event in events if event["event"] == "finished")
+        self.assertEqual(finished["status"], "completed_empty")
+        self.assertNotIn(
+            "final_text_state", finished,
+            "legacy_v1 leaked the v2-only terminal field",
+        )
+        self.assertIn("DERIVED_BY_REAL_PROJECTION",
+                      self.manifest["derivations"]["legacy_v1"])
 
     def test_the_empty_final_text_scenario_still_carries_a_real_change(self):
         """The whole reason fixtures are captured and never hand-written.
@@ -229,6 +313,40 @@ class ContractFixturePack(unittest.TestCase):
             "provider_error")
         self.assertEqual(self._finished(scenario / "events.v2.jsonl")["status"],
                          "needs_input")
+
+    def test_provider_error_pins_transcript_vs_job_outcome_divergence(self):
+        """Transcript completion must not imply provider execution succeeded."""
+        scenario = PACK / "provider_error"
+        record = json.loads((scenario / "result.json").read_text())
+        finished = self._finished(scenario / "events.v2.jsonl")
+        self.assertEqual(
+            (finished["status"], finished["final_text_state"],
+             record["execution"]["outcome"], record["status"], record["exit"]),
+            ("completed", "empty", "provider_error", "provider_error", 7),
+            "provider_error fixture no longer proves transcript/job divergence",
+        )
+
+    def test_harness_pool_aliases_are_surface_specific(self):
+        """Bare provider has two historical meanings and is never canonical."""
+        import contextlib
+        import io
+
+        import switchgear.cli as cli
+
+        scenario = PACK / "ok"
+        row = json.loads((scenario / "jobs-row.json").read_text())
+        record = json.loads((scenario / "result.json").read_text())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            cli._print_job(record, as_json=True)
+        projected = json.loads(output.getvalue())
+
+        self.assertEqual(row["provider"], row["pool"],
+                         "jobs row provider alias no longer means pool")
+        self.assertEqual(projected["provider"], projected["harness"],
+                         "single-job provider alias no longer means harness")
+        self.assertEqual(projected.get("pool"), record["model"]["provider"],
+                         "single-job pool did not come from model.provider")
 
     def test_the_dirty_fixture_pins_the_two_meanings_of_exit(self):
         """`exit` on the record is the PROVIDER's; the CLI's comes from the
@@ -288,6 +406,95 @@ class ContractFixturePack(unittest.TestCase):
                 if event["event"] == "finished":
                     return event
         self.fail(f"{path} has no finished event")
+
+
+class ClosedDurableSchemaVersions(unittest.TestCase):
+    """Pin each versioned closed durable shape to its declared version.
+
+    Audit of a1e990f..04fd1a4 found one existing closed-schema field addition:
+    result.session_store_id. session-binding.schema.json is new in that range,
+    so binding_version 1 is legitimate. Registering properties by version makes
+    the next same-version addition fail here instead of relying on review.
+    """
+
+    RESULT_V1_PROPERTIES = frozenset({
+        "acceptance", "agent_directed_content", "artifacts", "attempt", "change",
+        "correlation", "cost_usd", "delegation", "dir", "effort", "error",
+        "execution", "exit", "finished", "freeze", "generation", "harness",
+        "integrity", "job_id", "lease_uuid", "mode", "model", "policy_digest",
+        "process", "profile_digest", "provider", "provider_calls", "queued_s",
+        "resumed", "review", "review_of", "role", "schema_version",
+        "secrets_suspected", "security", "spend_unrecorded", "started", "status",
+    })
+    BASELINES = {
+        "result-v1.schema.json": (
+            "schema_version", 1, RESULT_V1_PROPERTIES,
+        ),
+        "result.schema.json": (
+            "schema_version", 2, RESULT_V1_PROPERTIES | {"session_store_id"},
+        ),
+        "session-binding.schema.json": (
+            "binding_version", 1,
+            frozenset({
+                "binding_version", "created_at", "created_by_job", "harness",
+                "session_store_id", "worktree",
+            }),
+        ),
+    }
+
+    def _assert_registered_shape(self, name: str, schema: dict) -> None:
+        version_field, expected_version, expected_properties = self.BASELINES[name]
+        version_schema = schema["properties"][version_field]
+        actual_version = version_schema.get("const", version_schema.get("minimum"))
+        self.assertEqual(
+            actual_version, expected_version,
+            f"{name} moved version; review the new closed shape and register its "
+            "property set in the durable-schema guard",
+        )
+        self.assertEqual(
+            set(schema["properties"]), set(expected_properties),
+            f"{name} gained or lost a property without moving version "
+            f"{expected_version}",
+        )
+        self.assertIs(
+            schema.get("additionalProperties"), False,
+            f"{name} is no longer a closed durable schema",
+        )
+
+    def test_every_versioned_closed_durable_shape_is_registered(self):
+        schema_dir = ROOT / "python" / "switchgear" / "data" / "schemas"
+        for name in self.BASELINES:
+            with self.subTest(schema=name):
+                schema = json.loads((schema_dir / name).read_text())
+                self._assert_registered_shape(name, schema)
+
+    def test_the_guard_constructs_a_same_version_property_addition(self):
+        """A guard that accepts the defect it names would be decorative."""
+        schema_path = (
+            ROOT / "python" / "switchgear" / "data" / "schemas"
+            / "result.schema.json"
+        )
+        mutated = json.loads(schema_path.read_text())
+        mutated["properties"]["future_unversioned_field"] = {"type": "string"}
+        with self.assertRaises(AssertionError) as ctx:
+            self._assert_registered_shape("result.schema.json", mutated)
+        self.assertIn(
+            "gained or lost a property without moving version 2", str(ctx.exception)
+        )
+
+    def test_result_v2_delta_is_exactly_the_reviewed_session_lineage_field(self):
+        schema_dir = ROOT / "python" / "switchgear" / "data" / "schemas"
+        v1 = json.loads((schema_dir / "result-v1.schema.json").read_text())
+        v2 = json.loads((schema_dir / "result.schema.json").read_text())
+        self.assertEqual(
+            set(v2["properties"]) - set(v1["properties"]),
+            {"session_store_id"},
+            "result v2 contains an unaudited property addition",
+        )
+        self.assertEqual(
+            set(v1["properties"]) - set(v2["properties"]), set(),
+            "result v2 removed a historical property",
+        )
 
 
 class PublishedJsonShape(unittest.TestCase):
@@ -363,6 +570,44 @@ class PublishedBehaviorClaims(unittest.TestCase):
             self.assertIn(
                 claim, architecture,
                 f"architecture omits event-version read-back rule: {claim}",
+            )
+
+    def test_gc_session_race_names_the_running_job_mechanism(self):
+        for relative in (
+            "docs/INTEGRATION.md", "docs/CONTRACT-V1-RC1-CANDIDATE.md",
+        ):
+            text = (ROOT / relative).read_text()
+            compact = re.sub(r"\s+", " ", text.replace(">", ""))
+            self.assertIn(
+                "currently running read-only or otherwise session-using job",
+                compact,
+                f"{relative} omits the running session-use gc race",
+            )
+            self.assertIn(
+                "No later reappearance and no resume is required", compact,
+                f"{relative} still requires reappearance/resume for the gc race",
+            )
+
+    def test_every_published_vocabulary_separates_transcript_and_job_outcome(self):
+        publications = (
+            "python/switchgear/harnesses/__init__.py",
+            "docs/INTEGRATION.md",
+            "docs/OBSERVABILITY.md",
+            "docs/CONTRACT-V1-RC1-CANDIDATE.md",
+        )
+        for relative in publications:
+            text = (ROOT / relative).read_text()
+            self.assertIn(
+                "transcript", text,
+                f"{relative} does not call finished.status a transcript interpretation",
+            )
+            self.assertIn(
+                "result.execution.outcome", text,
+                f"{relative} omits the authoritative provider-execution field",
+            )
+            self.assertIn(
+                "result.status", text,
+                f"{relative} omits the projected job-outcome field",
             )
 
 

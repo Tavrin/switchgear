@@ -3,11 +3,11 @@
     "state": "not_required"
   },
   "artifacts": {
-    "events": "<ABSOLUTE_PATH>/state/jobs/5a6a15df-69ed-4ae3-92b8-24230f62d069/evidence/events.jsonl",
-    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/5a6a15df-69ed-4ae3-92b8-24230f62d069/evidence/events.v2.jsonl",
+    "events": "<ABSOLUTE_PATH>/state/jobs/88e8e8c0-f617-4a76-9cda-7e250caf9267/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/88e8e8c0-f617-4a76-9cda-7e250caf9267/evidence/events.v2.jsonl",
     "events_normalized_version": 2,
     "handoff": null,
-    "stderr": "<ABSOLUTE_PATH>/state/jobs/5a6a15df-69ed-4ae3-92b8-24230f62d069/evidence/stderr"
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/88e8e8c0-f617-4a76-9cda-7e250caf9267/evidence/stderr"
   },
   "attempt": 1,
   "change": {
@@ -22,19 +22,19 @@
     "outcome": "completed"
   },
   "exit": 0,
-  "finished": "20260820T181316Z",
+  "finished": "20260821T211438Z",
   "freeze": null,
   "generation": 0,
   "harness": "opencode",
   "integrity": {
-    "git_identity_after": "1f5e35da38bcf793261cb7347b195a97e8e2b4e8cf088f92f899223a472a61c1",
-    "git_identity_before": "5c4768fb0a92a112f66f99600c8c578289913ba75f15567a0597e361815c6106",
+    "git_identity_after": "de6dc513b0da9c90178b6a3c3249faebddcd83a7f28b5dec1b9e848d90c134cc",
+    "git_identity_before": "4651284b6e98b8d5f453b8d67d354c7bc06ad736b94576a2985e0958aa8db453",
     "identity_changed": true,
     "outcome": "dirty",
-    "tree_after": "637b11d6161c7cd6b74820d3156ba4f626a4085d41c1ce713fdcaac9f7afd750",
-    "tree_before": "1e8b3ffe87f8f552dff9e17844149b2b2ea06937bfe78b1f060adb16edd754c6"
+    "tree_after": "ae0066f0d8221410c5821e47d2389a5347bb16382b29065e0bada74ec1592ec7",
+    "tree_before": "1ca8b8c76ef45cfc6435046cd2ea20d35b519620e9a83adaa29f945d7926aca5"
   },
-  "job_id": "5a6a15df-69ed-4ae3-92b8-24230f62d069",
+  "job_id": "88e8e8c0-f617-4a76-9cda-7e250caf9267",
   "lease_uuid": null,
   "mode": "readonly",
   "model": {
@@ -46,7 +46,7 @@
   },
   "policy_digest": "3554bd49e1b1fa30a4dcd48e722c61ab2ccd0bb572f4957cc144b9f0221d06ac",
   "process": {
-    "pid": 3548953,
+    "pid": 373,
     "timed_out": false
   },
   "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
@@ -54,7 +54,7 @@
   "queued_s": 0.0,
   "review": null,
   "role": "scout",
-  "schema_version": 1,
+  "schema_version": 2,
   "security": {
     "containment": {
       "backend": "bwrap",
@@ -69,15 +69,15 @@
       "posture": "none"
     },
     "identity": {
-      "payload_uid": 1,
-      "uid_boundary": "subuid"
+      "payload_uid": null,
+      "uid_boundary": "same-user"
     },
     "network": {
       "broker_only": false,
       "direct": true
     }
   },
-  "session_store_id": "da03d123-2c87-485b-8687-2b3f38761f60",
-  "started": "20260820T181310Z",
+  "session_store_id": "a9f53390-1240-410a-8d65-4df7bef47139",
+  "started": "20260821T211432Z",
   "status": "dirty"
 }

@@ -3244,7 +3244,7 @@ class PromotionRevalidationUnit(unittest.TestCase):
 
         from switchgear.errors import Refuse
         from switchgear.review import promote
-        from switchgear.schema import validate
+        from switchgear.schema import validate_result
 
         d = Path(tempfile.mkdtemp(prefix="aiops-promote-validation-"))
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
@@ -3272,7 +3272,7 @@ class PromotionRevalidationUnit(unittest.TestCase):
         # is closed. Prove the constructed poison is real before testing the gate.
         invalid_subject = {**valid_subject, "promotion_poison": True}
         with self.assertRaises(Refuse) as schema_ctx:
-            validate(invalid_subject, "result.schema.json")
+            validate_result(invalid_subject)
         self.assertIn(
             "Additional properties are not allowed", str(schema_ctx.exception)
         )
@@ -3288,7 +3288,7 @@ class PromotionRevalidationUnit(unittest.TestCase):
         self.assertIn("promotion would produce an invalid result record", refusal)
         self.assertIn("on disk is unchanged", refusal)
         self.assertIn(f"Inspect the subject record at {invalid_path}", refusal)
-        self.assertIn("result.schema.json validation failed", refusal)
+        self.assertIn("result-v1.schema.json validation failed", refusal)
         self.assertEqual(invalid_path.read_bytes(), before)
 
         # Non-vacuity: refusing every promotion would satisfy the failure half.
@@ -3583,6 +3583,41 @@ class NormalizedStream(unittest.TestCase):
                 out = json.loads(p.stdout)
                 self.assertEqual(out["v"], 1)
                 self.assertTrue(all(event["v"] == 1 for event in out["events"]))
+
+    def test_unsupported_recorded_event_versions_refuse_both_resolution_paths(self):
+        """Version 3 was stamped onto today's v2 vocabulary instead of refused."""
+        for source in ("result", "runner"):
+            with self.subTest(source=source):
+                rec = self._scout()
+                job_id = rec["job_id"]
+                jd = self.state / "jobs" / job_id
+                result_path = jd / "result.json"
+                if source == "result":
+                    durable = json.loads(result_path.read_text())
+                    durable["artifacts"]["events_normalized_version"] = 3
+                    result_path.write_text(json.dumps(durable))
+                    field = "artifacts.events_normalized_version=3"
+                else:
+                    result_path.unlink()
+                    runner_path = jd / "runner.json"
+                    runner = json.loads(runner_path.read_text())
+                    runner["events_normalized_version"] = 3
+                    runner_path.write_text(json.dumps(runner))
+                    field = "runner.events_normalized_version=3"
+
+                projection = run_cli(
+                    self.args("logs", job_id, "--format", "normalized")
+                )
+                self.assertNotEqual(
+                    projection.returncode, 0,
+                    f"{source} version 3 was recomputed under an unsupported label",
+                )
+                self.assertIn("switchgear: REFUSING — ", projection.stderr)
+                self.assertNotIn("Traceback", projection.stderr)
+                self.assertIn(job_id, projection.stderr)
+                self.assertIn(field, projection.stderr)
+                self.assertIn("Use a Switchgear build that supports version 3",
+                              projection.stderr)
 
     def test_corrupt_existing_result_refuses_logs_and_status_without_guessing(self):
         """Unreadable bytes were silently treated as a v1 record, while valid
@@ -4200,28 +4235,66 @@ class CrashedJobAttribution(unittest.TestCase):
                          "the count reported a deletion that did not happen")
         self.assertIn(job_id, [k["job_id"] for k in out["kept"]])
 
-    def test_failed_runner_write_removes_the_unknown_job_directory(self):
-        """create_job_dirs runs before runner.json. A refused attribution write
-        left no result or runner, so gc correctly protected the unknown job
-        forever and the refusal became permanent litter."""
+    def test_failed_runner_write_uses_the_refusal_surface_without_spawning(self):
+        """Attribution failure leaked a traceback despite refusing the launch.
+
+        The marker wrapper makes zero provider execution a fact. The directory
+        assertion separately preserves the guarded cleanup that was already
+        correct before the public refusal surface was fixed.
+        """
+        import contextlib
+        import io
         from unittest import mock
 
+        from switchgear import cli
         from switchgear import job as jobmod
+        from switchgear.errors import Refuse
 
         job_id = "00000000-0000-4000-8000-00000000c2d1"
         original = OSError("constructed runner attribution failure")
-        env = dict(os.environ, SWITCHGEAR_NO_UID_BOUNDARY="1")
+        spawn_marker = self.tmp / "provider-spawned"
+        provider_wrapper = self.tmp / "marker-provider.py"
+        provider_wrapper.write_text(
+            "#!/usr/bin/python3\n"
+            "import os\n"
+            "from pathlib import Path\n"
+            f"Path({str(spawn_marker)!r}).write_text('spawned')\n"
+            f"os.execv({str(MOCK)!r}, [{str(MOCK)!r}, *os.sys.argv[1:]])\n"
+        )
+        provider_wrapper.chmod(0o755)
+        env = dict(
+            os.environ,
+            SWITCHGEAR_NO_UID_BOUNDARY="1",
+            SWITCHGEAR_JOB_ID=job_id,
+        )
         with mock.patch.object(jobmod, "atomic_write_json", side_effect=original), \
                 mock.patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(
-                OSError, "constructed runner attribution failure"
-            ):
-                jobmod.run_job(
-                    profile_path=str(self.profile), state_path=str(self.state),
-                    mode="readonly", role="scout",
-                    worktree=str(self.primary), prompt="never starts",
-                    provider_path=str(MOCK), job_id=job_id,
+            stderr = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(stderr):
+                    rc = cli.main([
+                        "--profile", str(self.profile),
+                        "--state", str(self.state),
+                        "--provider", str(provider_wrapper),
+                        "scout", str(self.primary), "never starts",
+                    ])
+            except Exception as exc:
+                self.fail(
+                    "runner attribution failure escaped the public refusal "
+                    f"surface as {type(exc).__name__}: {exc}"
                 )
+        refusal = stderr.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("switchgear: REFUSING — ", refusal)
+        self.assertIn("runner.json", refusal)
+        self.assertIn(job_id, refusal)
+        self.assertIn("provider launch was refused", refusal)
+        self.assertIn("Check the state root's permissions and free space", refusal)
+        self.assertNotIn("Traceback", refusal)
+        self.assertFalse(
+            spawn_marker.exists(),
+            "provider marker proves the provider spawned after attribution failed",
+        )
         self.assertFalse(
             (self.state / "jobs" / job_id).exists(),
             "failed runner attribution stranded an unknown job directory",
@@ -4236,13 +4309,15 @@ class CrashedJobAttribution(unittest.TestCase):
         ), mock.patch.object(
             jobmod, "safe_rmtree", side_effect=OSError("cleanup failed")
         ), mock.patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(OSError, "original attribution error"):
+            with self.assertRaises(Refuse) as ctx:
                 jobmod.run_job(
                     profile_path=str(self.profile), state_path=str(self.state),
                     mode="readonly", role="scout",
                     worktree=str(self.primary), prompt="never starts",
                     provider_path=str(MOCK), job_id=second_id,
                 )
+        self.assertIn("original attribution error", str(ctx.exception))
+        self.assertIsInstance(ctx.exception.__cause__, OSError)
 
     def test_real_job_runner_constructs_complete_start_record(self):
         # This test deliberately targets start-record construction only. The uid
@@ -4260,6 +4335,10 @@ class CrashedJobAttribution(unittest.TestCase):
         runner = json.loads((jd / "runner.json").read_text())
         result = json.loads((jd / "result.json").read_text())
 
+        self.assertEqual(
+            result["schema_version"], 2,
+            "new result record did not advertise closed schema version 2",
+        )
         self.assertEqual(runner["job_id"], job_id)
         self.assertEqual(runner["dir"], str(self.primary.resolve()))
         self.assertEqual(runner["harness"], "opencode")

@@ -8,15 +8,14 @@
       "digest_v": 1,
       "event": "finished",
       "exitSummary": "",
-      "final_text_state": "empty",
       "sawTerminal": true,
-      "status": "completed",
+      "status": "completed_empty",
       "tokens": 0,
       "turns": 0
     }
   ],
-  "events_v": 2,
+  "events_v": 1,
   "format": "digest",
-  "job_id": "afcddd28-0a5b-40bc-ae5e-b7db3a3bbff3",
+  "job_id": "a20a8db6-5043-4c30-b569-04e934b3b806",
   "truncated": false
 }

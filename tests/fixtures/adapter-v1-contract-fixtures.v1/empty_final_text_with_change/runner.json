@@ -3,7 +3,7 @@
   "dir": "<ABSOLUTE_PATH>/syn/wt",
   "events_normalized_version": 2,
   "harness": "opencode",
-  "job_id": "bcdad5f8-229a-4752-9ee9-e65dfe4a053f",
+  "job_id": "192e3454-0ce5-4fbf-ab3f-c7f0200f6d06",
   "mode": "bounded-write",
   "model": {
     "id": "opencode-go/glm-5.3",
@@ -12,9 +12,9 @@
     "provider": "opencode-go",
     "vendor_family": "zhipu"
   },
-  "pid": 3548482,
+  "pid": 129,
   "provider": "opencode",
   "role": "implement",
-  "session_store_id": "3f07904c-86fa-4f4c-a99b-29c7b0c0cf00",
-  "starttime": "29684835"
+  "session_store_id": "e3f66d9e-c732-483f-b03f-87436511fd64",
+  "starttime": "39413018"
 }

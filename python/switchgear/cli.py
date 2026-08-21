@@ -14,7 +14,7 @@ from .errors import RailError, Refuse
 from .profile import load_profile
 from .provider import resolve_provider
 from .registry import model_record
-from .schema import validate
+from .schema import validate, validate_result
 from .state import StateRoot, atomic_write_json, read_json
 
 
@@ -96,6 +96,10 @@ def _print_job(record: dict[str, Any], as_json: bool = False) -> None:
             # this and the model pool. Both stay.
             "harness": record.get("harness") or record.get("provider"),
             "provider": record.get("provider"),
+            # Canonical model-serving noun. The legacy `provider` alias on this
+            # projection means the harness, while a jobs row uses it for the
+            # pool; exposing both canonical nouns prevents cross-surface guesses.
+            "pool": record["model"]["provider"],
             "started": record.get("started"),
             "finished": record.get("finished"),
             "effort": record.get("effort"),
@@ -180,7 +184,7 @@ def _persist_review_report(
     rec = read_json(path)
     rec["review"] = report
     rec["review_of"] = review_of
-    validate(rec, "result.schema.json")
+    validate_result(rec)
     atomic_write_json(path, rec)
 
 
@@ -1086,6 +1090,31 @@ def _read_projection_result(path: str, job_id: str) -> dict[str, Any]:
     return rec
 
 
+def _require_supported_events_version(
+    recorded_version: Any, *, job_id: str, field: str,
+) -> int:
+    from .job import SUPPORTED_NORMALIZED_EVENTS_VERSIONS
+
+    if (not isinstance(recorded_version, int)
+            or isinstance(recorded_version, bool)
+            or recorded_version < 1):
+        _die(
+            f"job {job_id} records invalid {field}={recorded_version!r}; "
+            "repair the persisted record rather than guessing its vocabulary"
+        )
+    if recorded_version not in SUPPORTED_NORMALIZED_EVENTS_VERSIONS:
+        supported = ", ".join(
+            str(version) for version in sorted(SUPPORTED_NORMALIZED_EVENTS_VERSIONS)
+        )
+        _die(
+            f"job {job_id} records unsupported {field}={recorded_version}; "
+            f"this build can spell only normalized event versions {supported}. "
+            f"Use a Switchgear build that supports version {recorded_version}, "
+            "or restore the correct recorded version from the job evidence."
+        )
+    return recorded_version
+
+
 def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
     """(record-or-{}, normalized events, vocabulary version) for any job.
 
@@ -1133,17 +1162,11 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
         )
         if recorded_version is None:
             events_version = 1
-        elif (
-            isinstance(recorded_version, int)
-            and not isinstance(recorded_version, bool)
-            and recorded_version >= 1
-        ):
-            events_version = recorded_version
         else:
-            _die(
-                f"job {getattr(ns, 'job', '?')} records invalid "
-                f"artifacts.events_normalized_version={recorded_version!r}; "
-                "repair the result record rather than guessing its vocabulary"
+            events_version = _require_supported_events_version(
+                recorded_version,
+                job_id=getattr(ns, "job", "?"),
+                field="artifacts.events_normalized_version",
             )
     else:
         runner_path = os.path.join(jd, "runner.json")
@@ -1168,17 +1191,11 @@ def _projection(ns) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
             if recorded_version is None:
                 # A runner with no version predates start-time version stamping.
                 events_version = 1
-            elif (
-                isinstance(recorded_version, int)
-                and not isinstance(recorded_version, bool)
-                and recorded_version >= 1
-            ):
-                events_version = recorded_version
             else:
-                _die(
-                    f"job {getattr(ns, 'job', '?')} records invalid "
-                    f"runner.events_normalized_version={recorded_version!r}; "
-                    "repair the runner record rather than guessing its vocabulary"
+                events_version = _require_supported_events_version(
+                    recorded_version,
+                    job_id=getattr(ns, "job", "?"),
+                    field="runner.events_normalized_version",
                 )
         else:
             events_version = NORMALIZED_EVENTS_VERSION
@@ -1795,7 +1812,7 @@ def cmd_promote(ns: argparse.Namespace) -> int:
                 "finished. Promotion needs both jobs complete."
             )
     rev = read_json(os.path.join(root.job_dir(ns.review), "result.json"))
-    validate(rev, "result.schema.json")
+    validate_result(rev)
     ev = open(rev["artifacts"]["events"], "rb").read()
     from .adapters import get_adapter
 

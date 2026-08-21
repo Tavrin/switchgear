@@ -187,6 +187,29 @@ class Vocabulary(unittest.TestCase):
         )[0]
         self.assertEqual(nonterminal, {"event": "text", "content": "same", "v": 1})
 
+    def test_v2_to_v1_down_projection_refuses_an_unmappable_pair(self):
+        """A new or corrupt pair escaped a public command as a bare KeyError."""
+        from switchgear.errors import Refuse
+
+        try:
+            down_project_v2_events_to_v1([
+                {"event": "finished", "status": "weird",
+                 "final_text_state": "present", "v": 2}
+            ])
+        except Refuse as exc:
+            refusal = str(exc)
+        except KeyError as exc:
+            self.fail(
+                f"unmappable normalized pair escaped as bare KeyError: {exc}"
+            )
+        else:
+            self.fail("unmappable normalized pair was accepted")
+        self.assertIn(
+            "('weird', 'present')", refusal,
+            "unmappable normalized pair was refused without naming the pair",
+        )
+        self.assertIn("down-project", refusal)
+
     def test_text_is_bounded_at_write_time(self):
         evs = [{"type": "text", "sessionID": "ses_x", "part": {"text": "A" * 5000}}]
         norm = self.adapter.normalize(evs)
