@@ -118,18 +118,29 @@ def capture_provenance() -> dict[str, Any]:
     the named commit did not contain. Measure dirtiness before regenerating the
     volatile pack, and digest this generator so the exact producing helper is
     still identified when a deliberately dirty capture is retained.
+
+    Dirtiness is measured over the SOURCES a capture can depend on, not the whole
+    checkout. The question this fact answers is "was this pack produced by the
+    code at `captured_from_commit`?", and an unrelated untracked file at the repo
+    root cannot change a captured record. Measuring everything made the flag
+    permanently true in any working checkout, which is worse than useless: a
+    signal that is always on carries nothing, and it would keep the clean-capture
+    guard from ever running the branch that matters.
     """
     commit = subprocess.run(
         [GIT, "-C", str(ROOT), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     status = subprocess.run(
-        [GIT, "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
+        [GIT, "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all",
+         "--", "python", "bin", "project-profiles", "tests/helpers"],
         capture_output=True, text=True, check=True,
     ).stdout
     return {
         "captured_from_commit": commit,
-        "captured_from_worktree_dirty": bool(status.strip()),
+        "captured_from_sources_dirty": bool(status.strip()),
+        "captured_from_sources_scope": ["python", "bin", "project-profiles",
+                                       "tests/helpers"],
         "capture_generator_sha256": hashlib.sha256(
             Path(__file__).read_bytes()
         ).hexdigest(),

@@ -90,9 +90,14 @@ class ContractFixturePack(unittest.TestCase):
             manifest["captured_from_commit"], current,
             "fixture generator did not record rev-parse HEAD",
         )
-        self.assertIs(
-            manifest.get("captured_from_worktree_dirty"), True,
-            "fixture generator omitted whether the capture worktree was dirty",
+        self.assertIsInstance(
+            manifest.get("captured_from_sources_dirty"), bool,
+            "fixture generator omitted whether the capture SOURCES were dirty",
+        )
+        self.assertEqual(
+            manifest.get("captured_from_sources_scope"),
+            ["python", "bin", "project-profiles", "tests/helpers"],
+            "the manifest does not say which paths its dirtiness fact covers",
         )
         self.assertEqual(
             manifest.get("capture_generator_sha256"),
@@ -111,7 +116,7 @@ class ContractFixturePack(unittest.TestCase):
         )
 
     def _assert_clean_capture_commit_contains_shipped_generator(self, manifest):
-        dirty = manifest.get("captured_from_worktree_dirty")
+        dirty = manifest.get("captured_from_sources_dirty")
         self.assertIsInstance(
             dirty, bool,
             "fixture manifest does not say whether its producing tree was dirty",
@@ -149,7 +154,7 @@ class ContractFixturePack(unittest.TestCase):
 
         claimed = dict(
             self.manifest,
-            captured_from_worktree_dirty=False,
+            captured_from_sources_dirty=False,
             captured_from_commit="00000000000000000000000000000000000000bb",
             capture_generator_sha256=hashlib.sha256(
                 (ROOT / "tests/helpers/capture_contract_fixtures.py").read_bytes()

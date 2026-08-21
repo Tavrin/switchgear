@@ -96,12 +96,21 @@ about the transcript and says nothing about the tree.
   requires a new directory version, never an in-place reinterpretation — a
   consumer pins the pack it decoded.
 - `MANIFEST.json` records the HEAD commit anchoring the capture, whether the
-  producing working tree differed from that commit when capture began, and a
-  SHA-256 digest of the generator itself. A clean claim therefore means the
-  recorded commit contains the producing generator; a dirty claim remains
-  honest about uncommitted producing code. The manifest also records the exact
-  contract versions frozen: `result` schema version, normalized events version
-  and digest version.
+  capture-affecting **sources** differed from that commit when capture began,
+  and a SHA-256 digest of the generator itself. A clean claim therefore means
+  the recorded commit contains the producing code; a dirty claim stays honest
+  about uncommitted producing code.
+
+  `captured_from_sources_dirty` is measured over `captured_from_sources_scope`
+  — `python/`, `bin/`, `project-profiles/` and `tests/helpers/` — and not over
+  the whole checkout, because the question it answers is "was this pack produced
+  by the code at `captured_from_commit`?" and an unrelated file elsewhere in a
+  working tree cannot change a captured record. Measuring everything made the
+  flag permanently true in any real checkout, and a signal that is always on
+  carries nothing.
+
+  The manifest also records the exact contract versions frozen: `result` schema
+  version, normalized events version and digest version.
 - `MANIFEST.json` labels `legacy_v1` as `DERIVED_BY_REAL_PROJECTION`; it never
   implies this v2-writing build directly emitted a historical v1 result.
 
