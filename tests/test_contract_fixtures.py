@@ -76,8 +76,10 @@ class ContractFixturePack(unittest.TestCase):
         self.assertEqual(
             [call.args[0][3:] for call in run.call_args_list],
             [["rev-parse", "HEAD"],
-             ["status", "--porcelain", "--untracked-files=all"]],
-            "fixture generator did not measure HEAD and worktree dirtiness",
+             ["status", "--porcelain", "--untracked-files=all",
+              "--", "python", "bin", "project-profiles", "tests/helpers"]],
+            "fixture generator did not measure HEAD and capture-source dirtiness "
+            "over the scope it publishes",
         )
 
         cap = Capture.__new__(Capture)

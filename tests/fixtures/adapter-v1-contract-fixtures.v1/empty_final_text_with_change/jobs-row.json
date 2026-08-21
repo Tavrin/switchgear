@@ -4,7 +4,7 @@
   "dir": "<ABSOLUTE_PATH>/syn/wt",
   "elapsed_s": 0.1,
   "harness": "opencode",
-  "job_id": "a1d50e7d-d4a4-4ff7-ab3f-1c562e33a81f",
+  "job_id": "19671455-91a4-419d-9fba-096464777c78",
   "mode": "bounded-write",
   "model": "opencode-go/glm-5.3",
   "pool": "opencode-go",
@@ -12,6 +12,6 @@
   "resumed_from": null,
   "review_of": null,
   "role": "implement",
-  "started_at": 1787349725.882,
+  "started_at": 1787350901.801,
   "state": "awaiting_review"
 }
