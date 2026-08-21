@@ -24,6 +24,7 @@ machine path or anything credential-shaped.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -110,6 +111,31 @@ EXPECTED_MANIFEST_SCENARIOS = frozenset(EXPECTED_SCENARIO_FILES) | frozenset(
 )
 
 
+def capture_provenance() -> dict[str, Any]:
+    """Facts about the producing checkout, measured before capture mutates it.
+
+    `rev-parse HEAD` alone falsely described a dirty working tree as code that
+    the named commit did not contain. Measure dirtiness before regenerating the
+    volatile pack, and digest this generator so the exact producing helper is
+    still identified when a deliberately dirty capture is retained.
+    """
+    commit = subprocess.run(
+        [GIT, "-C", str(ROOT), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        [GIT, "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return {
+        "captured_from_commit": commit,
+        "captured_from_worktree_dirty": bool(status.strip()),
+        "capture_generator_sha256": hashlib.sha256(
+            Path(__file__).read_bytes()
+        ).hexdigest(),
+    }
+
+
 def capture_safety_findings(text: str) -> list[str]:
     """Machine-path and credential shapes forbidden in a published pack."""
     findings = [f"absolute path {match.group(0)!r}"
@@ -122,8 +148,9 @@ def capture_safety_findings(text: str) -> list[str]:
 
 
 class Capture:
-    def __init__(self, out: Path) -> None:
+    def __init__(self, out: Path, provenance: dict[str, Any]) -> None:
         self.out = out
+        self.provenance = provenance
         self.tmp = Path(tempfile.mkdtemp(prefix="sg-fixtures-"))
         self.state = self.tmp / "state"
         self.profile = self.tmp / "profile.json"
@@ -373,6 +400,12 @@ class Capture:
         # The exact documented v1 record rule. Do not invent a historical run:
         # derive it from the real captured record, and declare that provenance.
         legacy_result = dict(captured)
+        legacy_result["artifacts"] = dict(captured["artifacts"])
+        legacy_result["artifacts"]["events_normalized"] = str(
+            Path(captured["artifacts"]["events_normalized"]).with_name(
+                "events.v1.jsonl"
+            )
+        )
         legacy_result.pop("session_store_id", None)
         legacy_result["schema_version"] = 1
         self._write("legacy_v1", "result.json", legacy_result)
@@ -485,9 +518,6 @@ class Capture:
                 f"declared set {sorted(EXPECTED_MANIFEST_SCENARIOS)}"
             )
 
-        commit = subprocess.run(
-            [GIT, "-C", str(ROOT), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True).stdout.strip()
         self._write("", "MANIFEST.json", {
             "pack": PACK_NAME,
             "pack_version": PACK_VERSION,
@@ -498,7 +528,7 @@ class Capture:
                 "exception and is never hand-authored."
             ),
             "_regenerate": "python3 tests/helpers/capture_contract_fixtures.py",
-            "captured_from_commit": commit,
+            **self.provenance,
             "contract_versions": {
                 "result_schema_version": SCHEMA_VERSION,
                 "normalized_events_version": NORMALIZED_EVENTS_VERSION,
@@ -564,12 +594,16 @@ def main() -> int:
     ap.add_argument("--out", default=str(ROOT / "tests" / "fixtures" / PACK_NAME))
     ns = ap.parse_args()
     out = Path(ns.out)
+    # This must happen before deleting/regenerating the pack: volatile fixture
+    # values make the checkout dirty during every capture, even when the code
+    # that began it exactly matched HEAD.
+    provenance = capture_provenance()
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
     sys.path.insert(0, str(ROOT / "python"))
-    cap = Capture(out)
+    cap = Capture(out, provenance)
     try:
         cap.scenario_ok()
         cap.scenario_completed_empty_with_change()

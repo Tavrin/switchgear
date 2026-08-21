@@ -503,21 +503,31 @@ def run_job(
         # already made a job that gc must protect as unknown, so leaving it here
         # would strand permanent litter on every refused launch.
         concurrency.release(root.path, job_id)
+        cleanup_error = None
         try:
             safe_rmtree(
                 dirs["job"], must_be_under=root.jobs,
                 label=f"job {job_id} after runner attribution failure",
             )
-        except Exception:
+        except Exception as cleanup_exc:
             # Cleanup must not replace the attribution error: that is the cause
-            # the caller can remedy, while the leftover directory is visible
-            # evidence an operator can remove deliberately.
-            pass
+            # the caller can remedy. But silence left an unknown directory that
+            # gc correctly protects forever, so the refusal must identify the
+            # litter for deliberate operator removal.
+            cleanup_error = cleanup_exc
+        cleanup_detail = ""
+        if cleanup_error is not None:
+            cleanup_detail = (
+                f" Cleanup also could not remove the partial job directory "
+                f"{dirs['job']} ({type(cleanup_error).__name__}: "
+                f"{cleanup_error}). Inspect it and remove that exact directory "
+                "deliberately after confirming the launch never started."
+            )
         raise Refuse(
             f"could not write launch attribution runner.json for job {job_id} "
             f"({type(exc).__name__}: {exc}), so the provider launch was refused "
             "before it could start. Check the state root's permissions and free "
-            "space, then retry the job."
+            f"space, then retry the job.{cleanup_detail}"
         ) from exc
     lock_cm = None
     token_uuid = None
@@ -984,7 +994,8 @@ def run_job(
             # one record -- this key (the executable that ran the job) and
             # model.provider (the pool that served the model) -- so a reader had to
             # know which sense applied from context. `harness` names the runtime,
-            # `upstream` names the service. `provider` stays as an alias: nothing
+            # while model.provider names the model-serving pool; `upstream` stays
+            # the registry's base-URL field. `provider` stays as an alias: nothing
             # that reads it has to change, and there is one source for both.
             "harness": adapter.name,
             "model": model,

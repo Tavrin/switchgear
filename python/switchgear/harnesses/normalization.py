@@ -214,9 +214,11 @@ def down_project_v2_events_to_v1(
             pair = (item.get("status"), final_text_state)
             try:
                 item["status"] = terminal_status[pair]
-            except KeyError as exc:
+            except (KeyError, TypeError) as exc:
                 # This is a public projection path. A new or corrupt pair must
                 # name the contract mismatch, not escape as a bare mapping error.
+                # TypeError matters too: a corrupt list-valued status made the
+                # lookup key itself unhashable before KeyError could exist.
                 raise Refuse(
                     "cannot down-project normalized v2 finished event with "
                     f"(status, final_text_state)={pair!r}; restore one of the "

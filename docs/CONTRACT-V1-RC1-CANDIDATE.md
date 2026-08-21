@@ -12,13 +12,13 @@ rulings rather than re-opening them:
 |---|---|---|
 | 1 | consumer re-pin for normalized event v2 | **approved.** v2 may be used; historical v1 must stay readable and reproducible; the consumer reviews and re-pins independently before rc1 is declared |
 | 2 | HEAD-sensitive resume | **approved for LEGACY MIGRATION ONLY.** It must never become the rule for minted lineages — see §6, which now states and tests each required property |
-| 3 | failed durable launch attribution | **approved fail-closed.** Refuse before provider execution and clean up the partial job directory |
+| 3 | failed durable launch attribution | **approved fail-closed.** Refuse before provider execution; attempt guarded cleanup of the partial job directory, and if cleanup fails report its exact path for deliberate operator removal |
 | 4 | `gc`/resume race | **accepted as an rc1 residual.** No broad session-locking subsystem in this freeze wave; the concurrency constraint is documented instead — see §9 |
 
 Candidate commit: see the handoff accompanying this file. Proven on that tree,
 from a clean worktree:
 
-- `bash tests/run.sh` — 493 tests, exit 0. Committed mock provider, no spend.
+- `bash tests/run.sh` — 517 tests, exit 0. Committed mock provider, no spend.
   The uid-boundary suite ran 9/9 for real on the host, not skipped.
 - `bash tests/soak.sh` — 60/60 jobs, peak concurrent 3 against a cap of 3,
   file descriptors 4 → 4, doctor 29 pass / 5 warn / 0 fail.
@@ -123,7 +123,11 @@ exits 7 and both result fields say `provider_error`.
 
 ## 5. Legacy compatibility
 
-**`evidence/events.v1.jsonl` is never rewritten, migrated or deleted.**
+The rail never rewrites or migrates a historical `evidence/events.v1.jsonl`,
+and changing projection versions does not modify it. The opt-in retention
+operation is the explicit exception: `gc --yes` collects an eligible job's
+whole directory, including every normalized artifact inside it, as documented
+in §9.
 
 Projections in this rail are RECOMPUTED from the raw provider stream, not read
 back from the normalized artifact. A bare version bump would therefore have

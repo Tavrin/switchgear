@@ -3,11 +3,11 @@
     "state": "not_required"
   },
   "artifacts": {
-    "events": "<ABSOLUTE_PATH>/state/jobs/a20a8db6-5043-4c30-b569-04e934b3b806/evidence/events.jsonl",
-    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/a20a8db6-5043-4c30-b569-04e934b3b806/evidence/events.v2.jsonl",
+    "events": "<ABSOLUTE_PATH>/state/jobs/1f3e6c9c-a473-42b4-9cac-eeecd7823bcf/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/1f3e6c9c-a473-42b4-9cac-eeecd7823bcf/evidence/events.v1.jsonl",
     "events_normalized_version": 1,
     "handoff": null,
-    "stderr": "<ABSOLUTE_PATH>/state/jobs/a20a8db6-5043-4c30-b569-04e934b3b806/evidence/stderr"
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/1f3e6c9c-a473-42b4-9cac-eeecd7823bcf/evidence/stderr"
   },
   "attempt": 1,
   "change": {
@@ -21,19 +21,19 @@
     "outcome": "completed"
   },
   "exit": 0,
-  "finished": "20260821T211432Z",
+  "finished": "20260821T220207Z",
   "freeze": null,
   "generation": 0,
   "harness": "opencode",
   "integrity": {
-    "git_identity_after": "2a869cee5ca553ce7f4868cd9aba6baf8e95d8f217e76b0bc5535d2ad301ffed",
-    "git_identity_before": "2a869cee5ca553ce7f4868cd9aba6baf8e95d8f217e76b0bc5535d2ad301ffed",
+    "git_identity_after": "c68b6dcec3974b8caf9b7de557c2878e5d2332a274af9c0e8565b64481d1c3f7",
+    "git_identity_before": "c68b6dcec3974b8caf9b7de557c2878e5d2332a274af9c0e8565b64481d1c3f7",
     "identity_changed": false,
     "outcome": "clean",
-    "tree_after": "2e2576ae1fcabe5f7387401eccae3d5d4e6934f7aeda4ec6f7c321c851431e3a",
-    "tree_before": "2e2576ae1fcabe5f7387401eccae3d5d4e6934f7aeda4ec6f7c321c851431e3a"
+    "tree_after": "e2032d244136238ccbc0eccf6f6fa87d31fac71dcd334dc6d757a4c01f7a2601",
+    "tree_before": "e2032d244136238ccbc0eccf6f6fa87d31fac71dcd334dc6d757a4c01f7a2601"
   },
-  "job_id": "a20a8db6-5043-4c30-b569-04e934b3b806",
+  "job_id": "1f3e6c9c-a473-42b4-9cac-eeecd7823bcf",
   "lease_uuid": null,
   "mode": "readonly",
   "model": {
@@ -45,7 +45,7 @@
   },
   "policy_digest": "3554bd49e1b1fa30a4dcd48e722c61ab2ccd0bb572f4957cc144b9f0221d06ac",
   "process": {
-    "pid": 296,
+    "pid": 298,
     "timed_out": false
   },
   "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
@@ -76,6 +76,6 @@
       "direct": true
     }
   },
-  "started": "20260821T211431Z",
+  "started": "20260821T220207Z",
   "status": "ok"
 }

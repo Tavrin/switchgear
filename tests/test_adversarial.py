@@ -2095,6 +2095,29 @@ class RailTests(unittest.TestCase):
 
     # --- projections must use the JOB's provider, not the caller's profile ---
 
+    def _provider_unstamped_v1_result(self, job_id, *, provider=None):
+        """A schema-valid pre-version result for projection-only fixtures.
+
+        These tests used three convenient keys and therefore relied on readers
+        never dispatching the closed result schema. F1 made that invalid object
+        refuse before the adapter seam the tests actually exercise.
+        """
+        record = {
+            "job_id": job_id,
+            "status": "ok",
+            "mode": "readonly",
+            "role": "scout",
+            "model": {"id": "opencode-go/deepseek-v4-flash",
+                      "provider": "opencode-go"},
+            "dir": str(self.primary),
+            "exit": 0,
+            "started": "20260101T000000Z",
+            "generation": 0,
+        }
+        if provider is not None:
+            record["provider"] = provider
+        return record
+
     def test_a_job_records_which_adapter_ran_it(self):
         """model.provider is the POOL (`opencode-go`), which does not identify
         the code that can read the stream back (`opencode`). Without a separate
@@ -2137,7 +2160,7 @@ class RailTests(unittest.TestCase):
         (jd / "started_at").write_text(str(time.time()))
         (jd / "evidence" / "events.jsonl").write_text('{"type":"whatever"}\n')
         (jd / "result.json").write_text(json.dumps(
-            {"status": "ok", "role": "scout", "mode": "readonly"}))
+            self._provider_unstamped_v1_result(job_id)))
         p = run_cli(["--state", str(self.state), "logs", job_id])
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("cannot tell which provider", p.stderr)
@@ -2153,8 +2176,7 @@ class RailTests(unittest.TestCase):
         (jd / "evidence" / "events.jsonl").write_text(
             '{"type":"not_a_shape_this_adapter_knows","x":1}\n' * 5)
         (jd / "result.json").write_text(json.dumps(
-            {"status": "ok", "role": "scout", "mode": "readonly",
-             "provider": "opencode"}))
+            self._provider_unstamped_v1_result(job_id, provider="opencode")))
         p = run_cli(["--state", str(self.state), "logs", job_id])
         self.assertIn("recognised nothing", p.stderr)
         self.assertIn("different provider", p.stderr)
@@ -4317,6 +4339,13 @@ class CrashedJobAttribution(unittest.TestCase):
                     provider_path=str(MOCK), job_id=second_id,
                 )
         self.assertIn("original attribution error", str(ctx.exception))
+        self.assertIn(
+            "Cleanup also could not remove the partial job directory",
+            str(ctx.exception),
+            "cleanup failure was swallowed instead of reported",
+        )
+        self.assertIn(str(self.state / "jobs" / second_id), str(ctx.exception))
+        self.assertIn("remove that exact directory deliberately", str(ctx.exception))
         self.assertIsInstance(ctx.exception.__cause__, OSError)
 
     def test_real_job_runner_constructs_complete_start_record(self):
@@ -4564,6 +4593,84 @@ class SessionLineageTests(unittest.TestCase):
         validate(binding, "session-binding.schema.json")
         self.assertEqual(binding["created_by_job"], projected["job_id"])
         self.assertEqual(binding["harness"], "opencode")
+
+    def test_future_result_schema_refuses_every_trusting_public_reader(self):
+        """Version 3 reached status, wait, and the resume launch boundary."""
+        first = self._fresh()
+        job_id = first["job_id"]
+        result_path = self.state / "jobs" / job_id / "result.json"
+        record = json.loads(result_path.read_text())
+        record["schema_version"] = 3
+        result_path.write_text(json.dumps(record))
+        jobs_before = {path.name for path in (self.state / "jobs").iterdir()}
+
+        commands = {
+            "status --full": run_cli(
+                self.args("--json", "status", job_id, "--full"),
+                env=self._session_env,
+            ),
+            "wait": run_cli(
+                self.args("--json", "wait", job_id), env=self._session_env,
+            ),
+            "resume": self._resume(job_id),
+        }
+        for command, proc in commands.items():
+            with self.subTest(command=command):
+                self.assertNotEqual(
+                    proc.returncode, 0,
+                    f"{command} trusted unsupported result schema_version=3",
+                )
+                self.assertIn("switchgear: REFUSING — ", proc.stderr)
+                self.assertIn("unsupported result schema_version=3", proc.stderr)
+                self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(
+            {path.name for path in (self.state / "jobs").iterdir()}, jobs_before,
+            "resume reached the job-launch boundary for schema_version=3",
+        )
+
+    def test_absent_v1_and_v2_results_work_on_every_trusting_reader(self):
+        """The future-version guard must preserve both historical contracts."""
+        cases = (
+            ("absent", self.primary),
+            (1, self.wt),
+            (2, self.wt2),
+        )
+        for version, worktree in cases:
+            with self.subTest(schema_version=version):
+                first = self._fresh(worktree)
+                result_path = self.state / "jobs" / first["job_id"] / "result.json"
+                if version in ("absent", 1):
+                    self._convert_to_legacy(first, worktree)
+                    record = json.loads(result_path.read_text())
+                    if version == "absent":
+                        record.pop("schema_version", None)
+                    else:
+                        record["schema_version"] = version
+                    result_path.write_text(json.dumps(record))
+
+                status = run_cli(
+                    self.args("--json", "status", first["job_id"], "--full"),
+                    env=self._session_env,
+                )
+                self.assertEqual(
+                    status.returncode, 0,
+                    f"status --full rejected schema_version={version}: "
+                    f"{status.stderr}",
+                )
+                waited = run_cli(
+                    self.args("--json", "wait", first["job_id"]),
+                    env=self._session_env,
+                )
+                self.assertEqual(
+                    waited.returncode, 0,
+                    f"wait rejected schema_version={version}: {waited.stderr}",
+                )
+                resumed = self._resume(first["job_id"])
+                self.assertEqual(
+                    resumed.returncode, 0,
+                    f"resume rejected schema_version={version}: "
+                    f"{resumed.stderr}{resumed.stdout}",
+                )
 
     def test_ordinary_head_movement_never_invalidates_a_new_lineage(self):
         """A minted lineage is bound to workspace identity, NOT to a commit.

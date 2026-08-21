@@ -1,7 +1,9 @@
 {
   "_regenerate": "python3 tests/helpers/capture_contract_fixtures.py",
   "_what": "Current-version durable records exactly as the rail wrote them, captured from real hermetic runs of the committed mock provider through the real code paths. legacy_v1 is the declared derived exception and is never hand-authored.",
-  "captured_from_commit": "04fd1a4dc10545b2828d68a92f9b38c7ad85835b",
+  "capture_generator_sha256": "77303f8b8a990c41ba0714a9a327b5b9f39517675f469ea1c65d106c5fbd0674",
+  "captured_from_commit": "8185a53540c41053099ea61628c05578a0adfcfb",
+  "captured_from_worktree_dirty": true,
   "contract_versions": {
     "digest_version": 1,
     "normalized_events_version": 2,
