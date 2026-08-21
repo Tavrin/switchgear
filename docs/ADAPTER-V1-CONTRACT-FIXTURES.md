@@ -95,9 +95,13 @@ about the transcript and says nothing about the tree.
 - The directory is version-stamped. Changing what captured content **means**
   requires a new directory version, never an in-place reinterpretation — a
   consumer pins the pack it decoded.
-- `MANIFEST.json` records the commit captured from and the exact contract
-  versions frozen: `result` schema version, normalized events version and digest
-  version.
+- `MANIFEST.json` records the HEAD commit anchoring the capture, whether the
+  producing working tree differed from that commit when capture began, and a
+  SHA-256 digest of the generator itself. A clean claim therefore means the
+  recorded commit contains the producing generator; a dirty claim remains
+  honest about uncommitted producing code. The manifest also records the exact
+  contract versions frozen: `result` schema version, normalized events version
+  and digest version.
 - `MANIFEST.json` labels `legacy_v1` as `DERIVED_BY_REAL_PROJECTION`; it never
   implies this v2-writing build directly emitted a historical v1 result.
 

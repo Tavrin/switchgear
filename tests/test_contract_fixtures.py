@@ -17,8 +17,10 @@ Two things this guards, both of which had already gone wrong:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import types
@@ -36,6 +38,7 @@ from capture_contract_fixtures import (  # noqa: E402
     EXPECTED_MANIFEST_SCENARIOS,
     EXPECTED_SCENARIO_FILES,
     PLACEHOLDER,
+    capture_provenance,
     capture_safety_findings,
 )
 
@@ -58,29 +61,45 @@ class ContractFixturePack(unittest.TestCase):
         self.assertEqual(versions["digest_version"], DIGEST_VERSION,
                          "the pack was captured against a different digest format")
 
-    def test_generator_records_current_head_as_the_only_capture_commit_fact(self):
+    def test_generator_records_honest_capture_provenance(self):
         from unittest import mock
 
-        cap = Capture.__new__(Capture)
-        written = {}
-        cap._write = lambda scenario, name, payload: written.update({name: payload})
         current = "00000000000000000000000000000000000000aa"
         with mock.patch(
             "capture_contract_fixtures.subprocess.run",
-            return_value=types.SimpleNamespace(stdout=current + "\n"),
+            side_effect=(
+                types.SimpleNamespace(stdout=current + "\n"),
+                types.SimpleNamespace(stdout=" M generator.py\n"),
+            ),
         ) as run:
-            cap.manifest({name: "scenario" for name in EXPECTED_MANIFEST_SCENARIOS})
-        self.assertIsNotNone(
-            run.call_args, "fixture generator did not resolve the current HEAD"
-        )
+            provenance = capture_provenance()
         self.assertEqual(
-            run.call_args.args[0],
-            ["/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD"],
-            "fixture generator did not resolve the current HEAD",
+            [call.args[0][3:] for call in run.call_args_list],
+            [["rev-parse", "HEAD"],
+             ["status", "--porcelain", "--untracked-files=all"]],
+            "fixture generator did not measure HEAD and worktree dirtiness",
         )
+
+        cap = Capture.__new__(Capture)
+        written = {}
+        cap.provenance = provenance
+        cap._write = lambda scenario, name, payload: written.update({name: payload})
+        cap.manifest({name: "scenario" for name in EXPECTED_MANIFEST_SCENARIOS})
+        manifest = written["MANIFEST.json"]
         self.assertEqual(
-            written["MANIFEST.json"]["captured_from_commit"], current,
+            manifest["captured_from_commit"], current,
             "fixture generator did not record rev-parse HEAD",
+        )
+        self.assertIs(
+            manifest.get("captured_from_worktree_dirty"), True,
+            "fixture generator omitted whether the capture worktree was dirty",
+        )
+        self.assertEqual(
+            manifest.get("capture_generator_sha256"),
+            hashlib.sha256(
+                (ROOT / "tests/helpers/capture_contract_fixtures.py").read_bytes()
+            ).hexdigest(),
+            "fixture generator digest does not identify the shipped helper",
         )
         occurrences = []
         for path in PACK.rglob("*.json"):
@@ -89,6 +108,62 @@ class ContractFixturePack(unittest.TestCase):
         self.assertEqual(
             occurrences, ["MANIFEST.json"],
             "fixture pack pins captured_from_commit outside its manifest",
+        )
+
+    def _assert_clean_capture_commit_contains_shipped_generator(self, manifest):
+        dirty = manifest.get("captured_from_worktree_dirty")
+        self.assertIsInstance(
+            dirty, bool,
+            "fixture manifest does not say whether its producing tree was dirty",
+        )
+        generator = ROOT / "tests/helpers/capture_contract_fixtures.py"
+        self.assertEqual(
+            manifest.get("capture_generator_sha256"),
+            hashlib.sha256(generator.read_bytes()).hexdigest(),
+            "fixture manifest does not identify the shipped capture generator",
+        )
+        if dirty:
+            return
+        commit = manifest["captured_from_commit"]
+        shown = subprocess.run(
+            ["/usr/bin/git", "-C", str(ROOT), "show",
+             f"{commit}:tests/helpers/capture_contract_fixtures.py"],
+            capture_output=True,
+        )
+        self.assertEqual(
+            shown.returncode, 0,
+            "fixture manifest claims a clean capture but its commit does not "
+            "contain the capture generator",
+        )
+        self.assertEqual(
+            shown.stdout, generator.read_bytes(),
+            "fixture manifest claims a clean capture whose recorded commit does "
+            "not contain the generator as shipped",
+        )
+
+    def test_clean_capture_commit_contains_the_shipped_generator(self):
+        self._assert_clean_capture_commit_contains_shipped_generator(self.manifest)
+
+    def test_clean_provenance_guard_constructs_a_generator_mismatch(self):
+        from unittest import mock
+
+        claimed = dict(
+            self.manifest,
+            captured_from_worktree_dirty=False,
+            captured_from_commit="00000000000000000000000000000000000000bb",
+            capture_generator_sha256=hashlib.sha256(
+                (ROOT / "tests/helpers/capture_contract_fixtures.py").read_bytes()
+            ).hexdigest(),
+        )
+        with mock.patch(
+            "subprocess.run",
+            return_value=types.SimpleNamespace(returncode=0, stdout=b"older helper"),
+        ), self.assertRaises(AssertionError) as ctx:
+            self._assert_clean_capture_commit_contains_shipped_generator(claimed)
+        self.assertIn(
+            "claims a clean capture whose recorded commit does not contain the "
+            "generator as shipped",
+            str(ctx.exception),
         )
 
     def test_no_machine_path_or_credential_survived_capture(self):
@@ -152,6 +227,28 @@ class ContractFixturePack(unittest.TestCase):
                 actual, set(expected),
                 f"fixture scenario {scenario} is partial or has undeclared files",
             )
+
+    def test_every_result_names_its_declared_versioned_artifact(self):
+        """A derived v1 record named the unused v2 artifact beside real v1."""
+        for scenario, files in EXPECTED_SCENARIO_FILES.items():
+            if "result.json" not in files:
+                continue
+            with self.subTest(scenario=scenario):
+                directory = PACK / scenario
+                record = json.loads((directory / "result.json").read_text())
+                artifacts = record["artifacts"]
+                version = artifacts["events_normalized_version"]
+                named = Path(artifacts["events_normalized"]).name
+                expected = f"events.v{version}.jsonl"
+                self.assertEqual(
+                    named, expected,
+                    f"fixture {scenario} mislabels normalized artifact version "
+                    f"{version} as {named}",
+                )
+                self.assertTrue(
+                    (directory / named).is_file(),
+                    f"fixture {scenario} names missing normalized artifact {named}",
+                )
 
     def test_generator_refuses_every_partial_job_artifact_path(self):
         """The old generator skipped each missing artifact independently, so a
@@ -426,24 +523,84 @@ class ClosedDurableSchemaVersions(unittest.TestCase):
         "resumed", "review", "review_of", "role", "schema_version",
         "secrets_suspected", "security", "spend_unrecorded", "started", "status",
     })
+    RESULT_NESTED_CLOSED_SHAPES = {
+        "$.security": frozenset({
+            "containment", "credential", "identity", "network",
+        }),
+        "$.security.containment": frozenset({
+            "backend", "ipc_namespace", "mount_namespace",
+            "network_namespace", "pid_namespace", "uts_namespace",
+        }),
+        "$.security.identity": frozenset({"payload_uid", "uid_boundary"}),
+        "$.security.credential": frozenset({"enters_worker", "posture"}),
+        "$.security.network": frozenset({"broker_only", "direct"}),
+        "$.execution": frozenset({"outcome"}),
+        "$.change": frozenset({"state"}),
+        "$.acceptance": frozenset({"state"}),
+        "$.delegation": frozenset({"children", "denied", "denied_detail"}),
+    }
     BASELINES = {
         "result-v1.schema.json": (
-            "schema_version", 1, RESULT_V1_PROPERTIES,
+            "schema_version", 1,
+            {"$": RESULT_V1_PROPERTIES, **RESULT_NESTED_CLOSED_SHAPES},
         ),
         "result.schema.json": (
-            "schema_version", 2, RESULT_V1_PROPERTIES | {"session_store_id"},
+            "schema_version", 2,
+            {"$": RESULT_V1_PROPERTIES | {"session_store_id"},
+             **RESULT_NESTED_CLOSED_SHAPES},
         ),
         "session-binding.schema.json": (
             "binding_version", 1,
-            frozenset({
-                "binding_version", "created_at", "created_by_job", "harness",
-                "session_store_id", "worktree",
-            }),
+            {
+                "$": frozenset({
+                    "binding_version", "created_at", "created_by_job", "harness",
+                    "session_store_id", "worktree",
+                }),
+                "$.worktree": frozenset({
+                    "common_dev", "common_git_dir", "common_ino", "git_dir",
+                    "realpath", "st_dev", "st_ino",
+                }),
+            },
         ),
     }
 
+    def _closed_shapes(self, schema: dict, path: str = "$") -> dict:
+        """Return every closed object keyed by its instance JSON path."""
+        shapes = {}
+        properties = schema.get("properties")
+        if schema.get("additionalProperties") is False:
+            self.assertIsInstance(
+                properties, dict,
+                f"closed durable object {path} has no property map to register",
+            )
+            shapes[path] = frozenset(properties)
+        if isinstance(properties, dict):
+            for name, child in properties.items():
+                if isinstance(child, dict):
+                    shapes.update(self._closed_shapes(child, f"{path}.{name}"))
+        items = schema.get("items")
+        if isinstance(items, dict):
+            shapes.update(self._closed_shapes(items, f"{path}[]"))
+        additional = schema.get("additionalProperties")
+        if isinstance(additional, dict):
+            shapes.update(self._closed_shapes(additional, f"{path}.*"))
+        patterns = schema.get("patternProperties")
+        if isinstance(patterns, dict):
+            for pattern, child in patterns.items():
+                if isinstance(child, dict):
+                    shapes.update(
+                        self._closed_shapes(child, f"{path}<pattern:{pattern}>")
+                    )
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            for index, child in enumerate(schema.get(keyword) or []):
+                if isinstance(child, dict):
+                    shapes.update(
+                        self._closed_shapes(child, f"{path}<{keyword}:{index}>")
+                    )
+        return shapes
+
     def _assert_registered_shape(self, name: str, schema: dict) -> None:
-        version_field, expected_version, expected_properties = self.BASELINES[name]
+        version_field, expected_version, expected_shapes = self.BASELINES[name]
         version_schema = schema["properties"][version_field]
         actual_version = version_schema.get("const", version_schema.get("minimum"))
         self.assertEqual(
@@ -451,15 +608,18 @@ class ClosedDurableSchemaVersions(unittest.TestCase):
             f"{name} moved version; review the new closed shape and register its "
             "property set in the durable-schema guard",
         )
+        actual_shapes = self._closed_shapes(schema)
         self.assertEqual(
-            set(schema["properties"]), set(expected_properties),
-            f"{name} gained or lost a property without moving version "
+            set(actual_shapes), set(expected_shapes),
+            f"{name} gained or lost a closed object without moving version "
             f"{expected_version}",
         )
-        self.assertIs(
-            schema.get("additionalProperties"), False,
-            f"{name} is no longer a closed durable schema",
-        )
+        for path, expected_properties in expected_shapes.items():
+            self.assertEqual(
+                actual_shapes[path], expected_properties,
+                f"{name} closed object {path} gained or lost a property without "
+                f"moving version {expected_version}",
+            )
 
     def test_every_versioned_closed_durable_shape_is_registered(self):
         schema_dir = ROOT / "python" / "switchgear" / "data" / "schemas"
@@ -468,18 +628,21 @@ class ClosedDurableSchemaVersions(unittest.TestCase):
                 schema = json.loads((schema_dir / name).read_text())
                 self._assert_registered_shape(name, schema)
 
-    def test_the_guard_constructs_a_same_version_property_addition(self):
-        """A guard that accepts the defect it names would be decorative."""
+    def test_the_guard_constructs_a_nested_same_version_property_addition(self):
+        """A nested closed shape must not bypass the version guard."""
         schema_path = (
             ROOT / "python" / "switchgear" / "data" / "schemas"
             / "result.schema.json"
         )
         mutated = json.loads(schema_path.read_text())
-        mutated["properties"]["future_unversioned_field"] = {"type": "string"}
+        mutated["properties"]["security"]["properties"]["containment"][
+            "properties"
+        ]["future_unversioned_field"] = {"type": "string"}
         with self.assertRaises(AssertionError) as ctx:
             self._assert_registered_shape("result.schema.json", mutated)
         self.assertIn(
-            "gained or lost a property without moving version 2", str(ctx.exception)
+            "closed object $.security.containment gained or lost a property "
+            "without moving version 2", str(ctx.exception)
         )
 
     def test_result_v2_delta_is_exactly_the_reviewed_session_lineage_field(self):
@@ -556,6 +719,53 @@ class PublishedBehaviorClaims(unittest.TestCase):
             "disk headroom, exclusive lease.",
             compact,
             "architecture admission order differs from run_job's measured order",
+        )
+
+    def test_failed_attribution_cleanup_claim_is_attempted_and_reported(self):
+        candidate = (ROOT / "docs/CONTRACT-V1-RC1-CANDIDATE.md").read_text()
+        self.assertNotIn(
+            "Refuse before provider execution and clean up the partial job directory",
+            candidate,
+            "candidate still guarantees best-effort attribution cleanup",
+        )
+        self.assertIn("attempt guarded cleanup", candidate)
+        self.assertIn("report its exact path", candidate)
+
+    def test_compatibility_alias_claim_uses_the_frozen_surface_mapping(self):
+        architecture = (ROOT / "docs/ARCHITECTURE.md").read_text()
+        self.assertNotIn(
+            "alias of `harness` and always carries the same value", architecture,
+            "architecture still contradicts jobs --json alias semantics",
+        )
+        self.assertIn("surface-specific compatibility alias", architecture)
+        self.assertIn("canonical noun table in `INTEGRATION.md`", architecture)
+
+        job_source = (ROOT / "python/switchgear/job.py").read_text()
+        self.assertNotIn(
+            "`upstream` names the service", job_source,
+            "job record comment still calls the pool by the registry URL noun",
+        )
+        self.assertIn("model.provider names the model-serving pool", job_source)
+
+    def test_historical_event_retention_claim_names_gc_deletion(self):
+        candidate = (ROOT / "docs/CONTRACT-V1-RC1-CANDIDATE.md").read_text()
+        self.assertNotIn(
+            "`evidence/events.v1.jsonl` is never rewritten, migrated or deleted",
+            candidate,
+            "candidate still claims gc cannot delete a collected v1 artifact",
+        )
+        self.assertIn("never rewrites or migrates", candidate)
+        self.assertIn("`gc --yes` collects an eligible job's", candidate)
+
+    def test_candidate_does_not_reintroduce_the_stale_suite_count(self):
+        candidate = (ROOT / "docs/CONTRACT-V1-RC1-CANDIDATE.md").read_text()
+        self.assertNotIn(
+            "493 tests, exit 0", candidate,
+            "candidate reintroduced the stale 493-test count",
+        )
+        self.assertIn(
+            "517 tests, exit 0", candidate,
+            "candidate does not report the current full-suite count",
         )
 
     def test_event_version_readback_claim_stays_true(self):

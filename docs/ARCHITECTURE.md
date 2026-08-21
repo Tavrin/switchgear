@@ -96,7 +96,10 @@ carry a description explaining which was which.
 | **role** | a profile-level purpose (scout, implement, review) fixing model, mode and effort | `role` |
 | **job** | one execution: one agent, one process, one sandbox, one record | `job_id` |
 
-`provider` survives as an alias of `harness` and always carries the same value.
+`provider` survives only as a surface-specific compatibility alias. Its exact
+mapping is frozen in the canonical noun table in `INTEGRATION.md`: it aliases
+`pool` on a `jobs --json` row and `harness` on a single-job projection or durable
+record. Consumers use `harness` and `pool`, not the ambiguous compatibility key.
 
 Deliberately **not** called *upstream*: the registry already uses `upstream` for a
 pool's base URL (`providers.<id>.upstream`), so reusing it for the pool's name

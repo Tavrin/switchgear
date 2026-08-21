@@ -3,11 +3,11 @@
     "state": "not_required"
   },
   "artifacts": {
-    "events": "<ABSOLUTE_PATH>/state/jobs/41983894-a070-4b54-9f1d-82b4932a3dc5/evidence/events.jsonl",
-    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/41983894-a070-4b54-9f1d-82b4932a3dc5/evidence/events.v2.jsonl",
+    "events": "<ABSOLUTE_PATH>/state/jobs/e4673873-54b5-4c17-9a0f-be374dd102d0/evidence/events.jsonl",
+    "events_normalized": "<ABSOLUTE_PATH>/state/jobs/e4673873-54b5-4c17-9a0f-be374dd102d0/evidence/events.v2.jsonl",
     "events_normalized_version": 2,
     "handoff": null,
-    "stderr": "<ABSOLUTE_PATH>/state/jobs/41983894-a070-4b54-9f1d-82b4932a3dc5/evidence/stderr"
+    "stderr": "<ABSOLUTE_PATH>/state/jobs/e4673873-54b5-4c17-9a0f-be374dd102d0/evidence/stderr"
   },
   "attempt": 1,
   "change": {
@@ -22,19 +22,19 @@
     "outcome": "provider_error"
   },
   "exit": 0,
-  "finished": "20260821T211432Z",
+  "finished": "20260821T220208Z",
   "freeze": null,
   "generation": 0,
   "harness": "opencode",
   "integrity": {
-    "git_identity_after": "2a869cee5ca553ce7f4868cd9aba6baf8e95d8f217e76b0bc5535d2ad301ffed",
-    "git_identity_before": "2a869cee5ca553ce7f4868cd9aba6baf8e95d8f217e76b0bc5535d2ad301ffed",
+    "git_identity_after": "c68b6dcec3974b8caf9b7de557c2878e5d2332a274af9c0e8565b64481d1c3f7",
+    "git_identity_before": "c68b6dcec3974b8caf9b7de557c2878e5d2332a274af9c0e8565b64481d1c3f7",
     "identity_changed": false,
     "outcome": "clean",
-    "tree_after": "2e2576ae1fcabe5f7387401eccae3d5d4e6934f7aeda4ec6f7c321c851431e3a",
-    "tree_before": "2e2576ae1fcabe5f7387401eccae3d5d4e6934f7aeda4ec6f7c321c851431e3a"
+    "tree_after": "e2032d244136238ccbc0eccf6f6fa87d31fac71dcd334dc6d757a4c01f7a2601",
+    "tree_before": "e2032d244136238ccbc0eccf6f6fa87d31fac71dcd334dc6d757a4c01f7a2601"
   },
-  "job_id": "41983894-a070-4b54-9f1d-82b4932a3dc5",
+  "job_id": "e4673873-54b5-4c17-9a0f-be374dd102d0",
   "lease_uuid": null,
   "mode": "readonly",
   "model": {
@@ -46,7 +46,7 @@
   },
   "policy_digest": "3554bd49e1b1fa30a4dcd48e722c61ab2ccd0bb572f4957cc144b9f0221d06ac",
   "process": {
-    "pid": 334,
+    "pid": 336,
     "timed_out": false
   },
   "profile_digest": "14cb3795537615b5fc23ffbfa318ecba1987ecfb4380a5cdd36aae21b00c82b6",
@@ -77,7 +77,7 @@
       "direct": true
     }
   },
-  "session_store_id": "086c86c7-4d72-47f9-95b3-0782e7a1ccc9",
-  "started": "20260821T211432Z",
+  "session_store_id": "3abd05c5-d2b3-4df4-98bb-44d665960eb9",
+  "started": "20260821T220207Z",
   "status": "provider_error"
 }

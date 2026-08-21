@@ -540,7 +540,8 @@ def cmd_resume(ns: argparse.Namespace) -> int:
     from .adapters import get_adapter, parse_lenient
 
     root = StateRoot(_state_path(ns))
-    prior = read_json(os.path.join(root.job_dir(ns.job), "result.json"))
+    prior_path = os.path.join(root.job_dir(ns.job), "result.json")
+    prior = _read_projection_result(prior_path, ns.job)
     profile = load_profile(_profile_path(ns))
     # From the JOB. Resolving this from the caller's profile made `resume` refuse
     # a healthy Claude job with "no resumable session id ... (provider opencode).
@@ -616,10 +617,11 @@ def cmd_wait(ns: argparse.Namespace) -> int:
     while True:
         rec: dict[str, Any] = {}
         if os.path.isfile(res_path):
-            try:
-                rec = read_json(res_path)
-            except Exception:
-                rec = {}
+            # A terminal answer is an action taken on persisted evidence. An
+            # unsupported future record must not be interpreted under today's
+            # status vocabulary, which previously let schema_version=3 return
+            # success through `wait`.
+            rec = _read_projection_result(res_path, ns.job)
         state = jobstate.live_state(state_path, ns.job, rec, jd)
 
         if state not in jobstate.DERIVED_STATES:
@@ -1079,14 +1081,20 @@ def _read_projection_result(path: str, job_id: str) -> dict[str, Any]:
         _die(
             f"job {job_id} has an unreadable result record at {path} "
             f"({type(exc).__name__}: {exc}). Restore a valid result JSON object "
-            "from the job evidence before reading status or logs."
+            "from the job evidence before reading or acting on this job."
         )
     if not isinstance(rec, dict):
         _die(
             f"job {job_id} has a result record at {path} that is "
             f"{type(rec).__name__}, not a JSON object. Restore a valid result "
-            "JSON object from the job evidence before reading status or logs."
+            "JSON object from the job evidence before reading or acting on this job."
         )
+    # These projections are public readers, but they also TRUST the record to
+    # answer status/log questions. Dispatch by the declared version here so a
+    # future closed shape cannot be interpreted as today's contract. Bulk
+    # observation (`jobs`, `health`, `gc`) intentionally keeps its defensive
+    # per-row reads and does not call this helper.
+    validate_result(rec)
     return rec
 
 
