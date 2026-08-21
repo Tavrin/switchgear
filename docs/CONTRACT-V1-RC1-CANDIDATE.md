@@ -5,6 +5,10 @@ tagged or published.** This file describes what a first externally consumable
 contract candidate would freeze, so the decision to freeze it can be made
 against measurement rather than against a summary.
 
+A consumer review of the previous candidate was accepted and returned six
+blockers (B1–B6). They are fixed and proved in this revision; the round is
+summarised in §11.
+
 The owner ruled on four questions on 2026-08-21, and this document records the
 rulings rather than re-opening them:
 
@@ -18,12 +22,17 @@ rulings rather than re-opening them:
 Candidate commit: see the handoff accompanying this file. Proven on that tree,
 from a clean worktree:
 
-- `bash tests/run.sh` — 493 tests, exit 0. Committed mock provider, no spend.
+- `bash tests/run.sh` — **508 tests, exit 0**. Committed mock provider, no spend.
   The uid-boundary suite ran 9/9 for real on the host, not skipped.
 - `bash tests/soak.sh` — 60/60 jobs, peak concurrent 3 against a cap of 3,
-  file descriptors 4 → 4, doctor 29 pass / 5 warn / 0 fail.
+  file descriptors 4 → 4.
+- `doctor` — 29 pass / 5 warn / **0 fail**.
 - The machine-path, doc-link, schema and operator noun gates, the last against
-  the real operator-owned list, which is neither printed nor committed.
+  the real operator-owned list, which is neither printed nor committed. The
+  fixture pack is separately checked against that list, because `tests/` is
+  outside the noun gate's scan.
+- G8 (operator `acceptance=external` ⇒ `awaiting_external_review`, `promote`
+  refuses) independently exercised: 5 tests, exit 0.
 
 ---
 
@@ -360,3 +369,99 @@ conversation.
   a running job's session use. It is not; see §9;
 - job ids, timestamps, digests, durations or costs in the fixture pack. They are
   real values from a real run and change on every re-capture.
+
+## 11. Consumer-review round (B1–B6)
+
+The consumer review of the previous candidate was accepted. It returned six
+blockers; all six are fixed here, each proved by backing the fix out and
+confirming its regression fails.
+
+| # | blocker | disposition |
+|---|---|---|
+| B1 | an unsupported normalized-event version failed **open** — a job recording `3` recomputed the current v2 vocabulary and emitted it stamped `v: 3` | fixed. This build honours only versions it can actually spell (1 via down-projection, 2 natively) and refuses anything else through the public surface, on both the result- and runner-recorded paths. The v2→v1 down-projection also raised a bare `KeyError` out of a public command; it now names the offending pair |
+| B2 | launch-attribution failure bypassed the refusal contract with a raw traceback | fixed. Both existing good behaviours preserved — the provider never spawns, the partial job directory is cleaned — and the failure is now a `Refuse` on the `switchgear: REFUSING — ` surface, with the original error chained so the errno survives |
+| B3 | the gc/session race description was too narrow | corrected. Documentation only, per the freeze decision — see below |
+| B4 | `finished.status` was not stated to be a transcript fact | fixed. Stated at every publishing site and pinned by the real `provider_error` fixture |
+| B5 | bare `provider` meant different things on different surfaces | fixed. `harness`/`pool` frozen as canonical, `provider` documented as a surface-specific alias, explicit `pool` added to the single-job projection, every mapping tested |
+| B6 | a closed schema gained a field without moving its version | fixed. Result schema v2 with the historical shape frozen as `result-v1.schema.json`, version-dispatched validation, both closed |
+
+### B3 — the corrected mechanism
+
+The earlier description said a bound worktree had to **reappear and be resumed**
+inside the delete window. That understated it. The real mechanism:
+
+> A currently **running** read-only or otherwise session-using job loses its
+> lineage if its bound worktree disappears while the job is running and
+> destructive `gc --include-sessions --yes` executes. `gc` sees the bound path as
+> absent and deletes the store underneath the live job. **No later reappearance
+> and no resume is required.**
+
+The operational constraint is unchanged and still accepted: destructive session
+collection is not concurrent-safe with `resume` **or** with a running job's
+session use, and must run in an idle or maintenance window. No session lock was
+added; that remains the deliberately deferred design change.
+
+### B4 — which field is authoritative for what
+
+Three different questions, three different fields. Conflating them is what B4
+exists to prevent:
+
+| question | authoritative field |
+|---|---|
+| what does the provider's transcript show? | normalized `finished.status` (+ `final_text_state`) |
+| did the provider process execute successfully? | `result.execution.outcome` |
+| what is the job's outcome? | `result.status` (projected from four facts) |
+| did anything change in the tree? | `change.state` / `freeze.changed_files` |
+
+The committed `provider_error` fixture proves the divergence is real and legal:
+its transcript finishes `completed` with `final_text_state: empty`, while the
+provider exits `7` and both result fields say `provider_error`.
+
+### B5 — the frozen vocabulary and its aliases
+
+**Canonical:** `harness` is the agent CLI/executable family; `pool` is the
+model-serving provider/pool.
+
+`provider` survives **only** as a compatibility alias, and its historical meaning
+is surface-specific:
+
+| surface | `harness` | `pool` | bare `provider` means |
+|---|---|---|---|
+| `jobs --json` row | agent CLI | model pool | the **pool** |
+| single-job `--json` projection | agent CLI | model pool (from `model.provider`) | the **harness** |
+| `result.json` | agent CLI | via `model.provider` | the **harness** |
+
+**A consumer must not treat bare `provider` as a canonical cross-surface field.**
+Read `harness` and `pool`.
+
+### B6 — result schema versions
+
+`result.json` records are closed on both versions and validation dispatches on
+the record's own declared `schema_version`:
+
+- absent or `1` → `data/schemas/result-v1.schema.json`, the historical shape
+  taken from commit `a1e990f`, which does **not** contain `session_store_id`;
+- `2` → `data/schemas/result.schema.json`, which adds `session_store_id`;
+- anything else **refuses**, exactly as an unsupported event version does.
+
+`additionalProperties: false` is preserved on both; it was not relaxed anywhere.
+A v1 record is rejected by the v2 schema and a v2 record by the v1 schema, and
+both directions are fixtured — the pack's `legacy_v1` scenario is the v1 side.
+
+`contract-v1` and the result schema version are **separate axes**. There is no
+requirement that the numbers match, and none is implied.
+
+**Audit of every other closed durable schema between `a1e990f` and this
+candidate:** `session_store_id` on the result record is the only property added
+to an existing closed schema. `session-binding.schema.json` is new in this wave
+and legitimately starts at `binding_version: 1`. No other closed schema changed.
+A guard test now fails if a closed durable shape gains a property without its
+version moving, so the next occurrence is caught rather than reviewed for.
+
+### Bounded residual carried forward
+
+The forced-inode-reuse workspace-recreation case is unchanged by this round and
+remains a documented bounded residual: a fresh job cannot adopt a store, and a
+lineage resume verifies its binding, so the exposure that remains is confined to
+legacy migration, which is itself gated on the prior job's recorded git
+identity.
