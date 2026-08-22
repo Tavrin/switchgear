@@ -16,6 +16,7 @@ Orientation, in reading order:
 
 | file | what it tells you |
 |---|---|
+| `docs/CONTRACT-V1-RC1.md` | the frozen contract status — read before trusting any contract claim elsewhere |
 | `docs/INTEGRATION.md` | the caller contract |
 | `docs/INVARIANTS.md` | invariants that must not regress, each with the bug that earned it |
 | `docs/ROADMAP.md` | what is unfinished, and why each gap is still open |

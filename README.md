@@ -125,6 +125,7 @@ It runs someone else's agent and records what happened.
 
 | | |
 |---|---|
+| [docs/CONTRACT-V1-RC1.md](docs/CONTRACT-V1-RC1.md) | the frozen contract: what `contract-v1-rc1` pins, and where |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | the caller contract — read this first |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | scope, authority, data flow, public contracts |
 | [docs/ADDING-A-PROVIDER.md](docs/ADDING-A-PROVIDER.md) | adding an agent CLI (7 methods, ~25 lines) |
