@@ -124,11 +124,13 @@ against one real consumer, but nothing in it is specific to that consumer:
   committed `provider_error` fixture deliberately has `finished.status=completed`
   while both result fields report `provider_error`. The transcript interpretation
   maps onto the orchestrator's event states — except
-  `sawTerminal: false`, which is **never** `completed`. A run that ended without
-  the provider closing its stream reports `failed` with a truncation
-  `exitSummary`, however much assistant text it emitted first. "Claims done,
-  evidence truncated" is the suspicious case, and over-reporting truncation is
-  the right default.
+  `sawTerminal: false`, which is **never** `completed`. It is not always `failed`
+  either: the cascade checks a provider error BEFORE truncation, so a run that
+  stopped to ask for permission reports `needs_input` with `sawTerminal: false`.
+  The shipped `needs_input` fixture is that case. Truncation reports `failed`
+  with a truncation `exitSummary` only when no earlier branch claimed the run.
+  "Claims done, evidence truncated" is the suspicious case, and over-reporting
+  truncation is the right default.
 - **A running job emits no `finished` event at all**, only `progress` with the
   counters. The same partial stream means "still working" during a job and
   "truncated" after one, so the normalizer takes that fact from the caller rather
@@ -320,10 +322,22 @@ stable workspace ones — `realpath`, `st_dev`, `st_ino`, `git_dir`,
 `common_git_dir`, `common_dev`, `common_ino`. `head`, `branch` and
 `linked_worktree` are deliberately excluded, so **ordinary commits, branch
 changes and checkouts do not invalidate a lineage**, and `resume` keeps working
-across normal development. What still fails closed is a workspace that was
-destroyed and recreated, or one whose binding cannot be verified; there is no
+across normal development. What fails closed is a workspace whose binding cannot
+be verified, or one where any of those stable facts has CHANGED; there is no
 rebind mechanism today, and adding one would be an explicit caller-controlled
 operation with its own evidence rather than something inferred.
+
+> **Bounded residual, stated precisely rather than rounded up.** A recreated
+> workspace normally fails closed, because recreating one normally changes at
+> least one of those facts. It does **not** when every one of them is
+> reproduced: forced or reused filesystem identity can leave a recreated
+> same-path, same-admin-slot worktree **indistinguishable** to the current
+> verifier from the one the lineage was bound to, and an explicit
+> `resume(prior_job)` then succeeds and mounts the previous conversation. A
+> fresh job still never adopts a store, so this needs a deliberate resume naming
+> the prior job. This is an accepted, documented residual: closing it would need
+> either HEAD-sensitivity on lineages — ruled out, because it would break resume
+> across ordinary work — or a new rebind mechanism.
 
 Historical identity-key stores predate lineages and are a separate, deliberately
 stricter case. They are migrated lazily on a resume, one harness subtree at a
@@ -698,7 +712,9 @@ sessionId). Use it to show progress, not to detect completion — that is what
 Whichever you use, "did it actually finish" is a normalized fact rather than an
 inference: `finished.sawTerminal` is false when the stream ended without the
 provider closing it, and such a run **never** reports `completed`, however much
-assistant text it emitted first.
+assistant text it emitted first. It may still report `needs_input` rather than
+`failed` — a run parked back to the operator also never closed its stream — so
+read `status` for which of the two it was.
 
 ### Observing a running job without flooding your context
 

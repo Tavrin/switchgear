@@ -22,7 +22,7 @@ rulings rather than re-opening them:
 Candidate commit: see the handoff accompanying this file. Proven on that tree,
 from a clean worktree:
 
-- `bash tests/run.sh` — **517 tests, exit 0**. Committed mock provider, no spend.
+- `bash tests/run.sh` — **523 tests, exit 0**. Committed mock provider, no spend.
   The uid-boundary suite ran 9/9 for real on the host, not skipped.
 - `bash tests/soak.sh` — 60/60 jobs, peak concurrent 3 against a cap of 3,
   file descriptors 4 → 4.
@@ -115,9 +115,28 @@ recorded text presence for the two completed spellings and discarded it for
 `needs_input` and `failed`. v2 therefore records a fact v1 threw away rather
 than merely renaming one.
 
-`sawTerminal: false` is **never** `completed`. A run that ended without the
-provider closing its stream reports `failed` with a truncation `exitSummary`,
-however much assistant text preceded it.
+`sawTerminal: false` is **never** `completed`. It is not always `failed` either,
+and an earlier revision of this document said it was. The terminal status is
+decided by a strictly ordered cascade, and the error branch runs BEFORE the
+truncation branch:
+
+1. the provider reported an error → `needs_input` if the message is an
+   input request, otherwise `failed`;
+2. else no terminal provider event was seen → `failed`, with a truncation
+   `exitSummary`;
+3. else the provider declared an abnormal stop → `failed`;
+4. else → `completed`, with `final_text_state` recording whether it closed with
+   assistant text.
+
+So `sawTerminal: false` validly accompanies **`needs_input`**: a run that stopped
+to ask for permission never closed its stream, and branch 1 claims it before
+branch 2 can call it truncated. The shipped `needs_input` fixture is exactly that
+case — `status: needs_input`, `final_text_state: empty`, `sawTerminal: false`.
+
+What holds unconditionally is the narrower claim: `sawTerminal: false` is never
+`completed`, however much assistant text preceded it. "Claims done, evidence
+truncated" is the suspicious case, and over-reporting truncation is the right
+default.
 
 **Change presence never comes from the terminal status.** It comes from
 `change.state` and `freeze.changed_files`, computed by the controller from the
@@ -217,7 +236,13 @@ property is stated here and pinned by a test:
 | `resume(prior_job)` explicitly requests that lineage | `cmd_resume` reads the prior record's `session_store_id` and passes it through; worktree coincidence never selects one | `test_ordinary_head_movement_never_invalidates_a_new_lineage` |
 | stable workspace identity constrains where it may resume | the binding stores `identity.identity_core` — `realpath`, `st_dev`, `st_ino`, `git_dir`, `common_git_dir`, `common_dev`, `common_ino` | `test_resume_refuses_repository_and_worktree_admin_slot_reuse` |
 | **ordinary commits and HEAD movement do not invalidate it** | `identity_core` excludes `head`, `branch` and `linked_worktree` by construction | `test_ordinary_head_movement_never_invalidates_a_new_lineage` |
-| a destroyed/recreated or unverifiable workspace still fails closed | `sessions.verify_lineage` refuses before anything is mounted; there is no rebind mechanism, and adding one would be an explicit caller-controlled operation with its own evidence | `test_resume_refuses_missing_invalid_and_unknown_binding_records` |
+| a workspace whose stable binding identity CHANGED fails closed | `sessions.verify_lineage` compares every `identity_core` fact and refuses before anything is mounted; there is no rebind mechanism, and adding one would be an explicit caller-controlled operation with its own evidence | `test_resume_refuses_missing_invalid_and_unknown_binding_records`, `test_resume_refuses_repository_and_worktree_admin_slot_reuse` |
+
+Note the precise scope of the last row, because an earlier revision of this
+document overstated it. A destroyed-and-recreated workspace fails closed **when
+its stable binding identity changes** — a different repository, a different
+worktree admin slot, a different device or inode. It does **not** fail closed
+when every one of those facts is reproduced: see the bounded residual in §9.
 
 The HEAD-movement test moves HEAD the way ordinary work does — a branch and a
 real commit — then asserts the resume rejoins the **same** lineage and that the
@@ -366,8 +391,11 @@ conversation.
   the same bounded events in an indented envelope and is larger;
 - a session store being shared between independent jobs on one worktree — it no
   longer is;
-- resuming across a destroyed-and-recreated workspace, or a legacy migration
-  after the branch has moved on. Both fail closed. **Ordinary commits and branch
+- a destroyed-and-recreated workspace ALWAYS failing closed. It fails closed when
+  its stable binding identity changes, which is the ordinary case; it does not
+  when every `identity_core` fact is reproduced — same path, same admin slot,
+  same device, reused inode. See the bounded residual in §9. A legacy migration
+  after the branch has moved on does fail closed. **Ordinary commits and branch
   changes do NOT invalidate a minted lineage** — that strictness is legacy-only;
 - `gc --include-sessions --yes` being safe to run concurrently with `resume` or
   a running job's session use. It is not; see §9;
@@ -462,10 +490,44 @@ and legitimately starts at `binding_version: 1`. No other closed schema changed.
 A guard test now fails if a closed durable shape gains a property without its
 version moving, so the next occurrence is caught rather than reviewed for.
 
-### Bounded residual carried forward
+### Bounded residual carried forward — forced inode reuse on a recreated workspace
 
-The forced-inode-reuse workspace-recreation case is unchanged by this round and
-remains a documented bounded residual: a fresh job cannot adopt a store, and a
-lineage resume verifies its binding, so the exposure that remains is confined to
-legacy migration, which is itself gated on the prior job's recorded git
-identity.
+**This residual is NOT confined to legacy migration.** An earlier revision of
+this document said it was. That was wrong, and the consumer reproduced it on the
+minted-lineage path:
+
+1. a fresh job mints a `session_store_id`;
+2. the worktree is removed and recreated at the same path and the same worktree
+   admin slot;
+3. the inode is reused;
+4. an explicit `resume(prior_job)` passes `sessions.verify_lineage`;
+5. the same minted lineage resumes, and the worker sees the previous
+   conversation.
+
+It is structurally possible because minted-lineage verification compares
+`identity.identity_core`, which deliberately excludes `head`, `branch` and
+`linked_worktree` under the owner's ruling that ordinary commits must never
+invalidate a lineage. When a recreated workspace reproduces every remaining fact
+— `realpath`, `st_dev`, `st_ino`, `git_dir`, `common_git_dir`, `common_dev`,
+`common_ino` — it is **indistinguishable** to the current verifier from the
+workspace the lineage was bound to.
+
+So the accurate statement is: a recreated workspace normally fails closed,
+because recreating one normally changes at least one of those facts; but forced
+or reused filesystem identity can make a recreated same-path/same-slot workspace
+indistinguishable to the current minted-lineage verifier, and then the resume
+succeeds.
+
+What still holds, and bounds it:
+
+- a **fresh** job never adopts an existing store, whatever the worktree — this
+  path requires an explicit `resume` naming the prior job;
+- a workspace that differs in any `identity_core` fact still fails closed;
+- legacy migration is separately and more strictly gated on the prior job's
+  recorded git identity, which covers HEAD.
+
+**Accepted as a bounded residual and carried forward unchanged.** Closing it
+would need either HEAD-sensitivity on minted lineages — which the owner has
+ruled out, because it would break resume across ordinary work — or a new
+rebind/incarnation mechanism, which is not a change to make at a contract
+freeze.

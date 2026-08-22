@@ -17,10 +17,15 @@ TEXT_LIMIT = 400
 TERMINAL_COMPLETED = "completed"
 TERMINAL_EMPTY = "completed_empty"
 TERMINAL_NEEDS_INPUT = "needs_input"
-# Not one of the orchestrator's three success outcomes. A stream that stopped without a
-# terminal event is the "claims done, evidence truncated" case, which their
-# tripwires treat as suspicious -- over-reporting truncation is the right
-# default, so this never reports as completed.
+# Not one of the orchestrator's three success outcomes. A stream that stopped
+# without a terminal event AND without an earlier provider error is the "claims
+# done, evidence truncated" case, which their tripwires treat as suspicious --
+# over-reporting truncation is the right default.
+#
+# Stated with that qualifier because the cascade in _finish_events checks a
+# provider error BEFORE truncation: a run parked back to the operator also never
+# closed its stream, and it is `needs_input`, not this. What is unconditional is
+# the narrower rule -- `sawTerminal: false` never reports as completed.
 TERMINAL_FAILED = "failed"
 
 FINAL_TEXT_PRESENT = "present"

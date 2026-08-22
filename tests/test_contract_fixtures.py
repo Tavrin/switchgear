@@ -764,15 +764,38 @@ class PublishedBehaviorClaims(unittest.TestCase):
         self.assertIn("never rewrites or migrates", candidate)
         self.assertIn("`gc --yes` collects an eligible job's", candidate)
 
-    def test_candidate_does_not_reintroduce_the_stale_suite_count(self):
+    def test_candidate_reports_the_current_suite_count(self):
+        """Derived, not pinned.
+
+        This guard hardcoded the count, so it went stale on the very next round
+        that added a test -- the same rot it exists to catch. It now counts the
+        suites `tests/run.sh` actually executes and requires the candidate to
+        state that number, so the claim cannot drift from the gate it cites.
+        """
+        import importlib.util
+        import re as _re
+
+        run_sh = (ROOT / "tests" / "run.sh").read_text()
+        suites = _re.findall(r'python3 "\$ROOT/(tests/[^"]+\.py)"', run_sh)
+        self.assertTrue(suites, "could not read the suites tests/run.sh runs")
+
+        loader = unittest.TestLoader()
+        total = 0
+        for rel in suites:
+            spec = importlib.util.spec_from_file_location(
+                "counted_" + _re.sub(r"\W", "_", rel), ROOT / rel)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                continue  # a suite that guards its own import is counted as 0
+            total += loader.loadTestsFromModule(module).countTestCases()
+
         candidate = (ROOT / "docs/CONTRACT-V1-RC1-CANDIDATE.md").read_text()
-        self.assertNotIn(
-            "493 tests, exit 0", candidate,
-            "candidate reintroduced the stale 493-test count",
-        )
         self.assertIn(
-            "517 tests, exit 0", candidate,
-            "candidate does not report the current full-suite count",
+            f"{total} tests, exit 0", candidate,
+            f"the candidate does not report the current full-suite count ({total})",
         )
 
     def test_event_version_readback_claim_stays_true(self):
@@ -825,6 +848,120 @@ class PublishedBehaviorClaims(unittest.TestCase):
             self.assertIn(
                 "result.status", text,
                 f"{relative} omits the projected job-outcome field",
+            )
+
+
+class TerminalPrecedenceClaims(unittest.TestCase):
+    """`sawTerminal: false` is never `completed` -- but it is not always `failed`.
+
+    The cascade in `_finish_events` checks a provider error BEFORE truncation, so
+    a run that stopped to ask for permission reports `needs_input` while never
+    having closed its stream. Three documents and one code comment claimed the
+    stronger, false version: that any run ending without a terminal event
+    reports `failed`. The shipped `needs_input` fixture is the counterexample,
+    and it is used as the proof rather than a constructed case.
+    """
+
+    def test_the_shipped_needs_input_fixture_has_sawterminal_false(self):
+        finished = None
+        for line in (PACK / "needs_input" / "events.v2.jsonl").read_text().splitlines():
+            if line.strip() and json.loads(line)["event"] == "finished":
+                finished = json.loads(line)
+        self.assertIsNotNone(finished, "the needs_input fixture lost its terminal event")
+        self.assertEqual(
+            (finished["status"], finished["sawTerminal"]),
+            ("needs_input", False),
+            "the fixture no longer demonstrates needs_input beside sawTerminal:false",
+        )
+
+    def test_the_cascade_puts_the_error_branch_before_truncation(self):
+        """Behavioural, not textual: an input-request error with no terminal
+        event must yield needs_input, not the truncation failure."""
+        from switchgear.harnesses.normalization import _finish_events
+
+        [event] = _finish_events(
+            {"turns": 1, "costUSD": 0.0, "tokens": 0},
+            saw_terminal=False, run_ended=True,
+            errored="permission required to write outside the worktree",
+            last_text="",
+        )
+        self.assertEqual((event["status"], event["sawTerminal"]),
+                         ("needs_input", False))
+        [truncated] = _finish_events(
+            {"turns": 1, "costUSD": 0.0, "tokens": 0},
+            saw_terminal=False, run_ended=True, errored=None, last_text="hello",
+        )
+        self.assertEqual(truncated["status"], "failed",
+                         "a terminal-less run with no error must still be failed")
+        self.assertNotEqual(truncated["status"], "completed")
+
+    def test_no_document_claims_every_terminal_less_run_is_failed(self):
+        """The exact overclaim that was published in three places."""
+        for rel in ("docs/CONTRACT-V1-RC1-CANDIDATE.md", "docs/INTEGRATION.md"):
+            text = " ".join((ROOT / rel).read_text().split())
+            self.assertNotIn(
+                "which is **never** `completed`. A run that ended without "
+                "the provider closing its stream reports `failed`", text,
+                f"{rel} still says every terminal-less run reports failed",
+            )
+            self.assertIn(
+                "needs_input", text,
+                f"{rel} does not mention the branch that precedes truncation",
+            )
+
+
+class InodeReuseResidualClaims(unittest.TestCase):
+    """The forced-inode-reuse residual is NOT confined to legacy migration.
+
+    The consumer reproduced it on the minted-lineage path, and the candidate said
+    it could not happen there. A residual documented in the wrong place is worse
+    than an undocumented one: a reader checks the named path and concludes they
+    are safe.
+    """
+
+    def test_minted_lineage_verification_cannot_distinguish_a_reproduced_workspace(self):
+        """Structural: verification compares identity_core and nothing else, so
+        a recreated workspace reproducing all of it is indistinguishable."""
+        import inspect
+
+        from switchgear import identity, sessions
+
+        source = inspect.getsource(sessions.verify_lineage)
+        self.assertIn("worktree_facts(ident)", source)
+        fields = set(identity.identity_core(identity.WorktreeIdentity(
+            realpath="/x", st_dev=1, st_ino=2, git_dir="/x/.git",
+            common_git_dir="/x/.git", common_dev=1, common_ino=3,
+            head="a" * 40, branch="main", linked_worktree=False,
+        )))
+        self.assertNotIn("head", fields)
+        self.assertNotIn("branch", fields)
+        self.assertEqual(
+            fields,
+            {"realpath", "st_dev", "st_ino", "git_dir", "common_git_dir",
+             "common_dev", "common_ino"},
+            "identity_core changed; the residual's description must be rechecked",
+        )
+
+    def test_the_candidate_does_not_confine_the_residual_to_legacy_migration(self):
+        text = " ".join(
+            (ROOT / "docs" / "CONTRACT-V1-RC1-CANDIDATE.md").read_text().split())
+        self.assertNotIn(
+            "the exposure that remains is confined to legacy migration", text,
+            "the candidate still confines the inode-reuse residual to legacy "
+            "migration; the consumer reproduced it on the minted-lineage path",
+        )
+        self.assertIn("NOT confined to legacy migration", text,
+                      "the candidate does not state the residual's real scope")
+        self.assertIn("indistinguishable", text,
+                      "the candidate does not say why the verifier cannot tell")
+
+    def test_no_document_claims_recreation_always_fails_closed(self):
+        for rel in ("docs/CONTRACT-V1-RC1-CANDIDATE.md", "docs/INTEGRATION.md"):
+            text = " ".join((ROOT / rel).read_text().split())
+            self.assertNotIn(
+                "What still fails closed is a workspace that was destroyed and "
+                "recreated", text,
+                f"{rel} still claims every recreated workspace fails closed",
             )
 
 
