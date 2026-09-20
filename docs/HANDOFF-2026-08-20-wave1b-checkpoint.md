@@ -6,23 +6,23 @@ landed, and all six open items carried by
 unchanged and stays the record of what was believed at the Wave 1A checkpoint;
 this one says what happened to each item.
 
-Wave 1A remains addressable as the tag `wave1a-checkpoint` → commit `555ee96`.
+Wave 1A remains addressable as the tag `wave1a-checkpoint` → commit `3fdcad3`.
 Nothing here rewrites or invalidates it.
 
-Started from `c12455d` (`origin/main`). Three commits:
+Started from `1743d7f` (`origin/main`). Three commits:
 
 | commit | what |
 |---|---|
-| `1159ff7` | P5, P6, P7 and Wave 1A items 1 and 4 — behaviour, plus their tests |
-| `f9fe5df` | P8 docs-conformance, Wave 1A items 2, 5 and 6 |
-| `5abf986` | the adversarial review's nine findings |
+| `c5d62fb` | P5, P6, P7 and Wave 1A items 1 and 4 — behaviour, plus their tests |
+| `ac23ae1` | P8 docs-conformance, Wave 1A items 2, 5 and 6 |
+| `80735bc` | the adversarial review's nine findings |
 
 ## Proven on this tree
 
 - `bash tests/run.sh` — 449 unittest cases plus the schema, machine-path, noun
   and doc-link gates, exit 0. Committed mock provider, no spend. The uid-boundary
   suite ran 9/9 for real on this host, not skipped. The same command measured on
-  a clean worktree at `c12455d` runs 434, so this wave adds 15.
+  a clean worktree at `1743d7f` runs 434, so this wave adds 15.
 - `bash tests/soak.sh` — 60/60 jobs, peak concurrent 3 against a cap of 3, max
   queue wait 8.1s, file descriptors 4 → 4, doctor 29 pass / 5 warn / 0 fail.
 - `SWITCHGEAR_PROJECT_NOUNS=<operator list> bash tests/policy/test_no_project_nouns.sh`
@@ -97,7 +97,7 @@ gained or lost a value, and `schema_version` did not move.
 
 ## Adversarial review
 
-One blind, read-only review of `c12455d..HEAD`, briefed to attack nine named
+One blind, read-only review of `1743d7f..HEAD`, briefed to attack nine named
 claims. Nine findings, **all accepted, none refuted**; eight were defects
 introduced by this branch and one (`cancel` tracebacking on a malformed record)
 was pre-existing but had just been claimed fixed by a comment. Three of them were

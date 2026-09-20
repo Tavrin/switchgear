@@ -5,7 +5,7 @@ and independently confirmed by the external consumer. **Nothing below is
 implemented.** This file exists so the next implementation agent inherits the
 open items as evidence rather than as hearsay.
 
-Wave 1A is the tag `wave1a-checkpoint` → commit `555ee96`, tree
+Wave 1A is the tag `wave1a-checkpoint` → commit `3fdcad3`, tree
 `874c3ac7f3ad0fd529f295a2409e134a5320d8fc`. That is the exact tree the consumer
 measured its A2 spike against, and it stays addressable by that tag however far
 `main` moves on.
@@ -16,7 +16,7 @@ Proven at that SHA, on the authoritative checkout:
 - `bash tests/soak.sh` — 60/60 jobs, peak concurrent 3 against a cap of 3,
   file descriptors 4 → 4.
 - An independent end-to-end verifier — 55/55. Its control value: the same script
-  fails 22 of 48 checks at the `1f63be5` baseline, so it detects the four
+  fails 22 of 48 checks at the `77efadd` baseline, so it detects the four
   defects rather than passing vacuously.
 
 The plan itself is `docs/PLAN-2026-08-20-contract-stabilization.md`. P5–P8 in
@@ -42,7 +42,7 @@ The health half is the worse one: a job that never recorded an outcome currently
 it inflates an aggregate someone routes work on. It is also a direct violation of
 this repo's oldest rule — absence is not evidence of a benign state.
 
-Verified present at `1f63be5`; pre-existing, not introduced by P1–P4. Raised by
+Verified present at `77efadd`; pre-existing, not introduced by P1–P4. Raised by
 the consumer as a formal non-blocking request. It touches a function every
 listing, gc rule and health aggregate reads, so it wants its own change with its
 own evidence.
@@ -84,7 +84,7 @@ which already owns the event-vocabulary section.
 store is collectable on worktree-absence alone even when its job is protected as
 `awaiting_review` or `awaiting_external_review`.
 
-Verified present at `1f63be5` and equally true of `awaiting_review`, so not a
+Verified present at `77efadd` and equally true of `awaiting_review`, so not a
 regression. Needs a design decision rather than a patch: a session store is the
 only durable copy of a conversation and a precondition for `resume`, so coupling
 session retention to job protection is a real choice with a cost either way.

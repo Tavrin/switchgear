@@ -11,8 +11,8 @@ before relying on any contract claim found elsewhere in the repository.
 | | |
 |---|---|
 | tag | `contract-v1-rc1` (annotated) |
-| annotated tag object | `ff62b59679979a66b62bacc68090d76928de6804` |
-| peeled commit (`contract-v1-rc1^{}`) | `7fce0fd836cc55fb2b2fb1aee5bdfebbd3e2b1ab` |
+| annotated tag object | `2f71dd076e7bbbfe2cbaffbb1ec62a00590b205f` |
+| peeled commit (`contract-v1-rc1^{}`) | `ef34954a60236545295c6bf7101066a3c2c47998` |
 
 The tag object and the commit it peels to are the authoritative record. Nothing
 in this document, and nothing added to `main` after the freeze, changes what the

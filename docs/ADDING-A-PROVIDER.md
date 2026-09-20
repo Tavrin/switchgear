@@ -167,8 +167,8 @@ An absent pin refuses to run live — "no pin" never means "no constraint".
 1. **Isolation probe** — run the CLI's own config dump under
    `sandbox.build_bwrap_argv` with a synthetic HOME and diff against the host.
    Host config, credentials, MCP servers, plugins and history must all be
-   absent, not merely denied. (Grok read Claude Code's CLAUDE.md and 375
-   permission rules on the host; all gone inside.)
+   absent, not merely denied. (Grok read Claude Code's CLAUDE.md and hundreds
+   of permission rules on the host; all gone inside.)
 2. **Redirect probe** — point the CLI's base-URL knob at a recording HTTP server
    and run one headless prompt. It costs nothing (the server 401s) and tells you:
    the real wire paths, the real wire model id, whether a placeholder credential

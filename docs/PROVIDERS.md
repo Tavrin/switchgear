@@ -117,9 +117,9 @@ synthetic HOME:
 
 | Resolved | Host | Inside the sandbox |
 |---|---|---|
-| Project instructions | **`~/.claude/CLAUDE.md`** (~2448 tokens) | 0 — none |
-| Permissions | **375 rules** from `~/.claude/settings.local.json` | 0 loaded |
-| Skills | **46** (user + bundled, several tagged `[claude]`) | 0 |
+| Project instructions | **`~/.claude/CLAUDE.md`** (thousands of tokens) | 0 — none |
+| Permissions | **hundreds of rules** from `~/.claude/settings.local.json` | 0 loaded |
+| Skills | **dozens** (user + bundled, several tagged `[claude]`) | 0 |
 | Plugins / MCP / LSP / Hooks | present | 0 / 0 / 0 / 0 |
 | Config sources | user + project | none |
 | Agents | host set | 3 builtin only |

@@ -472,7 +472,7 @@ Read `harness` and `pool`.
 the record's own declared `schema_version`:
 
 - absent or `1` → `data/schemas/result-v1.schema.json`, the historical shape
-  taken from commit `a1e990f`, which does **not** contain `session_store_id`;
+  taken from commit `f59e233`, which does **not** contain `session_store_id`;
 - `2` → `data/schemas/result.schema.json`, which adds `session_store_id`;
 - anything else **refuses**, exactly as an unsupported event version does.
 
@@ -483,7 +483,7 @@ both directions are fixtured — the pack's `legacy_v1` scenario is the v1 side.
 `contract-v1` and the result schema version are **separate axes**. There is no
 requirement that the numbers match, and none is implied.
 
-**Audit of every other closed durable schema between `a1e990f` and this
+**Audit of every other closed durable schema between `f59e233` and this
 candidate:** `session_store_id` on the result record is the only property added
 to an existing closed schema. `session-binding.schema.json` is new in this wave
 and legitimately starts at `binding_version: 1`. No other closed schema changed.

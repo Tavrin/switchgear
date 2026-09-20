@@ -7,7 +7,7 @@ only via request-IDs. §2 (the package) awaits the owner's go/no-go.
 
 Planning-round output per the shared Atelier × Switchgear coordination charter
 (00_SHARED_ATELIER_SWITCHGEAR_COORDINATION_CHARTER_2026-08-20.md). Produced by
-opus-switchgear at `b3c4dc4`; evidence from two independent read-only Codex
+opus-switchgear at `4cbb68e`; evidence from two independent read-only Codex
 audit lanes (contract conformance; consumer reliance across a restart), with
 every load-bearing finding re-verified at source before it was accepted.
 
@@ -20,13 +20,13 @@ implementation needs a separate execution decision by the owner.
   describing them diverge from the code in specific, consumer-breaking places.
   Per the repo's own precedence rule the code is right and the docs are bugs —
   the list is §3 below.
-- The external consumer (Atelier) has pinned its adapter v1 against `b3c4dc4`
+- The external consumer (Atelier) has pinned its adapter v1 against `4cbb68e`
   via the cross-repo handshake. Handshake A delivered and frozen 2026-08-20;
   **Handshake B received the same day** (Tavrin/atelier
-  specs/PROGRAM-2026-08-20.md §5/§8b, request X-005). Its remaining blockers
+  the consumer's private program spec §5/§8b, request X-005). Its remaining blockers
   on this repo: `crashed-job-attribution` (P2) and `gc-external-protection`
   (P4) — both already in the first package. All other required items are
-  IMPLEMENTED at b3c4dc4.
+  IMPLEMENTED at 4cbb68e.
 - Settled cross-repo dispositions (recorded here so no manager has to remember
   them; peer records mirror these in Tavrin/atelier's gap table):
   - **Event spool is Atelier's.** No cursor/incremental normalized stream is
